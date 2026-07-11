@@ -18,6 +18,7 @@ from agent86.config import Config, config_paths, load_config
 from agent86.types import ModelRef
 
 console = Console()
+err_console = Console(stderr=True)
 
 app = typer.Typer(
     name="agent86",
@@ -68,7 +69,7 @@ def main(
 
 
 # --------------------------------------------------------------------------- #
-# REPL (interactive)  -  Phase 1 stub
+# REPL (interactive)
 # --------------------------------------------------------------------------- #
 
 
@@ -85,10 +86,25 @@ def _banner(cfg: Config) -> Panel:
 
 
 def _repl(cfg: Config) -> None:
-    """Minimal interactive loop. The cognitive/tool loop arrives in Phase 2."""
+    """Interactive Reason -> Act -> Observe loop against the configured model."""
     from prompt_toolkit import PromptSession
 
+    from agent86.cognitive.base import ProviderError
+    from agent86.orchestration.loop import Harness, HarnessError
+
     console.print(_banner(cfg))
+
+    try:
+        harness = Harness(cfg)
+    except ProviderError as exc:
+        console.print(f"[red]Cannot start:[/red] {exc}")
+        console.print(
+            "[dim]Fix the key/config or choose another model with "
+            "`agent86 --model provider:model`, then retry.[/dim]"
+        )
+        return
+
+    state = harness.new_session()
     session: PromptSession = PromptSession()
 
     while True:
@@ -112,13 +128,32 @@ def _repl(cfg: Config) -> None:
         if line == "/models":
             _list_models(cfg)
             continue
+        if line == "/cost":
+            _show_cost(state)
+            continue
+        if line == "/clear":
+            state = harness.new_session()
+            console.print("[dim]conversation cleared[/dim]")
+            continue
 
-        # PHASE 2: hand `line` to the orchestration loop:
-        #   Harness(cfg).run_turn(line)  ->  streams reasoning, tool calls, and answer.
-        console.print(
-            "[yellow]The cognitive loop is not wired yet[/yellow] "
-            "[dim](Phase 2 - see docs/ARCHITECTURE.md).[/dim]"
-        )
+        console.print("[bold cyan]agent86[/bold cyan] ", end="")
+        try:
+            for delta in harness.run_turn(line, state):
+                if delta.text:
+                    console.print(delta.text, end="", markup=False, highlight=False, soft_wrap=True)
+        except (ProviderError, HarnessError) as exc:
+            console.print(f"\n[red]error:[/red] {exc}")
+            continue
+        console.print()  # end the streamed line
+
+
+def _show_cost(state) -> None:
+    u = state.usage
+    console.print(
+        f"[dim]steps[/dim] {state.step_count}  "
+        f"[dim]in[/dim] {u.input_tokens}  [dim]out[/dim] {u.output_tokens} tok  "
+        f"[dim]cost[/dim] ${u.cost_usd:.4f}"
+    )
 
 
 def _print_repl_help() -> None:
@@ -126,12 +161,14 @@ def _print_repl_help() -> None:
     table.add_row("[cyan]/help[/cyan]", "Show this help")
     table.add_row("[cyan]/config[/cyan]", "Show the resolved configuration")
     table.add_row("[cyan]/models[/cyan]", "List configured models")
+    table.add_row("[cyan]/cost[/cyan]", "Show token usage and cost this session")
+    table.add_row("[cyan]/clear[/cyan]", "Start a fresh conversation")
     table.add_row("[cyan]/exit[/cyan]", "Quit")
     console.print(table)
 
 
 # --------------------------------------------------------------------------- #
-# `agent86 run`  -  one-shot  (Phase 1 stub)
+# `agent86 run`  -  one-shot
 # --------------------------------------------------------------------------- #
 
 
@@ -142,14 +179,44 @@ def run(
     as_json: bool = typer.Option(False, "--json", help="Emit structured JSON output."),
 ) -> None:
     """Run a single goal non-interactively (scriptable)."""
+    import json as _json
+
+    from agent86.cognitive.base import ProviderError
+    from agent86.orchestration.loop import Harness, HarnessError
+
     cfg: Config = ctx.obj or load_config()
-    # PHASE 2: result = Harness(cfg).run(goal); print result (or result.model_dump_json()).
-    _ = (goal, as_json, cfg)
-    console.print(
-        "[yellow]One-shot execution is not wired yet[/yellow] "
-        "[dim](Phase 2 - see docs/ARCHITECTURE.md).[/dim]"
-    )
-    raise typer.Exit(code=1)
+
+    try:
+        harness = Harness(cfg)
+    except ProviderError as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+
+    state = harness.new_session()
+    parts: list[str] = []
+    try:
+        for delta in harness.run_turn(goal, state):
+            if delta.text:
+                parts.append(delta.text)
+                if not as_json:
+                    console.print(delta.text, end="", markup=False, highlight=False, soft_wrap=True)
+    except (ProviderError, HarnessError) as exc:
+        err_console.print(f"\n[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+
+    if as_json:
+        console.print_json(
+            _json.dumps(
+                {
+                    "session_id": state.session_id,
+                    "output": "".join(parts),
+                    "steps": state.step_count,
+                    "usage": state.usage.model_dump(),
+                }
+            )
+        )
+    else:
+        console.print()
 
 
 # --------------------------------------------------------------------------- #

@@ -171,10 +171,16 @@ class Completion(BaseModel):
 
 
 class CompletionDelta(BaseModel):
-    """One streamed chunk of a completion."""
+    """One streamed chunk of a completion.
+
+    Text chunks arrive with ``text`` set. The terminal chunk sets ``done=True`` and
+    carries the fully-assembled ``completion`` (tool calls + usage) so a streaming
+    consumer gets both live text and the authoritative result from one pass.
+    """
 
     text: str = ""
     done: bool = False
+    completion: Completion | None = None
 
 
 # --------------------------------------------------------------------------- #

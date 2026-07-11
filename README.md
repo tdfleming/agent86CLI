@@ -10,9 +10,20 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**Phase 1 — Skeleton.** The package, configuration system, shared types, CLI surface, and
-tier packages are scaffolded. The cognitive loop lands in Phase 2. See the build phases in
-[docs/ARCHITECTURE.md §14](docs/ARCHITECTURE.md).
+**Phase 2 — Cognitive tier + minimal loop.** The harness now talks to a live model. The
+`ModelProvider` interface is implemented by **Anthropic** (Claude Messages API, native tool
+use, streaming) and **Ollama** (local, via `/api/chat`); one-turn Reason→Act→Observe drives
+the REPL and one-shot `run`, streaming tokens with a session cost meter. Tool execution is
+the Phase 3 branch already structured into the loop. See the build phases in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+Try it (with a running Ollama chat model, or `ANTHROPIC_API_KEY` set):
+
+```bash
+agent86 --model ollama:llama3.1              # then chat; /help, /cost, /clear, /exit
+agent86 --model ollama:llama3.1 run "Say hi in three words"
+ANTHROPIC_API_KEY=... agent86 run "Explain the harness in one sentence"
+```
 
 ## Install (development)
 
