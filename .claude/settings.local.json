@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import pypdf; print\\('pypdf ok'\\)\")",
+      "Bash(python -c \"import fitz; print\\('fitz ok'\\)\")",
+      "Bash(pip show *)",
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "PowerShell($uv = \\(Get-Command uv -ErrorAction SilentlyContinue\\); if \\($uv\\) { \"uv: $\\($uv.Source\\)\"; uv --version } else { \"uv: not found\" }; \"python: \" + \\(Get-Command python\\).Source; python --version)"
+    ]
+  }
+}

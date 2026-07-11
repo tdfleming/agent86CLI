@@ -1,0 +1,201 @@
+"""Layered configuration.
+
+Resolution order (later overrides earlier):
+
+    built-in defaults
+      -> ~/.agent86/config.toml        (user)
+      -> ./.agent86/config.toml        (project)
+      -> environment variables         (AGENT86_*)
+      -> explicit overrides            (CLI flags)
+
+Secrets (API keys) are never stored here — config only names the *env var* that
+holds each provider's key (``api_key_env``); the key itself is read at provider
+construction time.
+"""
+
+from __future__ import annotations
+
+import os
+import tomllib
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from agent86.types import ApprovalMode
+
+USER_CONFIG_DIR = Path.home() / ".agent86"
+USER_CONFIG_PATH = USER_CONFIG_DIR / "config.toml"
+PROJECT_CONFIG_PATH = Path(".agent86") / "config.toml"
+
+
+# --------------------------------------------------------------------------- #
+# Config schema
+# --------------------------------------------------------------------------- #
+
+
+class ModelRoute(BaseModel):
+    cheap: str = "ollama:llama3.1"
+    frontier: str = "anthropic:claude-opus-4-8"
+
+
+class ModelConfig(BaseModel):
+    default: str = "anthropic:claude-opus-4-8"
+    router: str = "off"  # "off" | "triage"
+    route: ModelRoute = Field(default_factory=ModelRoute)
+
+
+class ProviderConfig(BaseModel):
+    api_key_env: str | None = None
+    base_url: str | None = None
+
+
+class SandboxConfig(BaseModel):
+    mode: str = "subprocess"  # "subprocess" | "docker"
+
+
+class GuardrailsConfig(BaseModel):
+    approval: ApprovalMode = ApprovalMode.ASK
+
+
+class MemoryConfig(BaseModel):
+    path: str = "~/.agent86/memory.db"
+    embeddings: str = "sentence-transformers:all-MiniLM-L6-v2"
+
+    def resolved_path(self) -> Path:
+        return Path(os.path.expanduser(self.path))
+
+
+class LimitsConfig(BaseModel):
+    max_steps: int = 40
+    max_cost_usd: float = 5.0
+    max_wall_clock_s: int = 900
+    max_consecutive_errors: int = 3
+
+
+class MCPServerConfig(BaseModel):
+    command: str
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+
+
+def _default_providers() -> dict[str, ProviderConfig]:
+    return {
+        "anthropic": ProviderConfig(api_key_env="ANTHROPIC_API_KEY"),
+        "openai": ProviderConfig(
+            api_key_env="OPENAI_API_KEY", base_url="https://api.openai.com/v1"
+        ),
+        "ollama": ProviderConfig(base_url="http://localhost:11434"),
+        "llamacpp": ProviderConfig(base_url="http://localhost:8080"),
+    }
+
+
+class Config(BaseModel):
+    """The fully-resolved configuration handed to the harness."""
+
+    model: ModelConfig = Field(default_factory=ModelConfig)
+    providers: dict[str, ProviderConfig] = Field(default_factory=_default_providers)
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+    # Provenance — which files actually contributed (for `agent86 config path`).
+    sources: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Loading & merging
+# --------------------------------------------------------------------------- #
+
+
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``overlay`` into ``base`` (returns a new dict)."""
+    out = dict(base)
+    for key, value in overlay.items():
+        if key in out and isinstance(out[key], dict) and isinstance(value, dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _read_toml(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("rb") as fh:
+            return tomllib.load(fh)
+    except FileNotFoundError:
+        return {}
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"Malformed config at {path}: {exc}") from exc
+
+
+def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
+    """Map a few TOML spellings onto the pydantic field names."""
+    data = dict(raw)
+    # `[mcp.servers.NAME]` in TOML -> mcp_servers on the model.
+    mcp = data.pop("mcp", None)
+    if isinstance(mcp, dict) and "servers" in mcp:
+        data["mcp_servers"] = mcp["servers"]
+    return data
+
+
+def _env_overrides() -> dict[str, Any]:
+    """A small, explicit set of AGENT86_* env overrides."""
+    over: dict[str, Any] = {}
+    if val := os.getenv("AGENT86_MODEL"):
+        over.setdefault("model", {})["default"] = val
+    if val := os.getenv("AGENT86_SANDBOX"):
+        over.setdefault("sandbox", {})["mode"] = val
+    if val := os.getenv("AGENT86_APPROVAL"):
+        over.setdefault("guardrails", {})["approval"] = val
+    return over
+
+
+def load_config(overrides: dict[str, Any] | None = None) -> Config:
+    """Resolve configuration from all layers into a validated :class:`Config`."""
+    merged: dict[str, Any] = {}
+    sources: list[str] = []
+
+    for path in (USER_CONFIG_PATH, PROJECT_CONFIG_PATH):
+        raw = _read_toml(path)
+        if raw:
+            merged = _deep_merge(merged, _normalize(raw))
+            sources.append(str(path))
+
+    merged = _deep_merge(merged, _env_overrides())
+    if overrides:
+        merged = _deep_merge(merged, overrides)
+
+    config = Config.model_validate(merged)
+    config.sources = sources
+    return config
+
+
+def config_paths() -> dict[str, str]:
+    """Report where config is (or would be) read from, and whether each exists."""
+    return {
+        "user": f"{USER_CONFIG_PATH} ({'exists' if USER_CONFIG_PATH.exists() else 'not found'})",
+        "project": (
+            f"{PROJECT_CONFIG_PATH.resolve()} "
+            f"({'exists' if PROJECT_CONFIG_PATH.exists() else 'not found'})"
+        ),
+    }
+
+
+__all__ = [
+    "Config",
+    "ModelConfig",
+    "ModelRoute",
+    "ProviderConfig",
+    "SandboxConfig",
+    "GuardrailsConfig",
+    "MemoryConfig",
+    "LimitsConfig",
+    "MCPServerConfig",
+    "load_config",
+    "config_paths",
+    "USER_CONFIG_PATH",
+    "PROJECT_CONFIG_PATH",
+]
