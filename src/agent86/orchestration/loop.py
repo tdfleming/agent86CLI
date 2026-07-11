@@ -1,19 +1,25 @@
 """The execution loop (Tier 2, Pillar 1) — the harness's nervous system.
 
-Phase 2 wires the Reason -> Act -> Observe skeleton with a live model but no tools yet:
-each turn compiles the prompt, streams a completion, and records a :class:`Step`. The
-tool-execution branch (marked ``# PHASE 3``) and circuit breakers are structured in so
-the later phases slot in without reshaping the loop.
+Phase 3 closes the Reason -> Act -> Observe cycle: the model proposes tool calls, the
+harness gates them through the human-in-the-loop approval policy, executes the approved
+ones in the sandbox, feeds the results back as observations, and loops until the model
+answers without requesting a tool (or a circuit breaker trips).
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
+from pathlib import Path
 
 from agent86.cognitive.base import ModelProvider, provider_for_model
 from agent86.cognitive.prompt import build_system_prompt
 from agent86.config import Config
+from agent86.guardrails.policy import ApprovalGate, ApprovalPrompt
 from agent86.orchestration.state import AgentState
+from agent86.tools.base import ToolContext
+from agent86.tools.registry import ToolRegistry, default_registry
+from agent86.tools.sandbox.policy import default_policy
 from agent86.types import (
     AgentPhase,
     CompletionDelta,
@@ -21,11 +27,11 @@ from agent86.types import (
     Message,
     Role,
     Step,
+    ToolResult,
 )
 
-# The loop will not exceed this many model calls in a single turn (circuit breaker;
-# fully enforced with cost/wall-clock in Phase 5). With no tools yet it is always 1.
-_MAX_TURN_STEPS = 8
+# Upper bound on model calls per user turn (circuit breaker; cost/wall-clock join in Phase 5).
+_MAX_TURN_STEPS = 12
 
 
 class HarnessError(RuntimeError):
@@ -33,12 +39,25 @@ class HarnessError(RuntimeError):
 
 
 class Harness:
-    """Binds a model provider to session state and drives the loop."""
+    """Binds a model provider, tool registry, sandbox, and approval gate to session state."""
 
-    def __init__(self, config: Config, provider: ModelProvider | None = None):
+    def __init__(
+        self,
+        config: Config,
+        provider: ModelProvider | None = None,
+        approval_prompt: ApprovalPrompt | None = None,
+        workspace: Path | None = None,
+        registry: ToolRegistry | None = None,
+    ):
         self.config = config
         self.provider = provider or provider_for_model(config.model.default, config)
         self.system_prompt: Message = build_system_prompt(config)
+        self.registry = registry or default_registry(config)
+        self.policy = default_policy(config, workspace)
+        self.context = ToolContext(
+            workspace=self.policy.workspace, policy=self.policy, config=config
+        )
+        self.gate = ApprovalGate(config.guardrails.approval, approval_prompt)
 
     def new_session(self) -> AgentState:
         state = AgentState()
@@ -49,24 +68,20 @@ class Harness:
         return CompletionRequest(
             model=self.provider.model,
             messages=[self.system_prompt, *state.messages],
-            tools=[],  # PHASE 3: inject the tool registry's specs here
+            tools=self.registry.specs(),
             temperature=0.0,
             stream=True,
         )
 
     def run_turn(self, user_text: str, state: AgentState) -> Iterator[CompletionDelta]:
-        """Run one user turn, streaming text deltas as they arrive.
-
-        Appends the user message, streams the assistant response, records the step, and
-        (from Phase 3) loops to execute any tool calls the model proposes.
-        """
+        """Run one user turn to completion, streaming text and tool activity."""
         state.add_message(Message(role=Role.USER, content=user_text))
         step_budget = min(_MAX_TURN_STEPS, self.config.limits.max_steps)
+        consecutive_errors = 0
 
         for _ in range(step_budget):
-            request = self._build_request(state)
             completion = None
-            for delta in self.provider.stream(request):
+            for delta in self.provider.stream(self._build_request(state)):
                 if delta.done and delta.completion is not None:
                     completion = delta.completion
                 yield delta
@@ -74,6 +89,13 @@ class Harness:
             if completion is None:  # pragma: no cover - provider contract violation
                 raise HarnessError("Provider stream ended without a final completion.")
 
+            step = Step(
+                index=state.step_count + 1,
+                phase=AgentPhase.EXECUTE,
+                thought=completion.text,
+                tool_calls=completion.tool_calls,
+                usage=completion.usage,
+            )
             state.add_message(
                 Message(
                     role=Role.ASSISTANT,
@@ -81,36 +103,75 @@ class Harness:
                     tool_calls=completion.tool_calls,
                 )
             )
-            state.record_step(
-                Step(
-                    index=state.step_count,
-                    phase=AgentPhase.EXECUTE,
-                    thought=completion.text,
-                    tool_calls=completion.tool_calls,
-                    usage=completion.usage,
-                )
-            )
 
             if not completion.tool_calls:
+                state.record_step(step)
                 state.phase = AgentPhase.DONE
                 return
 
-            # PHASE 3: execute completion.tool_calls through the tool registry + sandbox,
-            # append ToolResult messages (role=TOOL), then continue the loop so the model
-            # can observe the results. Until then, surface the unfulfilled intent.
-            names = ", ".join(tc.name for tc in completion.tool_calls)
-            yield CompletionDelta(
-                text=(
-                    f"\n[tool execution arrives in Phase 3 - "
-                    f"model requested: {names}]\n"
-                )
-            )
-            state.phase = AgentPhase.DONE
-            return
+            # ---- Act: execute each proposed tool call through the gate + sandbox ---- #
+            for call in completion.tool_calls:
+                yield CompletionDelta(text=f"\n[tool] {call.name}({_preview(call.arguments)})\n")
 
-        # Step budget exhausted (only reachable once tools drive multi-step turns).
+                tool = self.registry.get(call.name)
+                if tool is None:
+                    result = self.registry.dispatch(call, self.context)  # -> unknown-tool error
+                else:
+                    decision = self.gate.decide(tool, call)
+                    if not decision.approved:
+                        result = ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            ok=False,
+                            error=f"Not executed: {decision.reason}.",
+                        )
+                    else:
+                        result = self.registry.dispatch(call, self.context)
+
+                step.results.append(result)
+                # Observe: feed the result back to the model as a tool message.
+                state.add_message(
+                    Message(
+                        role=Role.TOOL,
+                        content=result.content if result.ok else (result.error or "error"),
+                        tool_call_id=call.id,
+                        name=call.name,
+                    )
+                )
+                yield CompletionDelta(text=f"[tool] {call.name} -> {_summarize(result)}\n")
+
+                if result.ok:
+                    consecutive_errors = 0
+                else:
+                    consecutive_errors += 1
+                    if consecutive_errors > self.config.limits.max_consecutive_errors:
+                        state.record_step(step)
+                        state.phase = AgentPhase.ERROR
+                        raise HarnessError(
+                            f"Aborted after {consecutive_errors} consecutive tool errors."
+                        )
+
+            state.record_step(step)
+            # loop: the model now observes the tool results and decides the next action
+
         state.phase = AgentPhase.ERROR
         raise HarnessError(f"Turn exceeded the step budget ({step_budget}).")
+
+
+def _preview(arguments: dict) -> str:
+    try:
+        text = json.dumps(arguments, ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = str(arguments)
+    return text if len(text) <= 160 else text[:160] + " ..."
+
+
+def _summarize(result: ToolResult) -> str:
+    if not result.ok:
+        return f"error: {(result.error or '').splitlines()[0][:160]}"
+    first = (result.content or "").strip().splitlines()
+    head = first[0] if first else "(no output)"
+    return head[:160]
 
 
 __all__ = ["Harness", "HarnessError"]

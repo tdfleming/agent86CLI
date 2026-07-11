@@ -94,8 +94,21 @@ def _repl(cfg: Config) -> None:
 
     console.print(_banner(cfg))
 
+    session: PromptSession = PromptSession()
+
+    def approval_prompt(tool_name: str, preview: str) -> bool:
+        console.print(
+            f"[yellow]approve[/yellow] [bold]{tool_name}[/bold] "
+            f"[dim]{preview}[/dim]"
+        )
+        try:
+            answer = session.prompt("  run it? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return answer in ("y", "yes")
+
     try:
-        harness = Harness(cfg)
+        harness = Harness(cfg, approval_prompt=approval_prompt)
     except ProviderError as exc:
         console.print(f"[red]Cannot start:[/red] {exc}")
         console.print(
@@ -105,7 +118,6 @@ def _repl(cfg: Config) -> None:
         return
 
     state = harness.new_session()
-    session: PromptSession = PromptSession()
 
     while True:
         try:
@@ -127,6 +139,9 @@ def _repl(cfg: Config) -> None:
             continue
         if line == "/models":
             _list_models(cfg)
+            continue
+        if line == "/tools":
+            console.print("[dim]tools:[/dim] " + ", ".join(harness.registry.names()))
             continue
         if line == "/cost":
             _show_cost(state)
@@ -161,6 +176,7 @@ def _print_repl_help() -> None:
     table.add_row("[cyan]/help[/cyan]", "Show this help")
     table.add_row("[cyan]/config[/cyan]", "Show the resolved configuration")
     table.add_row("[cyan]/models[/cyan]", "List configured models")
+    table.add_row("[cyan]/tools[/cyan]", "List available tools")
     table.add_row("[cyan]/cost[/cyan]", "Show token usage and cost this session")
     table.add_row("[cyan]/clear[/cyan]", "Start a fresh conversation")
     table.add_row("[cyan]/exit[/cyan]", "Quit")
@@ -177,14 +193,24 @@ def run(
     ctx: typer.Context,
     goal: str = typer.Argument(..., help="The goal for the agent to accomplish."),
     as_json: bool = typer.Option(False, "--json", help="Emit structured JSON output."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Auto-approve side-effecting tools (non-interactive)."
+    ),
 ) -> None:
-    """Run a single goal non-interactively (scriptable)."""
+    """Run a single goal non-interactively (scriptable).
+
+    Without --yes, side-effecting tools are declined (no TTY to approve them); read-only
+    tools always run. Pass --yes to let the agent act autonomously.
+    """
     import json as _json
 
     from agent86.cognitive.base import ProviderError
     from agent86.orchestration.loop import Harness, HarnessError
+    from agent86.types import ApprovalMode
 
     cfg: Config = ctx.obj or load_config()
+    if yes:
+        cfg.guardrails.approval = ApprovalMode.AUTO
 
     try:
         harness = Harness(cfg)

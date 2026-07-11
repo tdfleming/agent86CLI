@@ -10,18 +10,29 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**Phase 2 — Cognitive tier + minimal loop.** The harness now talks to a live model. The
-`ModelProvider` interface is implemented by **Anthropic** (Claude Messages API, native tool
-use, streaming) and **Ollama** (local, via `/api/chat`); one-turn Reason→Act→Observe drives
-the REPL and one-shot `run`, streaming tokens with a session cost meter. Tool execution is
-the Phase 3 branch already structured into the loop. See the build phases in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+**Phase 3 — Tools + sandbox + HITL.** The agent now *acts*. The loop closes the full
+Reason→Act→Observe cycle: the model proposes tool calls, an approval gate applies the
+human-in-the-loop policy, approved calls run in a restricted-subprocess sandbox, and the
+results feed back as observations until the model answers. Circuit breakers bound steps and
+consecutive errors.
+
+- **Cognitive tier** — `ModelProvider` implemented by **Anthropic** (Claude Messages API,
+  native tool use, streaming) and **Ollama** (local, `/api/chat`).
+- **Built-in tools** — `read_file`, `write_file`, `edit_file`, `list_dir`, `run_command`,
+  `python_exec`, `web_fetch`. Each declares a Pydantic arg-model, so arguments are validated
+  and invalid ones return a structured error the model can self-correct from.
+- **Sandbox** — workspace path-jail, environment scrubbing (secrets never leak into tool
+  subprocesses), timeouts, and output truncation.
+- **HITL** — `auto` / `ask` / `deny`; side-effecting tools prompt for approval in the REPL,
+  and one-shot `run` declines them unless you pass `--yes`.
+
+MCP and skills join the registry in Phase 6. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Try it (with a running Ollama chat model, or `ANTHROPIC_API_KEY` set):
 
 ```bash
-agent86 --model ollama:llama3.1              # then chat; /help, /cost, /clear, /exit
-agent86 --model ollama:llama3.1 run "Say hi in three words"
+agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /cost /clear /exit
+agent86 --model ollama:qwen2.5:3b run --yes "Create hello.txt with 'hi', then read it back"
 ANTHROPIC_API_KEY=... agent86 run "Explain the harness in one sentence"
 ```
 

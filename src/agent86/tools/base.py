@@ -1,0 +1,100 @@
+"""Tool interface (Tier 4, Pillar 3).
+
+A tool declares a Pydantic ``Args`` model; the harness derives the JSON Schema it
+advertises to the model *and* validates the model's arguments against it before anything
+runs. Invalid arguments come back as a structured ``ToolResult`` error the model can
+self-correct from (the book's fuzzy->rigid translation pattern), never an exception that
+crashes the loop.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, ValidationError
+
+from agent86.types import ToolCall, ToolResult, ToolSpec
+
+if TYPE_CHECKING:
+    from agent86.config import Config
+    from agent86.tools.sandbox.policy import SandboxPolicy
+
+
+@dataclass
+class ToolContext:
+    """Ambient state handed to every tool at execution time."""
+
+    workspace: Path
+    policy: SandboxPolicy
+    config: Config
+    extra: dict[str, object] = field(default_factory=dict)
+
+
+class EmptyArgs(BaseModel):
+    """Default argument model for tools that take no parameters."""
+
+
+class Tool(ABC):
+    """Base class for all tools (built-in, MCP-backed, or skill-provided)."""
+
+    name: str = ""
+    description: str = ""
+    #: True if invoking the tool causes an external side effect (gated by the HITL gate).
+    side_effecting: bool = False
+    #: Pydantic model describing this tool's arguments.
+    Args: type[BaseModel] = EmptyArgs
+
+    def spec(self) -> ToolSpec:
+        """Advertise this tool to the model as a validated JSON-Schema function."""
+        schema = self.Args.model_json_schema()
+        # Anthropic/OpenAI want a plain object schema; drop the pydantic title noise.
+        schema.pop("title", None)
+        schema.setdefault("type", "object")
+        schema.setdefault("properties", {})
+        return ToolSpec(
+            name=self.name,
+            description=self.description,
+            parameters=schema,
+            side_effecting=self.side_effecting,
+        )
+
+    @abstractmethod
+    def execute(self, args: BaseModel, ctx: ToolContext) -> ToolResult:
+        """Run the tool with already-validated ``args``."""
+        raise NotImplementedError
+
+    def run(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
+        """Validate arguments, then execute — translating failures into ToolResults."""
+        try:
+            args = self.Args.model_validate(call.arguments)
+        except ValidationError as exc:
+            return ToolResult(
+                call_id=call.id,
+                name=self.name,
+                ok=False,
+                error=f"Invalid arguments for '{self.name}': {_format_validation(exc)}",
+            )
+        try:
+            result = self.execute(args, ctx)
+        except Exception as exc:  # tools must not crash the loop
+            return ToolResult(
+                call_id=call.id, name=self.name, ok=False, error=f"{type(exc).__name__}: {exc}"
+            )
+        # Ensure identity fields are populated even if a tool constructs a bare result.
+        result.call_id = result.call_id or call.id
+        result.name = result.name or self.name
+        return result
+
+
+def _format_validation(exc: ValidationError) -> str:
+    bits = []
+    for err in exc.errors():
+        loc = ".".join(str(p) for p in err["loc"]) or "(root)"
+        bits.append(f"{loc}: {err['msg']}")
+    return "; ".join(bits)
+
+
+__all__ = ["Tool", "ToolContext", "EmptyArgs"]
