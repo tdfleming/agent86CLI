@@ -20,6 +20,7 @@ from agent86.types import ToolCall, ToolResult, ToolSpec
 
 if TYPE_CHECKING:
     from agent86.config import Config
+    from agent86.memory.semantic import SemanticMemory
     from agent86.tools.sandbox.policy import SandboxPolicy
 
 
@@ -30,6 +31,7 @@ class ToolContext:
     workspace: Path
     policy: SandboxPolicy
     config: Config
+    memory: SemanticMemory | None = None
     extra: dict[str, object] = field(default_factory=dict)
 
 

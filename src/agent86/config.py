@@ -59,6 +59,7 @@ class GuardrailsConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
+    enabled: bool = True
     path: str = "~/.agent86/memory.db"
     embeddings: str = "sentence-transformers:all-MiniLM-L6-v2"
 
@@ -71,6 +72,7 @@ class LimitsConfig(BaseModel):
     max_cost_usd: float = 5.0
     max_wall_clock_s: int = 900
     max_consecutive_errors: int = 3
+    max_context_tokens: int = 8000
 
 
 class MCPServerConfig(BaseModel):

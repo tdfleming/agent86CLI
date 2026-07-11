@@ -47,7 +47,7 @@ def _config():
 
 
 def test_run_turn_records_history_and_usage():
-    harness = Harness(_config(), provider=FakeProvider())
+    harness = Harness(_config(), provider=FakeProvider(), memory=None)
     state = harness.new_session()
 
     deltas = list(harness.run_turn("hi", state))

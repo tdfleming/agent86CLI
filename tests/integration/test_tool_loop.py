@@ -59,7 +59,7 @@ def _auto_config():
 
 def test_loop_executes_approved_tool_and_observes(tmp_path):
     provider = WriteThenAnswerProvider()
-    harness = Harness(_auto_config(), provider=provider, workspace=tmp_path)
+    harness = Harness(_auto_config(), provider=provider, workspace=tmp_path, memory=None)
     state = harness.new_session()
 
     deltas = list(harness.run_turn("create out.txt with 'hi there'", state))
@@ -80,7 +80,7 @@ def test_loop_declines_side_effect_without_approval(tmp_path):
     # Default approval is ASK; run() (no interactive prompt) => declined.
     provider = WriteThenAnswerProvider()
     cfg = load_config()  # approval = ASK, no prompt callback
-    harness = Harness(cfg, provider=provider, workspace=tmp_path)
+    harness = Harness(cfg, provider=provider, workspace=tmp_path, memory=None)
     state = harness.new_session()
 
     list(harness.run_turn("create out.txt", state))

@@ -7,6 +7,8 @@ only ever talks to the registry, never to concrete tools.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from agent86.config import Config
 from agent86.tools.base import Tool, ToolContext
 from agent86.tools.builtin.files import (
@@ -15,10 +17,14 @@ from agent86.tools.builtin.files import (
     ReadFileTool,
     WriteFileTool,
 )
+from agent86.tools.builtin.memory import RecallTool, RememberTool
 from agent86.tools.builtin.python_exec import PythonExecTool
 from agent86.tools.builtin.shell import RunCommandTool
 from agent86.tools.builtin.web import WebFetchTool
 from agent86.types import ToolCall, ToolResult, ToolSpec
+
+if TYPE_CHECKING:
+    from agent86.memory.semantic import SemanticMemory
 
 
 class ToolRegistry:
@@ -62,11 +68,19 @@ _BUILTINS: tuple[type[Tool], ...] = (
 )
 
 
-def default_registry(config: Config) -> ToolRegistry:
-    """Registry pre-loaded with the built-in tools. MCP/skills join in Phase 6."""
+def default_registry(
+    config: Config, memory: SemanticMemory | None = None
+) -> ToolRegistry:
+    """Registry pre-loaded with the built-in tools. MCP/skills join in Phase 6.
+
+    The ``remember`` / ``recall`` tools are added only when semantic memory is available.
+    """
     registry = ToolRegistry()
     for tool_cls in _BUILTINS:
         registry.register(tool_cls())
+    if memory is not None:
+        registry.register(RememberTool())
+        registry.register(RecallTool())
     return registry
 
 

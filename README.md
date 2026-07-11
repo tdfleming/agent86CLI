@@ -10,30 +10,32 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**Phase 3 — Tools + sandbox + HITL.** The agent now *acts*. The loop closes the full
-Reason→Act→Observe cycle: the model proposes tool calls, an approval gate applies the
-human-in-the-loop policy, approved calls run in a restricted-subprocess sandbox, and the
-results feed back as observations until the model answers. Circuit breakers bound steps and
-consecutive errors.
+**Phase 4 — Memory (Pillar 2).** The harness now remembers. A single embedded store
+(SQLite + optional `sqlite-vec`) backs three kinds of memory, and sessions persist across
+runs.
 
-- **Cognitive tier** — `ModelProvider` implemented by **Anthropic** (Claude Messages API,
-  native tool use, streaming) and **Ollama** (local, `/api/chat`).
-- **Built-in tools** — `read_file`, `write_file`, `edit_file`, `list_dir`, `run_command`,
-  `python_exec`, `web_fetch`. Each declares a Pydantic arg-model, so arguments are validated
-  and invalid ones return a structured error the model can self-correct from.
-- **Sandbox** — workspace path-jail, environment scrubbing (secrets never leak into tool
-  subprocesses), timeouts, and output truncation.
-- **HITL** — `auto` / `ask` / `deny`; side-effecting tools prompt for approval in the REPL,
-  and one-shot `run` declines them unless you pass `--yes`.
+- **Working memory** — sliding-window token budget trims the context sent each request.
+- **Episodic memory** — one record per completed turn (task → outcome); similar past turns
+  are recalled and injected as context on a new task (the "flight data recorder").
+- **Semantic memory** — durable facts retrieved by meaning, exposed to the agent via the
+  `remember` / `recall` tools.
+- **Embeddings** — local `sentence-transformers` by default, with a dependency-free hash
+  embedder fallback so memory works (and tests run) without the `local` extra.
+- **Sessions** — persisted after every turn; resume with `--resume <id>` (REPL) or
+  `run --session <id>`. Inspect with `agent86 memory stats|sessions|search`.
 
-MCP and skills join the registry in Phase 6. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Earlier phases still hold: the full Reason→Act→Observe loop, **Anthropic** + **Ollama**
+providers, 7 built-in tools, a restricted-subprocess sandbox with secret-scrubbing, and the
+`auto`/`ask`/`deny` HITL approval gate. MCP and skills join in Phase 6. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Try it (with a running Ollama chat model, or `ANTHROPIC_API_KEY` set):
 
 ```bash
-agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /cost /clear /exit
-agent86 --model ollama:qwen2.5:3b run --yes "Create hello.txt with 'hi', then read it back"
-ANTHROPIC_API_KEY=... agent86 run "Explain the harness in one sentence"
+agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /memory /cost /clear /exit
+agent86 --model ollama:qwen2.5:3b run --yes "Remember that my favorite color is teal"
+agent86 --model ollama:qwen2.5:3b run --yes "What's my favorite color? Use recall."
+agent86 memory stats
 ```
 
 ## Install (development)

@@ -48,6 +48,9 @@ def main(
     ),
     sandbox: str | None = typer.Option(None, "--sandbox", help="Override sandbox mode."),
     approval: str | None = typer.Option(None, "--approval", help="HITL mode: auto|ask|deny."),
+    resume: str | None = typer.Option(
+        None, "--resume", "-r", help="Resume a prior session by id (REPL)."
+    ),
     _version: bool = typer.Option(
         False, "--version", "-V", callback=_version_callback, is_eager=True, help="Show version."
     ),
@@ -65,7 +68,7 @@ def main(
     ctx.obj = cfg
 
     if ctx.invoked_subcommand is None:
-        _repl(cfg)
+        _repl(cfg, resume=resume)
 
 
 # --------------------------------------------------------------------------- #
@@ -85,7 +88,7 @@ def _banner(cfg: Config) -> Panel:
     return Panel(body, title="agentic harness", border_style="cyan", expand=False)
 
 
-def _repl(cfg: Config) -> None:
+def _repl(cfg: Config, resume: str | None = None) -> None:
     """Interactive Reason -> Act -> Observe loop against the configured model."""
     from prompt_toolkit import PromptSession
 
@@ -117,7 +120,22 @@ def _repl(cfg: Config) -> None:
         )
         return
 
-    state = harness.new_session()
+    if harness.memory_note:
+        console.print(f"[dim]memory: {harness.memory_note}[/dim]")
+
+    state = None
+    if resume:
+        state = harness.resume(resume)
+        if state is None:
+            console.print(f"[yellow]No session '{resume}' found; starting fresh.[/yellow]")
+        else:
+            console.print(
+                f"[dim]resumed session {state.session_id} "
+                f"({len(state.messages)} messages)[/dim]"
+            )
+    if state is None:
+        state = harness.new_session()
+    console.print(f"[dim]session {state.session_id}[/dim]")
 
     while True:
         try:
@@ -142,6 +160,17 @@ def _repl(cfg: Config) -> None:
             continue
         if line == "/tools":
             console.print("[dim]tools:[/dim] " + ", ".join(harness.registry.names()))
+            continue
+        if line == "/memory":
+            if harness.memory:
+                c = harness.memory.store.counts()
+                console.print(
+                    f"[dim]memory[/dim] sessions {c['sessions']}  "
+                    f"episodes {c['episodes']}  facts {c['memories']}  "
+                    f"[dim]session[/dim] {state.session_id}"
+                )
+            else:
+                console.print("[dim]memory is disabled[/dim]")
             continue
         if line == "/cost":
             _show_cost(state)
@@ -177,6 +206,7 @@ def _print_repl_help() -> None:
     table.add_row("[cyan]/config[/cyan]", "Show the resolved configuration")
     table.add_row("[cyan]/models[/cyan]", "List configured models")
     table.add_row("[cyan]/tools[/cyan]", "List available tools")
+    table.add_row("[cyan]/memory[/cyan]", "Show memory stats and session id")
     table.add_row("[cyan]/cost[/cyan]", "Show token usage and cost this session")
     table.add_row("[cyan]/clear[/cyan]", "Start a fresh conversation")
     table.add_row("[cyan]/exit[/cyan]", "Quit")
@@ -195,6 +225,9 @@ def run(
     as_json: bool = typer.Option(False, "--json", help="Emit structured JSON output."),
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Auto-approve side-effecting tools (non-interactive)."
+    ),
+    resume: str | None = typer.Option(
+        None, "--session", "-s", help="Resume/continue a session by id."
     ),
 ) -> None:
     """Run a single goal non-interactively (scriptable).
@@ -218,7 +251,12 @@ def run(
         err_console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from None
 
-    state = harness.new_session()
+    if harness.memory_note and not as_json:
+        err_console.print(f"[dim]memory: {harness.memory_note}[/dim]")
+
+    state = harness.resume(resume) if resume else None
+    if state is None:
+        state = harness.new_session()
     parts: list[str] = []
     try:
         for delta in harness.run_turn(goal, state):
@@ -312,6 +350,86 @@ def _list_models(cfg: Config) -> None:
             valid = "[red]invalid[/red]"
         roles.add_row(role, ref, valid)
     console.print(roles)
+
+
+# --------------------------------------------------------------------------- #
+# `agent86 memory`
+# --------------------------------------------------------------------------- #
+
+memory_app = typer.Typer(help="Inspect long-term memory.")
+app.add_typer(memory_app, name="memory")
+
+
+def _open_memory():
+    from agent86.memory.system import build_memory
+
+    cfg = load_config()
+    mem = build_memory(cfg)
+    if mem is None:
+        err_console.print("[yellow]Memory is disabled in config.[/yellow]")
+        raise typer.Exit(code=1)
+    if mem.note:
+        err_console.print(f"[dim]memory: {mem.note}[/dim]")
+    return mem
+
+
+@memory_app.command("stats")
+def memory_stats_cmd() -> None:
+    """Show counts of stored sessions, episodes, and facts."""
+    mem = _open_memory()
+    counts = mem.store.counts()
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Kind")
+    table.add_column("Count", justify="right")
+    for kind, n in counts.items():
+        table.add_row(kind, str(n))
+    console.print(table)
+    console.print(
+        f"[dim]db:[/dim] {mem.store.path}  [dim]embedder:[/dim] {mem.store.embedder.spec}"
+    )
+    mem.close()
+
+
+@memory_app.command("sessions")
+def memory_sessions_cmd(
+    limit: int = typer.Option(20, "--limit", "-n", help="Max sessions to show."),
+) -> None:
+    """List recent sessions (most recent first)."""
+    mem = _open_memory()
+    rows = mem.store.list_sessions(limit)
+    if not rows:
+        console.print("[dim]no sessions yet[/dim]")
+    else:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Session")
+        table.add_column("Title")
+        for row in rows:
+            table.add_row(row["session_id"], row["title"] or "[dim]-[/dim]")
+        console.print(table)
+    mem.close()
+
+
+@memory_app.command("search")
+def memory_search_cmd(
+    query: str = typer.Argument(..., help="What to search episodic + semantic memory for."),
+    k: int = typer.Option(5, "--k", "-k", help="Results per store."),
+) -> None:
+    """Search episodic and semantic memory."""
+    mem = _open_memory()
+    episodes = mem.store.search_episodes(query, k)
+    facts = mem.store.search_memories(query, k)
+    console.print("[bold]episodes[/bold]")
+    for h in episodes:
+        outcome = h.metadata.get("outcome", "")[:80]
+        console.print(f"  [{h.score:.2f}] {h.text}  [dim]-> {outcome}[/dim]")
+    if not episodes:
+        console.print("  [dim](none)[/dim]")
+    console.print("[bold]facts[/bold]")
+    for h in facts:
+        console.print(f"  [{h.score:.2f}] {h.text}")
+    if not facts:
+        console.print("  [dim](none)[/dim]")
+    mem.close()
 
 
 # --------------------------------------------------------------------------- #
