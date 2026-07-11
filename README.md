@@ -10,24 +10,23 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**Phase 4 — Memory (Pillar 2).** The harness now remembers. A single embedded store
-(SQLite + optional `sqlite-vec`) backs three kinds of memory, and sessions persist across
-runs.
+**Phase 5 — Guardrails + Observability (completes Tier 5).** The harness now defends and
+records itself.
 
-- **Working memory** — sliding-window token budget trims the context sent each request.
-- **Episodic memory** — one record per completed turn (task → outcome); similar past turns
-  are recalled and injected as context on a new task (the "flight data recorder").
-- **Semantic memory** — durable facts retrieved by meaning, exposed to the agent via the
-  `remember` / `recall` tools.
-- **Embeddings** — local `sentence-transformers` by default, with a dependency-free hash
-  embedder fallback so memory works (and tests run) without the `local` extra.
-- **Sessions** — persisted after every turn; resume with `--resume <id>` (REPL) or
-  `run --session <id>`. Inspect with `agent86 memory stats|sessions|search`.
+- **Ingress guardrail** — scans user input *and tool output* for prompt-injection / PII;
+  `off` / `warn` / `block`. Suspicious tool output is banded as untrusted DATA before the
+  model sees it (the real injection vector in an agent).
+- **Egress guardrail** — scans model output for leaked secrets (API keys, private keys) and
+  PII; `off` / `warn` / `redact`.
+- **Circuit breakers** — per-turn bounds on steps, cumulative cost, wall-clock, and
+  consecutive tool errors — the antidote to the runaway ReAct loop.
+- **Flight recorder** — append-only JSONL trace of every turn / model call / tool call /
+  guardrail hit, tagged by session. Read it with `agent86 trace show`.
+- **OpenTelemetry** — spans per step / model call / tool when enabled (no-op otherwise).
 
-Earlier phases still hold: the full Reason→Act→Observe loop, **Anthropic** + **Ollama**
-providers, 7 built-in tools, a restricted-subprocess sandbox with secret-scrubbing, and the
-`auto`/`ask`/`deny` HITL approval gate. MCP and skills join in Phase 6. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+All prior tiers hold: Reason→Act→Observe loop, **Anthropic** + **Ollama**, 9 built-in tools,
+secret-scrubbing subprocess sandbox, HITL approvals, and persistent working/episodic/semantic
+memory. MCP and skills join in Phase 6. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Try it (with a running Ollama chat model, or `ANTHROPIC_API_KEY` set):
 
@@ -36,6 +35,7 @@ agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /memory /cost 
 agent86 --model ollama:qwen2.5:3b run --yes "Remember that my favorite color is teal"
 agent86 --model ollama:qwen2.5:3b run --yes "What's my favorite color? Use recall."
 agent86 memory stats
+agent86 trace show                            # the flight recorder
 ```
 
 ## Install (development)

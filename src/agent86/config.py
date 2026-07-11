@@ -56,6 +56,9 @@ class SandboxConfig(BaseModel):
 
 class GuardrailsConfig(BaseModel):
     approval: ApprovalMode = ApprovalMode.ASK
+    ingress: str = "warn"  # off | warn | block   (scan user input for injection/PII)
+    egress: str = "warn"  # off | warn | redact   (scan model output for secrets/PII)
+    scan_observations: bool = True  # scan tool outputs for injected instructions
 
 
 class MemoryConfig(BaseModel):
@@ -73,6 +76,15 @@ class LimitsConfig(BaseModel):
     max_wall_clock_s: int = 900
     max_consecutive_errors: int = 3
     max_context_tokens: int = 8000
+
+
+class ObservabilityConfig(BaseModel):
+    trace: bool = True  # write the JSONL flight recorder
+    path: str = "~/.agent86/traces"
+    otel: bool = False  # emit OpenTelemetry spans (requires the 'otel' extra)
+
+    def resolved_path(self) -> Path:
+        return Path(os.path.expanduser(self.path))
 
 
 class MCPServerConfig(BaseModel):
@@ -101,6 +113,7 @@ class Config(BaseModel):
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
     # Provenance — which files actually contributed (for `agent86 config path`).
@@ -195,6 +208,7 @@ __all__ = [
     "GuardrailsConfig",
     "MemoryConfig",
     "LimitsConfig",
+    "ObservabilityConfig",
     "MCPServerConfig",
     "load_config",
     "config_paths",

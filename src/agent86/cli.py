@@ -269,11 +269,13 @@ def run(
         raise typer.Exit(code=1) from None
 
     if as_json:
+        # Honor the egress guardrail (e.g. redact mode) on the machine-readable output.
+        output = harness.egress.inspect("".join(parts)).text
         console.print_json(
             _json.dumps(
                 {
                     "session_id": state.session_id,
-                    "output": "".join(parts),
+                    "output": output,
                     "steps": state.step_count,
                     "usage": state.usage.model_dump(),
                 }
@@ -465,14 +467,41 @@ def mcp_list_cmd(ctx: typer.Context) -> None:
     console.print(table)
 
 
-trace_app = typer.Typer(help="Inspect the flight-data recorder (Phase 5).")
+trace_app = typer.Typer(help="Inspect the flight-data recorder.")
 app.add_typer(trace_app, name="trace")
 
 
+@trace_app.command("path")
+def trace_path_cmd() -> None:
+    """Show the trace file location."""
+    cfg = load_config()
+    path = cfg.observability.resolved_path() / "trace.jsonl"
+    exists = "exists" if path.exists() else "not found"
+    console.print(f"{path} ({exists})")
+
+
 @trace_app.command("show")
-def trace_show_cmd() -> None:
-    """Show recent traces."""
-    console.print("[dim]Tracing lands in Phase 5 (see docs/ARCHITECTURE.md).[/dim]")
+def trace_show_cmd(
+    session: str | None = typer.Option(None, "--session", "-s", help="Filter to one session."),
+    limit: int = typer.Option(50, "--limit", "-n", help="Max events to show."),
+) -> None:
+    """Show recent events from the flight recorder."""
+    from agent86.observability.recorder import read_events
+
+    cfg = load_config()
+    path = cfg.observability.resolved_path() / "trace.jsonl"
+    events = read_events(path, session_id=session, limit=limit)
+    if not events:
+        console.print("[dim]no trace events[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("session")
+    table.add_column("kind")
+    table.add_column("detail", overflow="fold")
+    for ev in events:
+        detail = {k: v for k, v in ev.items() if k not in ("ts", "session", "kind")}
+        table.add_row(str(ev.get("session", ""))[:12], str(ev.get("kind", "")), str(detail)[:100])
+    console.print(table)
 
 
 if __name__ == "__main__":
