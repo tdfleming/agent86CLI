@@ -15,7 +15,14 @@ from agent86.types import ToolResult
 
 class RememberTool(Tool):
     name = "remember"
-    description = "Store a durable fact in long-term semantic memory for future sessions."
+    description = (
+        "Persist a durable, user-specific fact to long-term memory for future sessions — "
+        "a stable preference, identity detail, or project constraint the user would expect "
+        "you to recall later. Do NOT use it for answers you just computed, transient "
+        "conversation state, general knowledge, or anything only relevant to this turn. "
+        "Only call it when the user asks you to remember something, or states a lasting "
+        "fact about themselves or their work. When in doubt, do not remember."
+    )
     side_effecting = False
 
     class Args(BaseModel):

@@ -6,6 +6,17 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-11
+
+Memory discipline release.
+
+### Changed
+
+- The `remember` tool description and the system prompt now steer the model to persist only
+  durable, user-specific facts (preferences, identity, lasting project constraints) — and to
+  avoid remembering computed answers, transient state, or general knowledge. Small local
+  models no longer over-eagerly write memories for one-off answers like "what is 2+2?".
+
 ## [0.2.1] - 2026-07-11
 
 Embeddings robustness release.
@@ -90,6 +101,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.2.2]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.2.2
 [0.2.1]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.2.1
 [0.2.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.2.0
 [0.1.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.1.0
