@@ -12,6 +12,7 @@ import sys
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -131,11 +132,11 @@ def _repl(cfg: Config, resume: str | None = None) -> None:
         return
 
     if harness.memory_note:
-        console.print(f"[dim]memory: {harness.memory_note}[/dim]")
+        console.print(f"[dim]memory: {escape(harness.memory_note)}[/dim]")
     if harness.mcp_note:
-        console.print(f"[dim]mcp: {harness.mcp_note}[/dim]")
+        console.print(f"[dim]mcp: {escape(harness.mcp_note)}[/dim]")
     if harness.sandbox_note:
-        console.print(f"[yellow]sandbox: {harness.sandbox_note}[/yellow]")
+        console.print(f"[yellow]sandbox: {escape(harness.sandbox_note)}[/yellow]")
     if harness.skills:
         console.print(f"[dim]skills: {', '.join(harness.skills)}[/dim]")
 
@@ -277,9 +278,9 @@ def run(
 
     if not as_json:
         if harness.memory_note:
-            err_console.print(f"[dim]memory: {harness.memory_note}[/dim]")
+            err_console.print(f"[dim]memory: {escape(harness.memory_note)}[/dim]")
         if harness.sandbox_note:
-            err_console.print(f"[yellow]sandbox: {harness.sandbox_note}[/yellow]")
+            err_console.print(f"[yellow]sandbox: {escape(harness.sandbox_note)}[/yellow]")
 
     state = harness.resume(resume) if resume else None
     if state is None:
