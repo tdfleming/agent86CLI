@@ -244,6 +244,7 @@ class _Repl:
             if action == "handled":
                 continue
 
+            console.print()  # blank line separating the question from the response
             console.print("[bold cyan]agent86[/bold cyan] ", end="")
             printed = False
             try:
@@ -251,15 +252,14 @@ class _Repl:
                     if delta.text:
                         _emit(delta.text)
                         printed = True
+                if not printed:
+                    console.print("[dim](no response)[/dim]", end="")
+                console.print()
             except (ProviderError, HarnessError) as exc:
                 console.print(f"\n[red]error:[/red] {exc}")
-                continue
             except KeyboardInterrupt:
                 console.print("\n[dim]interrupted[/dim]")
-                continue
-            if not printed:
-                console.print("[dim](no response)[/dim]", end="")
-            console.print()
+            console.print()  # blank line separating the response from the next prompt
             self._refresh_status()
 
     def rich_loop(self) -> None:
@@ -296,6 +296,7 @@ class _Repl:
             if action == "handled":
                 continue
 
+            console.print()  # blank line separating the question from the response
             try:
                 self._run_turn_rich(line)
             except (ProviderError, HarnessError) as exc:
@@ -304,6 +305,7 @@ class _Repl:
                 console.print("\n[dim]interrupted[/dim]")
             except Exception as exc:  # a turn blew up — report it, but keep the rich UI alive
                 console.print(f"\n[red]turn failed ({type(exc).__name__}):[/red] {exc}")
+            console.print()  # blank line separating the response from the next prompt
             self._refresh_status()
 
     def _run_turn_rich(self, line: str) -> None:

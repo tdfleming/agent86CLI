@@ -6,6 +6,11 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The REPL now prints a blank line after each question and after each response (both the rich
+  and plain loops), so turns are visually separated instead of running together.
+
 ## [0.4.2] - 2026-07-12
 
 REPL polish & reliability release.
