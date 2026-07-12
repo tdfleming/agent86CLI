@@ -110,15 +110,16 @@ def _banner(cfg: Config) -> Panel:
 
 
 def _repl(cfg: Config, resume: str | None = None) -> None:
-    """Interactive Reason -> Act -> Observe loop against the configured model."""
-    from prompt_toolkit import PromptSession
+    """Interactive Reason -> Act -> Observe loop against the configured model.
 
+    Uses the stdlib ``input()`` for line entry (not prompt_toolkit) so it works reliably in
+    every terminal — Git Bash/MinTTY, PowerShell, cmd, Windows Terminal — without taking over
+    the terminal or interfering with streamed output.
+    """
     from agent86.cognitive.base import ProviderError
     from agent86.orchestration.loop import Harness, HarnessError
 
     console.print(_banner(cfg))
-
-    session: PromptSession = PromptSession()
 
     def approval_prompt(tool_name: str, preview: str) -> bool:
         console.print(
@@ -126,7 +127,7 @@ def _repl(cfg: Config, resume: str | None = None) -> None:
             f"[dim]{preview}[/dim]"
         )
         try:
-            answer = session.prompt("  run it? [y/N] ").strip().lower()
+            answer = input("  run it? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             return False
         return answer in ("y", "yes")
@@ -166,10 +167,13 @@ def _repl(cfg: Config, resume: str | None = None) -> None:
 
     while True:
         try:
-            line = session.prompt("agent86> ").strip()
-        except (EOFError, KeyboardInterrupt):
+            line = input("agent86> ").strip()
+        except EOFError:
             console.print("\n[dim]bye[/dim]")
             return
+        except KeyboardInterrupt:
+            console.print("")  # Ctrl-C clears the current line
+            continue
 
         if not line:
             continue
@@ -223,6 +227,9 @@ def _repl(cfg: Config, resume: str | None = None) -> None:
                     printed_any = True
         except (ProviderError, HarnessError) as exc:
             console.print(f"\n[red]error:[/red] {exc}")
+            continue
+        except KeyboardInterrupt:
+            console.print("\n[dim]interrupted[/dim]")
             continue
         if not printed_any:
             console.print("[dim](no response)[/dim]", end="")

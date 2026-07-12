@@ -4,6 +4,21 @@ All notable changes to agent86 are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- REPL now uses the stdlib `input()` instead of `prompt_toolkit`, so interactive mode works
+  reliably in every terminal — Git Bash/MinTTY (which `prompt_toolkit` fails in with
+  `NoConsoleScreenBufferError`), PowerShell, cmd, and Windows Terminal. Streamed output no
+  longer gets swallowed by the input library taking over the terminal.
+- Streamed model text is written to stdout with an explicit flush (raw write, not a buffered
+  Rich print), so incremental output shows immediately across terminals; a turn that yields no
+  text prints `(no response)` instead of a blank line.
+- Dynamic status notes (memory/mcp/sandbox) are escaped before printing, so bracketed content
+  like `agent86[local]` is no longer eaten by Rich markup parsing.
+- Removed the now-unused `prompt_toolkit` dependency.
+
 ## [0.1.0] - 2026-07-11
 
 First release — a complete five-tier agentic harness that runs on remote or local models and
