@@ -6,6 +6,10 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-11
+
+Embeddings robustness release.
+
 ### Fixed
 
 - Semantic memory search skips rows whose stored embedding dimension differs from the current
@@ -86,5 +90,6 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.2.1]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.2.1
 [0.2.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.2.0
 [0.1.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.1.0
