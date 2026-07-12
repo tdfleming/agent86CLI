@@ -205,6 +205,75 @@ class MemoryStore:
         scored.sort(key=lambda h: h.score, reverse=True)
         return scored[:k]
 
+    # ---- pruning ------------------------------------------------------- #
+
+    def delete_memory(self, mem_id: int) -> bool:
+        """Delete a single semantic memory by id. Returns True if a row was removed."""
+        cur = self.conn.execute("DELETE FROM memories WHERE id = ?", (mem_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def _prune_table(
+        self,
+        table: str,
+        ts_col: str,
+        id_col: str,
+        *,
+        older_than_days: float | None,
+        keep_last: int | None,
+    ) -> int:
+        """Delete rows failing any given retention constraint; return the count removed.
+
+        A row survives only if it is newer than the age cutoff AND among the ``keep_last``
+        most recent. Constraints left as ``None`` are not applied.
+        """
+        deleted = 0
+        if older_than_days is not None:
+            cutoff = self._now() - older_than_days * 86400.0
+            cur = self.conn.execute(
+                f"DELETE FROM {table} WHERE {ts_col} < ?", (cutoff,)  # noqa: S608 (fixed idents)
+            )
+            deleted += cur.rowcount
+        if keep_last is not None:
+            cur = self.conn.execute(
+                f"DELETE FROM {table} WHERE {id_col} NOT IN "  # noqa: S608 (fixed idents)
+                f"(SELECT {id_col} FROM {table} ORDER BY {ts_col} DESC LIMIT ?)",
+                (max(0, keep_last),),
+            )
+            deleted += cur.rowcount
+        self.conn.commit()
+        return deleted
+
+    def prune(
+        self,
+        *,
+        older_than_days: float | None = None,
+        keep_last: int | None = None,
+        episodes: bool = True,
+        sessions: bool = True,
+        memories: bool = False,
+    ) -> dict[str, int]:
+        """Apply retention limits to the log tables. Returns rows deleted per table.
+
+        Episodes and sessions (the append-only flight recorder) are pruned by default;
+        curated semantic ``memories`` are only touched when explicitly requested.
+        """
+        removed: dict[str, int] = {}
+        if episodes:
+            removed["episodes"] = self._prune_table(
+                "episodes", "ts", "id", older_than_days=older_than_days, keep_last=keep_last
+            )
+        if sessions:
+            removed["sessions"] = self._prune_table(
+                "sessions", "updated_at", "session_id",
+                older_than_days=older_than_days, keep_last=keep_last,
+            )
+        if memories:
+            removed["memories"] = self._prune_table(
+                "memories", "ts", "id", older_than_days=older_than_days, keep_last=keep_last
+            )
+        return removed
+
     # ---- misc ---------------------------------------------------------- #
 
     def counts(self) -> dict[str, int]:

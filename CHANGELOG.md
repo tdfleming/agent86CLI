@@ -6,6 +6,14 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `agent86 memory prune` — trim the flight-recorder log by age (`--older-than DAYS`) and/or
+  count (`--keep-last N`). Episodes and sessions are pruned by default; curated semantic facts
+  are left alone unless `--memories` is passed. Supports `--dry-run` and `--yes`.
+- `agent86 memory forget <id>` — delete a single semantic fact by id (ids come from
+  `memory search`), for surgically removing a bad memory.
+
 ## [0.2.2] - 2026-07-11
 
 Memory discipline release.

@@ -68,6 +68,39 @@ def test_search_skips_mismatched_dimension_rows(tmp_path):
     assert "64-dim" in hits[0].text
 
 
+def test_delete_memory(tmp_path):
+    store = _store(tmp_path)
+    mid = store.add_memory("a fact to remove")
+    assert store.delete_memory(mid) is True
+    assert store.delete_memory(mid) is False  # already gone
+    assert store.counts()["memories"] == 0
+
+
+def test_prune_keep_last_trims_log(tmp_path):
+    store = _store(tmp_path)
+    for i in range(5):
+        store.add_episode("s1", task=f"task {i}", outcome="ok")
+        store.save_session(f"sess{i}", "{}")
+    removed = store.prune(keep_last=2)
+    assert removed["episodes"] == 3 and removed["sessions"] == 3
+    assert store.counts()["episodes"] == 2
+    assert store.counts()["sessions"] == 2
+
+
+def test_prune_leaves_memories_by_default(tmp_path):
+    store = _store(tmp_path)
+    store.add_memory("keep me")
+    store.add_episode("s1", task="t", outcome="ok")
+    removed = store.prune(keep_last=0)  # nuke the log entirely
+    assert removed["episodes"] == 1
+    assert "memories" not in removed
+    assert store.counts()["memories"] == 1  # curated facts untouched
+    # opt-in prunes memories too
+    removed2 = store.prune(keep_last=0, memories=True, episodes=False, sessions=False)
+    assert removed2["memories"] == 1
+    assert store.counts()["memories"] == 0
+
+
 def test_episode_roundtrip_and_recall(tmp_path):
     store = _store(tmp_path)
     store.add_episode("s1", task="deploy the web app", outcome="succeeded via run_command")

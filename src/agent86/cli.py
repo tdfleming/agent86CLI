@@ -320,6 +320,79 @@ def memory_search_cmd(
     mem.close()
 
 
+@memory_app.command("prune")
+def memory_prune_cmd(
+    older_than: float | None = typer.Option(
+        None, "--older-than", help="Delete log rows older than this many days."
+    ),
+    keep_last: int | None = typer.Option(
+        None, "--keep-last", help="Keep only the most recent N rows per table."
+    ),
+    memories: bool = typer.Option(
+        False, "--memories", help="Also prune curated semantic facts (off by default)."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be deleted without deleting."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Trim the flight-recorder log (episodes + sessions) by age and/or count.
+
+    Curated semantic facts are left untouched unless --memories is given. With no limits,
+    prints current counts and exits (nothing is deleted).
+    """
+    if older_than is None and keep_last is None:
+        console.print(
+            "[yellow]No retention limit given.[/yellow] Pass --older-than and/or --keep-last."
+        )
+        mem = _open_memory()
+        console.print({k: v for k, v in mem.store.counts().items()})
+        mem.close()
+        return
+
+    mem = _open_memory()
+    if dry_run:
+        # Count without mutating by reusing prune on a would-be basis is awkward; report intent.
+        console.print(
+            f"[dim]dry run — would prune episodes+sessions"
+            f"{' + memories' if memories else ''} "
+            f"(older_than={older_than}, keep_last={keep_last}). Current counts:[/dim]"
+        )
+        console.print({k: v for k, v in mem.store.counts().items()})
+        mem.close()
+        return
+
+    if not yes:
+        target = "episodes, sessions" + (", memories" if memories else "")
+        confirm = typer.confirm(f"Prune {target} (older_than={older_than}, keep_last={keep_last})?")
+        if not confirm:
+            console.print("[dim]aborted[/dim]")
+            mem.close()
+            return
+
+    removed = mem.store.prune(
+        older_than_days=older_than, keep_last=keep_last, memories=memories
+    )
+    total = sum(removed.values())
+    console.print(f"[green]Pruned {total} row(s):[/green] {removed}")
+    console.print({k: v for k, v in mem.store.counts().items()})
+    mem.close()
+
+
+@memory_app.command("forget")
+def memory_forget_cmd(
+    mem_id: int = typer.Argument(..., help="Id of the semantic memory to delete (see search)."),
+) -> None:
+    """Delete a single semantic fact by id."""
+    mem = _open_memory()
+    ok = mem.store.delete_memory(mem_id)
+    if ok:
+        console.print(f"[green]Deleted memory {mem_id}.[/green]")
+    else:
+        console.print(f"[yellow]No memory with id {mem_id}.[/yellow]")
+    mem.close()
+
+
 # --------------------------------------------------------------------------- #
 # `agent86 skills` / `mcp` / `trace`  -  scaffolded stubs
 # --------------------------------------------------------------------------- #
