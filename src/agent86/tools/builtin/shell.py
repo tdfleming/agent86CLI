@@ -5,7 +5,6 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from agent86.tools.base import Tool, ToolContext
-from agent86.tools.sandbox.subprocess_exec import run_subprocess
 from agent86.types import ToolResult
 
 
@@ -21,7 +20,7 @@ class RunCommandTool(Tool):
         command: str = Field(..., description="The shell command to execute.")
 
     def execute(self, args: Args, ctx: ToolContext) -> ToolResult:
-        result = run_subprocess(ctx.policy, shell_command=args.command)
+        result = ctx.get_executor().run(ctx.policy, shell_command=args.command)
         body = _format(result.returncode, result.stdout, result.stderr)
         return ToolResult(
             call_id="",

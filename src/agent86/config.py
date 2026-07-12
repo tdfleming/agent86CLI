@@ -52,6 +52,10 @@ class ProviderConfig(BaseModel):
 
 class SandboxConfig(BaseModel):
     mode: str = "subprocess"  # "subprocess" | "docker"
+    docker_image: str = "python:3.12-slim"
+    docker_memory: str = "512m"
+    docker_cpus: str = "1"
+    docker_network: bool = False  # containers run with --network none by default
 
 
 class GuardrailsConfig(BaseModel):

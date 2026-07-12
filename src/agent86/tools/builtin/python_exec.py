@@ -7,12 +7,9 @@ restricted subprocess here; Docker/WASM add stronger isolation in later phases.
 
 from __future__ import annotations
 
-import sys
-
 from pydantic import BaseModel, Field
 
 from agent86.tools.base import Tool, ToolContext
-from agent86.tools.sandbox.subprocess_exec import run_subprocess
 from agent86.types import ToolResult
 
 
@@ -28,11 +25,8 @@ class PythonExecTool(Tool):
         code: str = Field(..., description="Python source to execute. Use print() for output.")
 
     def execute(self, args: Args, ctx: ToolContext) -> ToolResult:
-        result = run_subprocess(
-            ctx.policy,
-            args=[sys.executable, "-I", "-"],
-            stdin=args.code,
-        )
+        executor = ctx.get_executor()
+        result = executor.run(ctx.policy, args=executor.python_argv(), stdin=args.code)
         parts = [f"exit code: {result.returncode}"]
         if result.stdout.strip():
             parts.append(f"stdout:\n{result.stdout.rstrip()}")

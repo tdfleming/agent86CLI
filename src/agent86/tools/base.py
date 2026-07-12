@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from agent86.config import Config
     from agent86.memory.semantic import SemanticMemory
     from agent86.skills.models import Skill
+    from agent86.tools.sandbox.executor import Executor
     from agent86.tools.sandbox.policy import SandboxPolicy
 
 
@@ -37,7 +38,14 @@ class ToolContext:
     skills: dict[str, Skill] = field(default_factory=dict)
     # Spawn a sub-agent: (role, task) -> final result text. Set when multi-agent is enabled.
     spawn: Callable[[str, str], str] | None = None
+    # Execution backend (subprocess or docker); tools fall back to the default if unset.
+    executor: Executor | None = None
     extra: dict[str, object] = field(default_factory=dict)
+
+    def get_executor(self) -> Executor:
+        from agent86.tools.sandbox.executor import get_default_executor
+
+        return self.executor or get_default_executor()
 
 
 class EmptyArgs(BaseModel):

@@ -10,30 +10,32 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**Phase 8 — Multi-agent orchestration.** A single harness can now spawn and coordinate
-specialized sub-agents (the book's MAS chapters).
+**Complete — all nine phases (v0.1).** A full five-tier agentic harness that runs on remote
+or local models and uses tools, skills, MCP servers, and sub-agents. Every pillar and tier
+from *The Agentic Harness* is implemented, tested (93 tests), and verified live against a
+local model.
 
-- **Sub-agents** — a `delegate(role, task)` tool lets the main agent act as a *supervisor*,
-  spinning up a role-scoped sub-agent that runs its own Reason→Act→Observe loop with the same
-  tools, sandbox, and guardrails, and returns its result. Delegation nests up to
-  `agents.max_depth` (depth-guarded so it can't recurse without bound).
-- **Message envelopes** — agents never exchange raw natural language; every inter-agent
-  message is a structured `AgentMessage` (sender, recipient, intent, correlation id) — the
-  book's answer to the "Babel problem".
-- **Broker + orchestrator** — an in-process `MessageBus` and a `SupervisorOrchestrator` that
-  fans role-scoped tasks out to sub-agents and collects correlated reply envelopes.
+| Tier / Pillar | What's there |
+|---|---|
+| **Tier 1 Gateway** | session lifecycle, input sanitization |
+| **Tier 2 Orchestration** (Pillar 1) | ReAct loop, FSM state, dynamic routing, circuit breakers |
+| **Tier 3 Cognitive** | Anthropic · OpenAI-compatible · Ollama · llama.cpp/LM Studio; prompt compilation; token budgeting |
+| **Tier 4 Tools** (Pillar 3) | built-ins (files, shell, python, web) + memory/skill/delegate + MCP; **subprocess or Docker** sandbox |
+| **Tier 5 Guardrails/Obs** (Pillar 4) | ingress/egress scanning, HITL approvals, circuit breakers, flight recorder, OpenTelemetry |
+| **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence |
+| **Multi-agent** | sub-agents via `delegate`, message envelopes, broker, supervisor orchestrator |
 
-Everything prior holds: four providers, dynamic routing, tools + skills + MCP, memory,
-guardrails, circuit breakers, and observability. Remaining: Docker sandbox + polish (Phase 9).
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Optional heavy deps degrade gracefully: no torch → hash-embedder memory; no Docker → subprocess
+sandbox; no `mcp` → MCP disabled. Install extras as needed: `pip install -e ".[all]"`.
 
 Try it (with a running Ollama chat model, or provider API keys set):
 
 ```bash
 agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /skills /memory /cost /exit
 agent86 --model openai:gpt-4o run "Summarize the harness in one sentence"
+agent86 --sandbox docker run --yes "Use python_exec to print the OS you're running on"
 agent86 run --yes "Delegate to a 'researcher' sub-agent: find X. Then summarize."
-agent86 skills list ; agent86 mcp tools ; agent86 trace show
+agent86 skills list ; agent86 mcp tools ; agent86 memory stats ; agent86 trace show
 ```
 
 Route cheap vs frontier per turn in `.agent86/config.toml`:

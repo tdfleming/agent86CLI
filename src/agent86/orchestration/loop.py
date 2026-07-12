@@ -35,6 +35,7 @@ from agent86.skills.loader import discover_skills
 from agent86.tools.base import ToolContext
 from agent86.tools.mcp_client import build_mcp
 from agent86.tools.registry import ToolRegistry, default_registry
+from agent86.tools.sandbox.executor import build_executor
 from agent86.tools.sandbox.policy import default_policy
 from agent86.types import (
     AgentPhase,
@@ -92,6 +93,7 @@ class Harness:
             enable_delegate=config.agents.enabled,
         )
         self.policy = default_policy(config, workspace)
+        self.executor, self.sandbox_note = build_executor(config)
         self.context = ToolContext(
             workspace=self.policy.workspace,
             policy=self.policy,
@@ -99,6 +101,7 @@ class Harness:
             memory=semantic,
             skills=self.skills,
             spawn=(self.spawn_subagent if config.agents.enabled else None),
+            executor=self.executor,
         )
         self.gate = ApprovalGate(config.guardrails.approval, approval_prompt)
         self.ingress = IngressGuardrail(config.guardrails.ingress)

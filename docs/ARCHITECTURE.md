@@ -5,8 +5,10 @@
 > implementation of the five-tier architecture and four pillars described in
 > *The Agentic Harness* (Tony Fleming, 2026).
 
-**Status:** Design spec (pre-scaffold). This document is the contract the code is built against.
-**Version target:** 0.1.0
+**Status:** Implemented (Phases 1–9 complete). This document is the contract the code was
+built against; the build followed §14 phase-by-phase, each phase verified with tests and a
+live run against a local model.
+**Version:** 0.1.0
 
 ---
 
@@ -391,6 +393,10 @@ Heavy/optional deps (`sentence-transformers`, `docker`) live behind extras:
 9. **Docker sandbox + polish** — container executor; tests; docs.
 
 ---
+
+> **Build status:** All nine phases are implemented, tested, and verified live. Phase 4
+> (memory), 5 (guardrails/observability), 8 (multi-agent), and 9 (Docker sandbox) each shipped
+> with a graceful-degradation path so the harness runs without heavy optional deps.
 
 ## 15. Non-goals for v0.1
 

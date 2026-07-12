@@ -134,6 +134,8 @@ def _repl(cfg: Config, resume: str | None = None) -> None:
         console.print(f"[dim]memory: {harness.memory_note}[/dim]")
     if harness.mcp_note:
         console.print(f"[dim]mcp: {harness.mcp_note}[/dim]")
+    if harness.sandbox_note:
+        console.print(f"[yellow]sandbox: {harness.sandbox_note}[/yellow]")
     if harness.skills:
         console.print(f"[dim]skills: {', '.join(harness.skills)}[/dim]")
 
@@ -273,8 +275,11 @@ def run(
         err_console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from None
 
-    if harness.memory_note and not as_json:
-        err_console.print(f"[dim]memory: {harness.memory_note}[/dim]")
+    if not as_json:
+        if harness.memory_note:
+            err_console.print(f"[dim]memory: {harness.memory_note}[/dim]")
+        if harness.sandbox_note:
+            err_console.print(f"[yellow]sandbox: {harness.sandbox_note}[/yellow]")
 
     state = harness.resume(resume) if resume else None
     if state is None:
