@@ -20,6 +20,9 @@ All notable changes to agent86 are documented here. The format follows
 
 ### Fixed
 
+- Memory store opens its SQLite connection with `check_same_thread=False` so a turn can run in
+  the rich REPL's worker thread without a `sqlite3.ProgrammingError`. Access stays serialized
+  (one thread at a time), so it's safe.
 - REPL now uses the stdlib `input()` instead of `prompt_toolkit`, so interactive mode works
   reliably in every terminal — Git Bash/MinTTY (which `prompt_toolkit` fails in with
   `NoConsoleScreenBufferError`), PowerShell, cmd, and Windows Terminal. Streamed output no

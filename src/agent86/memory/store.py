@@ -53,7 +53,11 @@ class MemoryStore:
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        # check_same_thread=False: the rich REPL runs a turn (which touches the store) in a
+        # worker thread while the main thread renders. Access is serialized — the store is only
+        # ever used from one thread at a time (main at construction, then one worker per turn) —
+        # so cross-thread use is safe.
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.has_vec = self._try_load_vec()
         self._migrate()
