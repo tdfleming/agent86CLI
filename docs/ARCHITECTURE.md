@@ -8,7 +8,7 @@
 **Status:** Implemented (Phases 1–9 complete). This document is the contract the code was
 built against; the build followed §14 phase-by-phase, each phase verified with tests and a
 live run against a local model.
-**Version:** 0.1.0
+**Version:** 0.4.0
 
 ---
 
