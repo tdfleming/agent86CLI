@@ -165,6 +165,9 @@ class _Repl:
         if line == "/mode" or line.startswith("/mode "):
             self._set_mode(line[5:].strip())
             return "handled"
+        if line == "/model" or line.startswith("/model "):
+            self._set_model(line[6:].strip())
+            return "handled"
         if line.startswith("/"):
             console.print(f"[dim]unknown command {line}[/dim]")
             return "handled"
@@ -181,6 +184,25 @@ class _Repl:
             self.harness.gate.mode = mode
             self.status.approval = mode.value
         console.print(f"[dim]approval mode: {self.harness.gate.mode.value}[/dim]")
+
+    def _set_model(self, arg: str) -> None:
+        p = self.harness.provider
+        if not arg:
+            console.print(f"[dim]current model:[/dim] {p.name}:{p.model}")
+            console.print(
+                "[dim]usage: /model <provider:model>  "
+                "e.g. /model openrouter:anthropic/claude-3.7-sonnet[/dim]"
+            )
+            return
+        from agent86.cognitive.base import ProviderError
+
+        try:
+            new = self.harness.set_model(arg)
+        except (ProviderError, ValueError) as exc:
+            console.print(f"[red]{exc}[/red]")
+            return
+        self._refresh_status()
+        console.print(f"[dim]model:[/dim] [cyan]{new.name}:{new.model}[/cyan]")
 
     def _show_cost(self) -> None:
         u = self.state.usage
@@ -362,6 +384,9 @@ def _print_help() -> None:
     table.add_row("[cyan]/help[/cyan]", "Show this help")
     table.add_row("[cyan]/config[/cyan]", "Show the resolved configuration")
     table.add_row("[cyan]/models[/cyan]", "List configured models")
+    table.add_row(
+        "[cyan]/model <provider:model>[/cyan]", "Switch the active model for this session"
+    )
     table.add_row("[cyan]/tools[/cyan]", "List available tools")
     table.add_row("[cyan]/skills[/cyan]", "List available skills")
     table.add_row("[cyan]/memory[/cyan]", "Show memory stats and session id")

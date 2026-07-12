@@ -80,6 +80,20 @@ def test_keyless_custom_provider_needs_no_key():
     assert isinstance(provider_for_model("localvllm:my-model", cfg), OpenAIProvider)
 
 
+def test_set_forced_pins_router_over_triage(monkeypatch):
+    cfg = load_config()
+    cfg.model.router = "triage"
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    router = ModelRouter(cfg)
+    assert router.enabled
+    prov = provider_for_model("openai:gpt-4o", cfg)
+    router.set_forced(prov)
+    assert not router.enabled  # forcing disables triage
+    # both simple and complex tasks now resolve to the pinned provider
+    assert router.provider_for(router.select_model("refactor and debug this code")) is prov
+    assert router.provider_for(router.select_model("say hi")) is prov
+
+
 def test_unknown_provider_without_base_url_raises():
     cfg = load_config()
     with pytest.raises(ProviderError, match="Unknown provider"):

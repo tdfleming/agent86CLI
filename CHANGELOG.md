@@ -21,6 +21,10 @@ All notable changes to agent86 are documented here. The format follows
   no `api_key_env` is treated as a keyless local endpoint. The provider factory falls back to
   the OpenAI-compatible client for any configured provider with a `base_url`, so multiple
   cloud gateways can be used side by side instead of sharing the single `openai` slot.
+- **`/model <provider:model>` REPL command** — switch the active model mid-session without
+  losing the conversation; the status line updates immediately. Pins the chosen model
+  (overriding triage routing) for the rest of the session. Bare `/model` shows the current
+  model; an unknown ref or missing API key is reported and leaves the model unchanged.
 
 ## [0.3.0] - 2026-07-11
 

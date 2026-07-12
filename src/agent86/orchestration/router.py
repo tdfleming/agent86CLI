@@ -50,6 +50,11 @@ class ModelRouter:
         route = self.config.model.route
         return route.cheap if is_simple(task_text) else route.frontier
 
+    def set_forced(self, provider: ModelProvider) -> None:
+        """Pin the router to a single provider (overrides triage routing)."""
+        self.forced = provider
+        self._cache[provider.model] = provider
+
     def provider_for(self, model_str: str) -> ModelProvider:
         if self.forced is not None:
             return self.forced

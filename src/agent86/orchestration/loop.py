@@ -127,6 +127,21 @@ class Harness:
     def memory_note(self) -> str | None:
         return self.memory.note if self.memory else None
 
+    def set_model(self, model_str: str) -> ModelProvider:
+        """Switch the active model for subsequent turns.
+
+        Builds the provider for ``model_str`` (e.g. ``openrouter:anthropic/claude-3.7-sonnet``)
+        and pins it — this overrides triage routing for the rest of the session. Raises
+        ``ProviderError``/``ValueError`` if the ref is unknown or its API key is missing, in
+        which case the current model is left unchanged.
+        """
+        from agent86.cognitive.base import provider_for_model
+
+        provider = provider_for_model(model_str, self.config)  # may raise; caught by caller
+        self.router.set_forced(provider)
+        self.provider = provider
+        return provider
+
     @property
     def mcp_note(self) -> str | None:
         return self.mcp.note if self.mcp else None
