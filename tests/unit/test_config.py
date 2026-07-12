@@ -16,7 +16,9 @@ def test_defaults_load_without_files(monkeypatch, tmp_path):
     cfg = load_config()
     assert isinstance(cfg, Config)
     assert cfg.model.default == "anthropic:claude-opus-4-8"
-    assert set(cfg.providers) == {"anthropic", "openai", "ollama", "llamacpp"}
+    assert set(cfg.providers) == {
+        "anthropic", "openai", "openrouter", "groq", "ollama", "llamacpp"
+    }
     assert cfg.guardrails.approval is ApprovalMode.ASK
     assert cfg.sources == []
 

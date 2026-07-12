@@ -14,6 +14,13 @@ All notable changes to agent86 are documented here. The format follows
   (default 500), and `retention_max_age_days` (default 0 = off); any cap set to 0 is
   disabled. Curated semantic facts are never auto-pruned. Prunes are logged to the flight
   recorder as a `memory/retention_prune` event.
+- **First-class OpenAI-compatible cloud providers.** OpenRouter and Groq are now built-in
+  provider prefixes (`openrouter:…`, `groq:…`) — just set their API-key env var. Any other
+  OpenAI-compatible endpoint (Together, Fireworks, Azure OpenAI, vLLM, LM Studio, …) becomes
+  a first-class prefix by adding a `[providers.<name>]` block with a `base_url`; a block with
+  no `api_key_env` is treated as a keyless local endpoint. The provider factory falls back to
+  the OpenAI-compatible client for any configured provider with a `base_url`, so multiple
+  cloud gateways can be used side by side instead of sharing the single `openai` slot.
 
 ## [0.3.0] - 2026-07-11
 

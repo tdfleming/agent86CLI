@@ -51,6 +51,56 @@ cheap = "ollama:qwen2.5:3b"
 frontier = "anthropic:claude-opus-4-8"
 ```
 
+## Configuring model providers
+
+Models are named `provider:model`. Config lives in `~/.agent86/config.toml` (user) or
+`./.agent86/config.toml` (project). **API keys are never stored in config** — each provider
+names the *environment variable* that holds its key, and the key is read at call time.
+
+Built-in providers: `anthropic`, `openai`, `openrouter`, `groq`, `ollama`, `llamacpp`.
+The last four `openai`/`openrouter`/`groq`/… all speak the OpenAI-compatible API.
+
+**Claude** (first-class, and the default) — just set the key:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+agent86 -m anthropic:claude-opus-4-8 run "hello"
+```
+
+**OpenRouter / Groq** ship as ready-to-use prefixes — set the key and go:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+agent86 -m "openrouter:anthropic/claude-3.7-sonnet" run "hello"
+
+export GROQ_API_KEY=gsk-...
+agent86 -m "groq:llama-3.3-70b-versatile" run "hello"
+```
+
+**Any other OpenAI-compatible endpoint** (Together, Fireworks, Azure OpenAI, vLLM,
+LM Studio, …) works by adding a `[providers.<name>]` block with a `base_url`. The name
+becomes a first-class prefix; add `api_key_env` if the endpoint needs a key (omit it for a
+keyless local server):
+
+```toml
+[providers.together]
+base_url    = "https://api.together.xyz/v1"
+api_key_env = "TOGETHER_API_KEY"
+
+[providers.localvllm]
+base_url = "http://localhost:8000/v1"    # keyless local endpoint
+
+[model]
+default = "together:meta-llama/Llama-3.3-70B-Instruct-Turbo"
+```
+
+```bash
+agent86 -m "localvllm:my-model" run "hello"
+```
+
+To override an endpoint (e.g. point `openai` at an Azure deployment), set its `base_url`
+and `api_key_env` under `[providers.openai]`. Run `agent86 models` to see what's configured.
+
 ## Install (development)
 
 With [uv](https://docs.astral.sh/uv/) (recommended):

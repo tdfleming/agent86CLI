@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from agent86.cognitive.base import provider_for_model
+import pytest
+
+from agent86.cognitive.base import ProviderError, provider_for_model
 from agent86.cognitive.llamacpp_provider import LlamaCppProvider
 from agent86.cognitive.openai_provider import OpenAIProvider
-from agent86.config import load_config
+from agent86.config import ProviderConfig, load_config
 from agent86.orchestration.router import ModelRouter, is_simple
 
 
@@ -50,3 +52,35 @@ def test_factory_builds_new_providers(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     assert isinstance(provider_for_model("openai:gpt-4o", cfg), OpenAIProvider)
     assert isinstance(provider_for_model("llamacpp:qwen2.5", cfg), LlamaCppProvider)
+
+
+def test_openrouter_default_provider_is_openai_compatible(monkeypatch):
+    cfg = load_config()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    prov = provider_for_model("openrouter:anthropic/claude-3.7-sonnet", cfg)
+    assert isinstance(prov, OpenAIProvider)
+    # base_url routed to OpenRouter, and the slash-containing model id is preserved
+    assert "openrouter.ai" in prov._url
+    assert prov.model == "anthropic/claude-3.7-sonnet"
+
+
+def test_custom_provider_with_base_url_falls_back_to_openai(monkeypatch):
+    cfg = load_config()
+    cfg.providers["together"] = ProviderConfig(
+        api_key_env="TOGETHER_API_KEY", base_url="https://api.together.xyz/v1"
+    )
+    monkeypatch.setenv("TOGETHER_API_KEY", "test-key")
+    assert isinstance(provider_for_model("together:meta-llama/Llama-3-70b", cfg), OpenAIProvider)
+
+
+def test_keyless_custom_provider_needs_no_key():
+    cfg = load_config()
+    cfg.providers["localvllm"] = ProviderConfig(base_url="http://localhost:8000/v1")
+    # No api_key_env -> keyless local endpoint, must not raise for a missing key.
+    assert isinstance(provider_for_model("localvllm:my-model", cfg), OpenAIProvider)
+
+
+def test_unknown_provider_without_base_url_raises():
+    cfg = load_config()
+    with pytest.raises(ProviderError, match="Unknown provider"):
+        provider_for_model("bogus:model", cfg)

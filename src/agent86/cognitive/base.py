@@ -89,9 +89,23 @@ def provider_for_ref(ref: ModelRef, config: Config) -> ModelProvider:
 
         return LlamaCppProvider(model=ref.model, config=pconf)
 
+    # Fallback: any custom provider with a base_url is treated as OpenAI-compatible.
+    # This makes OpenRouter, Groq, Together, Fireworks, Azure, vLLM, LM Studio, etc.
+    # first-class prefixes — just add a `[providers.<name>]` block with a base_url
+    # (and api_key_env if the endpoint needs a key).
+    if pconf.base_url:
+        from agent86.cognitive.openai_provider import OpenAIProvider
+
+        # Require a key only when the config names an env var for one (hosted APIs);
+        # a base_url with no api_key_env is treated as a keyless local endpoint.
+        return OpenAIProvider(
+            model=ref.model, config=pconf, require_key=bool(pconf.api_key_env)
+        )
+
     raise ProviderError(
-        f"Unknown provider '{ref.provider}'. "
-        "Known: anthropic, openai, ollama, llamacpp."
+        f"Unknown provider '{ref.provider}'. Built-in: anthropic, openai, ollama, llamacpp. "
+        f"For an OpenAI-compatible endpoint, add a [providers.{ref.provider}] block with a "
+        "base_url (e.g. OpenRouter, Groq, Together) to your config."
     )
 
 

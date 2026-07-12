@@ -132,6 +132,14 @@ def _default_providers() -> dict[str, ProviderConfig]:
         "openai": ProviderConfig(
             api_key_env="OPENAI_API_KEY", base_url="https://api.openai.com/v1"
         ),
+        # OpenAI-compatible cloud gateways — ready to use once their API key env var is set,
+        # e.g. `agent86 -m "openrouter:anthropic/claude-3.7-sonnet"`.
+        "openrouter": ProviderConfig(
+            api_key_env="OPENROUTER_API_KEY", base_url="https://openrouter.ai/api/v1"
+        ),
+        "groq": ProviderConfig(
+            api_key_env="GROQ_API_KEY", base_url="https://api.groq.com/openai/v1"
+        ),
         "ollama": ProviderConfig(base_url="http://localhost:11434"),
         "llamacpp": ProviderConfig(base_url="http://localhost:8080"),
     }
