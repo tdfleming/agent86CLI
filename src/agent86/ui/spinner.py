@@ -31,13 +31,17 @@ class Spinner:
 
     def _run(self) -> None:
         i = 0
+        drawn = 0
         while not self._stop.is_set():
-            sys.stdout.write(f"\r{_FRAMES[i % len(_FRAMES)]} {self._label}… ")
+            frame = f"{_FRAMES[i % len(_FRAMES)]} {self._label}… "
+            sys.stdout.write("\r" + frame)
             sys.stdout.flush()
+            drawn = len(frame)
             i += 1
             self._stop.wait(self._interval)
-        # clear the line
-        sys.stdout.write("\r" + " " * (len(self._label) + 6) + "\r")
+        # Clear exactly what was drawn (label length can change between runs), then
+        # return to column 0 so the caller prints on a clean line.
+        sys.stdout.write("\r" + " " * drawn + "\r")
         sys.stdout.flush()
 
     def stop(self) -> None:

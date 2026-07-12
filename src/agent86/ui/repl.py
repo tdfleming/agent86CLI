@@ -330,15 +330,19 @@ class _Repl:
         spinner = Spinner()
         spinning = False
         printed = False
+        prefix_shown = False
+        # The spinner draws with a carriage return, so it may only animate when the cursor is
+        # on a fresh line — otherwise inter-token gaps (common on slow local models) would let
+        # it overwrite the partial line of a multi-line response mid-stream.
+        at_line_start = True
         label = "thinking"
-        console.print("[bold cyan]agent86[/bold cyan] ", end="")
 
         try:
             while True:
                 try:
                     item = q.get(timeout=0.12)
                 except queue.Empty:
-                    if not spinning:
+                    if not spinning and at_line_start:
                         spinner.start(label)
                         spinning = True
                     continue
@@ -351,8 +355,12 @@ class _Repl:
                 if kind == "delta":
                     text = item[1].text
                     if text:
+                        if not prefix_shown:
+                            console.print("[bold cyan]agent86[/bold cyan] ", end="")
+                            prefix_shown = True
                         _emit(text)
                         printed = True
+                        at_line_start = text.endswith("\n")
                         label = _tool_label(text) or ("thinking" if text.strip() else label)
                 elif kind == "approval":
                     _, tool_name, preview, event, box = item
@@ -365,6 +373,7 @@ class _Repl:
                         answer = ""
                     box["ok"] = answer in ("y", "yes")
                     event.set()
+                    at_line_start = True  # input() moved us to a fresh line
                     label = "thinking"
                 elif kind == "done":
                     break
@@ -375,7 +384,7 @@ class _Repl:
                 spinner.stop()
 
         if not printed:
-            console.print("[dim](no response)[/dim]", end="")
+            console.print("[bold cyan]agent86[/bold cyan] [dim](no response)[/dim]", end="")
         console.print()
 
 

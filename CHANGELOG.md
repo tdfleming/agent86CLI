@@ -6,6 +6,14 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Multi-line responses no longer get overwritten by the spinner.** In the rich REPL the
+  processing spinner draws with a carriage return, and it was restarting whenever streamed
+  output paused for >0.12s — which happens between tokens on slow local models — so its
+  redraw overwrote the partial line of a multi-line response mid-stream. The spinner now
+  animates only when the cursor is on a fresh line, and clears exactly the width it drew.
+
 ## [0.4.1] - 2026-07-12
 
 Documentation release.
