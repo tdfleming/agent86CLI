@@ -31,6 +31,16 @@ for _stream in (sys.stdout, sys.stderr):
 console = Console()
 err_console = Console(stderr=True)
 
+
+def _emit(text: str) -> None:
+    """Write streamed model text straight to stdout and flush.
+
+    Raw write + flush is more reliable than a buffered Rich print for incremental,
+    partial-line streaming across terminals (notably Git Bash / MinTTY on Windows).
+    """
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
 app = typer.Typer(
     name="agent86",
     help="An agentic harness on the command line - connect to remote or local models "
@@ -205,13 +215,17 @@ def _repl(cfg: Config, resume: str | None = None) -> None:
             continue
 
         console.print("[bold cyan]agent86[/bold cyan] ", end="")
+        printed_any = False
         try:
             for delta in harness.run_turn(line, state):
                 if delta.text:
-                    console.print(delta.text, end="", markup=False, highlight=False, soft_wrap=True)
+                    _emit(delta.text)
+                    printed_any = True
         except (ProviderError, HarnessError) as exc:
             console.print(f"\n[red]error:[/red] {exc}")
             continue
+        if not printed_any:
+            console.print("[dim](no response)[/dim]", end="")
         console.print()  # end the streamed line
 
 
@@ -291,7 +305,7 @@ def run(
             if delta.text:
                 parts.append(delta.text)
                 if not as_json:
-                    console.print(delta.text, end="", markup=False, highlight=False, soft_wrap=True)
+                    _emit(delta.text)
     except (ProviderError, HarnessError) as exc:
         err_console.print(f"\n[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from None
