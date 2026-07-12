@@ -72,6 +72,10 @@ class MemoryConfig(BaseModel):
     enabled: bool = True
     path: str = "~/.agent86/memory.db"
     embeddings: str = "sentence-transformers:all-MiniLM-L6-v2"
+    # Skip the Hugging Face hub update-check when the embedding model is already cached
+    # (silences the "unauthenticated requests to the HF Hub" warning and speeds startup).
+    # Set false to always let huggingface_hub check for model updates online.
+    hf_offline: bool = True
     # Retention caps for the append-only flight-recorder log, applied automatically when the
     # harness starts. 0 disables a cap. Curated semantic facts are never auto-pruned.
     retention_max_episodes: int = 1000

@@ -31,7 +31,9 @@ def build_memory(config: Config) -> MemorySystem | None:
     """Build the memory system, or return None if disabled or unavailable."""
     if not config.memory.enabled:
         return None
-    embedder, note = build_embedder(config.memory.embeddings)
+    embedder, note = build_embedder(
+        config.memory.embeddings, hf_offline=config.memory.hf_offline
+    )
     store = MemoryStore(config.memory.resolved_path(), embedder)
     return MemorySystem(
         store=store,

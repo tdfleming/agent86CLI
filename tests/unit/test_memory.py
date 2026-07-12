@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent86.config import load_config
+from agent86.memory import embeddings as emb
 from agent86.memory.embeddings import HashingEmbedder, build_embedder
 from agent86.memory.episodic import EpisodicMemory
 from agent86.memory.semantic import SemanticMemory
@@ -33,15 +34,37 @@ def test_hash_embedder_is_deterministic_and_unit_norm():
 
 
 def test_build_embedder_falls_back_without_torch():
-    emb, note = build_embedder("sentence-transformers:all-MiniLM-L6-v2")
+    embedder, note = build_embedder("sentence-transformers:all-MiniLM-L6-v2")
     # torch isn't installed in the test env -> hash fallback with a note
-    assert isinstance(emb, HashingEmbedder)
+    assert isinstance(embedder, HashingEmbedder)
     assert note and "hash embedder" in note
 
 
 def test_build_embedder_explicit_hash():
-    emb, note = build_embedder("hash:128")
-    assert isinstance(emb, HashingEmbedder) and emb.dim == 128 and note is None
+    embedder, note = build_embedder("hash:128")
+    assert isinstance(embedder, HashingEmbedder) and embedder.dim == 128 and note is None
+
+
+def test_hf_overrides_go_offline_when_model_cached(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    (tmp_path / "models--sentence-transformers--all-MiniLM-L6-v2").mkdir()
+    env = emb._hf_env_overrides("all-MiniLM-L6-v2", offline=True)
+    assert env["HF_HUB_OFFLINE"] == "1"  # cached -> skip the hub check (no warning)
+    assert env["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
+
+
+def test_hf_overrides_stay_online_when_model_absent(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))  # empty cache
+    env = emb._hf_env_overrides("all-MiniLM-L6-v2", offline=True)
+    assert "HF_HUB_OFFLINE" not in env  # not cached -> allow first-run download
+    assert env["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"  # still quiet the progress bars
+
+
+def test_hf_overrides_respect_offline_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    (tmp_path / "models--sentence-transformers--all-MiniLM-L6-v2").mkdir()
+    env = emb._hf_env_overrides("all-MiniLM-L6-v2", offline=False)
+    assert "HF_HUB_OFFLINE" not in env  # opt-out honored even when cached
 
 
 # ---- store ------------------------------------------------------------- #

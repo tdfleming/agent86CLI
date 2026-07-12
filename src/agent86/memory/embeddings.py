@@ -57,10 +57,49 @@ class HashingEmbedder(Embedder):
         return [x / norm for x in v]
 
 
+def _hf_model_cached(model_name: str) -> bool:
+    """True if the HF model is already in the local cache (a filesystem check, no HF import)."""
+    import os
+    from pathlib import Path
+
+    root = (
+        os.environ.get("HF_HUB_CACHE")
+        or (os.path.join(os.environ["HF_HOME"], "hub") if os.environ.get("HF_HOME") else None)
+        or str(Path.home() / ".cache" / "huggingface" / "hub")
+    )
+    slugs = [f"models--{model_name.replace('/', '--')}"]
+    if "/" not in model_name:  # bare names resolve to the sentence-transformers org
+        slugs.append(f"models--sentence-transformers--{model_name}")
+    return any((Path(root) / slug).is_dir() for slug in slugs)
+
+
+def _hf_env_overrides(model_name: str, offline: bool) -> dict[str, str]:
+    """Env vars that quiet Hugging Face startup noise for a locally-cached embedding model.
+
+    When the model is already cached we go offline so huggingface_hub makes no (anonymous)
+    network call to check for updates — which is what prints the "unauthenticated requests to
+    the HF Hub" warning, and also slows startup. When it isn't cached we stay online so the
+    first-run download still works. Progress bars/info logs are quieted either way.
+    """
+    env = {"HF_HUB_DISABLE_PROGRESS_BARS": "1", "TRANSFORMERS_VERBOSITY": "error"}
+    if offline and _hf_model_cached(model_name):
+        env["HF_HUB_OFFLINE"] = "1"
+        env["TRANSFORMERS_OFFLINE"] = "1"
+    return env
+
+
 class SentenceTransformerEmbedder(Embedder):
     """Local transformer embeddings via sentence-transformers (offline)."""
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, *, offline: bool = True):
+        import logging
+        import os
+
+        # Must run before importing sentence_transformers (which imports huggingface_hub).
+        for key, value in _hf_env_overrides(model_name, offline).items():
+            os.environ.setdefault(key, value)
+        logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+
         from sentence_transformers import SentenceTransformer  # heavy import, lazy
 
         self._model = SentenceTransformer(model_name)
@@ -76,11 +115,14 @@ class SentenceTransformerEmbedder(Embedder):
         return [list(map(float, row)) for row in vecs]
 
 
-def build_embedder(spec: str, *, allow_fallback: bool = True) -> tuple[Embedder, str | None]:
+def build_embedder(
+    spec: str, *, allow_fallback: bool = True, hf_offline: bool = True
+) -> tuple[Embedder, str | None]:
     """Construct an embedder from a spec string.
 
     Returns ``(embedder, note)`` where ``note`` is a human-readable fallback message when the
-    requested embedder was unavailable, else ``None``.
+    requested embedder was unavailable, else ``None``. ``hf_offline`` skips the Hugging Face
+    hub update-check for an already-cached model (quiets the warning, speeds startup).
     """
     scheme, _, name = spec.partition(":")
     scheme = scheme.strip()
@@ -91,7 +133,7 @@ def build_embedder(spec: str, *, allow_fallback: bool = True) -> tuple[Embedder,
 
     if scheme == "sentence-transformers":
         try:
-            return SentenceTransformerEmbedder(name or "all-MiniLM-L6-v2"), None
+            return SentenceTransformerEmbedder(name or "all-MiniLM-L6-v2", offline=hf_offline), None
         except Exception as exc:  # ImportError, model download failure, etc.
             if not allow_fallback:
                 raise

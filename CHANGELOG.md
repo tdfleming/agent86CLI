@@ -6,6 +6,14 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Quiet Hugging Face startup.** When the local embedding model is already cached, the harness
+  now skips huggingface_hub's network update-check (sets offline mode), which removes the
+  "unauthenticated requests to the HF Hub" warning and the model-load progress bar, and speeds
+  startup. First-run downloads still work (offline is enabled only once the model is cached).
+  Opt out with `[memory] hf_offline = false`.
+
 ### Fixed
 
 - **Multi-line responses no longer get overwritten by the spinner.** In the rich REPL the
