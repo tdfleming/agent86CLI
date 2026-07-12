@@ -10,38 +10,39 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**Phase 6 — Skills + MCP.** The registry is now extensible from two more sources.
+**Phase 7 — More providers + dynamic routing.** The Cognitive Tier is now complete.
 
-- **Skills** — a skill is a folder with a `SKILL.md` (frontmatter + instructions). Only
-  each skill's name + description sit in context (progressive disclosure); the model calls
-  `use_skill(name)` to load the full instructions on demand. Discovered from
-  `~/.agent86/skills` and `./.agent86/skills`. Manage with `agent86 skills list|show`.
-- **MCP client** — agent86 is an MCP client: for each configured server it spawns the
-  process, lists its tools, and mounts each as a first-class tool (same schema, approval
-  gating, and tracing as built-ins). `agent86 mcp list|tools`.
+- **OpenAI-compatible provider** — one httpx/SSE adapter for OpenAI, Azure OpenAI, Together,
+  Groq, OpenRouter, vLLM — and local servers (llama.cpp, LM Studio, Ollama's `/v1`).
+  Streaming tool calls are accumulated across chunks.
+- **llama.cpp / LM Studio** — a thin no-key specialization of the OpenAI provider.
+- **Dynamic routing (triage)** — with `model.router = "triage"`, each turn is routed to a
+  cheap/local model or a frontier model by a fast complexity heuristic; the choice is logged
+  to the flight recorder. `off` keeps a single default model.
 
-All prior tiers hold: Reason→Act→Observe loop, **Anthropic** + **Ollama** providers, built-in
-tools, secret-scrubbing sandbox, HITL approvals, working/episodic/semantic memory, ingress/
-egress guardrails, circuit breakers, and the flight recorder. Remaining: more providers +
-routing (Phase 7), multi-agent (Phase 8), Docker sandbox (Phase 9). See
+All four providers now available: **Anthropic**, **OpenAI-compatible**, **Ollama**,
+**llama.cpp/LM Studio**. Everything else holds: Reason→Act→Observe loop, built-in tools +
+skills + MCP, secret-scrubbing sandbox, HITL approvals, memory, guardrails, circuit breakers,
+and observability. Remaining: multi-agent (Phase 8), Docker sandbox (Phase 9). See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Try it (with a running Ollama chat model, or `ANTHROPIC_API_KEY` set):
+Try it (with a running Ollama chat model, or provider API keys set):
 
 ```bash
 agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /skills /memory /cost /exit
-agent86 --model ollama:qwen2.5:3b run --yes "Remember that my favorite color is teal"
-agent86 skills list                           # discovered skills
-agent86 mcp tools                             # tools from configured MCP servers
-agent86 trace show                            # the flight recorder
+agent86 --model openai:gpt-4o run "Summarize the harness in one sentence"
+agent86 --model llamacpp:my-model run "hi"   # local llama.cpp / LM Studio server
+agent86 skills list ; agent86 mcp tools ; agent86 trace show
 ```
 
-Configure an MCP server in `.agent86/config.toml`:
+Route cheap vs frontier per turn in `.agent86/config.toml`:
 
 ```toml
-[mcp.servers.everything]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-everything"]
+[model]
+router = "triage"
+[model.route]
+cheap = "ollama:qwen2.5:3b"
+frontier = "anthropic:claude-opus-4-8"
 ```
 
 ## Install (development)

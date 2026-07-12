@@ -73,9 +73,12 @@ def test_complete_is_derived_from_stream():
     assert completion.usage.output_tokens == 5
 
 
-def test_factory_rejects_unwired_and_unknown_providers():
-    cfg = _config()
-    with pytest.raises(ProviderError, match="Phase 7"):
-        provider_for_model("openai:gpt-4o", cfg)
+def test_factory_rejects_unknown_provider():
     with pytest.raises(ProviderError, match="Unknown provider"):
-        provider_for_model("mystery:model", cfg)
+        provider_for_model("mystery:model", _config())
+
+
+def test_openai_without_key_reports_clearly(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ProviderError, match="API key"):
+        provider_for_model("openai:gpt-4o", _config())

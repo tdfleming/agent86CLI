@@ -186,7 +186,10 @@ def _env_overrides() -> dict[str, Any]:
 
 def load_config(overrides: dict[str, Any] | None = None) -> Config:
     """Resolve configuration from all layers into a validated :class:`Config`."""
-    merged: dict[str, Any] = {}
+    # Seed with the full defaults so partial overrides deep-merge (e.g. setting one
+    # provider's base_url must not wipe that provider's api_key_env or the other providers).
+    merged: dict[str, Any] = Config().model_dump(mode="json")
+    merged.pop("sources", None)
     sources: list[str] = []
 
     for path in (USER_CONFIG_PATH, PROJECT_CONFIG_PATH):

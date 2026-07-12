@@ -18,7 +18,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
-from agent86.cognitive.base import ModelProvider, provider_for_model
+from agent86.cognitive.base import ModelProvider
 from agent86.cognitive.prompt import build_system_prompt
 from agent86.config import Config
 from agent86.guardrails.egress import EgressGuardrail
@@ -29,6 +29,7 @@ from agent86.memory.working import WorkingMemory
 from agent86.observability.recorder import Recorder, build_recorder
 from agent86.observability.tracing import Tracer, build_tracer
 from agent86.orchestration.circuit import CircuitBreaker, CircuitTripped
+from agent86.orchestration.router import ModelRouter
 from agent86.orchestration.state import AgentState
 from agent86.skills.loader import discover_skills
 from agent86.tools.base import ToolContext
@@ -69,7 +70,8 @@ class Harness:
         memory: MemorySystem | None | object = _AUTO,
     ):
         self.config = config
-        self.provider = provider or provider_for_model(config.model.default, config)
+        self.router = ModelRouter(config, forced_provider=provider)
+        self.provider = self.router.default_provider()
         self.memory: MemorySystem | None = (
             build_memory(config) if memory is _AUTO else memory  # type: ignore[assignment]
         )
@@ -164,6 +166,11 @@ class Harness:
                 return
             yield CompletionDelta(text=f"[guardrail] input flagged: {in_report.summary()}\n")
 
+        # Dynamic routing: pick the model for this turn (triage cheap vs frontier).
+        self.provider = self.router.provider_for(self.router.select_model(user_text))
+        if self.router.enabled:
+            self.recorder.event(sid, "route", model=self.provider.model)
+
         recall_note = self.memory.episodic.recall_note(user_text) if self.memory else None
         state.add_message(Message(role=Role.USER, content=user_text))
         breaker = CircuitBreaker(self.config.limits, max_steps=_MAX_TURN_STEPS)
@@ -190,6 +197,7 @@ class Harness:
                 sid,
                 "model_call",
                 step=breaker.steps,
+                model=self.provider.model,
                 input_tokens=completion.usage.input_tokens,
                 output_tokens=completion.usage.output_tokens,
                 cost_usd=completion.usage.cost_usd,

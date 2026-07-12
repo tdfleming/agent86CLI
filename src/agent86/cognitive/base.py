@@ -65,13 +65,6 @@ class ModelProvider(ABC):
 # Factory
 # --------------------------------------------------------------------------- #
 
-# Providers slated for later phases, with the phase that delivers them.
-_PLANNED: dict[str, str] = {
-    "openai": "Phase 7",
-    "llamacpp": "Phase 7",
-}
-
-
 def provider_for_ref(ref: ModelRef, config: Config) -> ModelProvider:
     """Construct the provider that serves ``ref`` (e.g. ``anthropic:claude-opus-4-8``)."""
     pconf: ProviderConfig = config.providers.get(ref.provider, ProviderConfig())
@@ -86,15 +79,19 @@ def provider_for_ref(ref: ModelRef, config: Config) -> ModelProvider:
 
         return OllamaProvider(model=ref.model, config=pconf)
 
-    if ref.provider in _PLANNED:
-        raise ProviderError(
-            f"Provider '{ref.provider}' is not wired yet ({_PLANNED[ref.provider]} - "
-            "see docs/ARCHITECTURE.md)."
-        )
+    if ref.provider in ("openai", "openai-compatible"):
+        from agent86.cognitive.openai_provider import OpenAIProvider
+
+        return OpenAIProvider(model=ref.model, config=pconf)
+
+    if ref.provider == "llamacpp":
+        from agent86.cognitive.llamacpp_provider import LlamaCppProvider
+
+        return LlamaCppProvider(model=ref.model, config=pconf)
 
     raise ProviderError(
-        f"Unknown provider '{ref.provider}'. Known: anthropic, ollama "
-        f"(openai, llamacpp coming in Phase 7)."
+        f"Unknown provider '{ref.provider}'. "
+        "Known: anthropic, openai, ollama, llamacpp."
     )
 
 
