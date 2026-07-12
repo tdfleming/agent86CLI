@@ -33,3 +33,7 @@ traces/
 Thumbs.db
 .idea/
 .vscode/
+
+# Source book — kept locally, never published
+docs/The_Agentic_Harness_PROOF.pdf
+docs/*.pdf
