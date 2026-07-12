@@ -6,6 +6,14 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`web_fetch` now works on sites that enforce a User-Agent policy (e.g. Wikipedia).** The old
+  generic UA (`agent86/0.1 (+agentic-harness)`) got a blanket **HTTP 403** — and a spoofed
+  browser UA is blocked too. `web_fetch` now sends a descriptive UA with a contact URL
+  (`agent86/<version> (+https://github.com/tdfleming/agent86CLI)`), which those sites accept.
+  Configurable via `[tools] web_user_agent`.
+
 ## [0.4.3] - 2026-07-12
 
 ### Changed

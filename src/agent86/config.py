@@ -22,6 +22,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from agent86 import __version__
 from agent86.types import ApprovalMode
 
 USER_CONFIG_DIR = Path.home() / ".agent86"
@@ -51,6 +52,16 @@ class ModelConfig(BaseModel):
 class ProviderConfig(BaseModel):
     api_key_env: str | None = None
     base_url: str | None = None
+
+
+def _default_user_agent() -> str:
+    # Sites like Wikipedia enforce a User-Agent policy and 403 generic or browser-spoofed
+    # strings; a descriptive UA with a contact URL is accepted. Keep the URL real.
+    return f"agent86/{__version__} (+https://github.com/tdfleming/agent86CLI)"
+
+
+class ToolsConfig(BaseModel):
+    web_user_agent: str = Field(default_factory=_default_user_agent)
 
 
 class SandboxConfig(BaseModel):
@@ -154,6 +165,7 @@ class Config(BaseModel):
 
     model: ModelConfig = Field(default_factory=ModelConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=_default_providers)
+    tools: ToolsConfig = Field(default_factory=ToolsConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)

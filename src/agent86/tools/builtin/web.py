@@ -35,7 +35,7 @@ class WebFetchTool(Tool):
                 args.url,
                 timeout=ctx.policy.timeout_s,
                 follow_redirects=True,
-                headers={"User-Agent": "agent86/0.1 (+agentic-harness)"},
+                headers={"User-Agent": ctx.config.tools.web_user_agent},
             )
         except httpx.HTTPError as exc:
             return ToolResult(call_id="", name=self.name, ok=False, error=f"Fetch failed: {exc}")

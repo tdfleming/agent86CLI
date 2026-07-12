@@ -32,6 +32,31 @@ def test_path_jail_allows_inside_and_blocks_outside(tmp_path):
         policy.resolve_within("../escape.txt")
 
 
+def test_web_fetch_sends_descriptive_user_agent(tmp_path, monkeypatch):
+    import agent86.tools.builtin.web as web
+    from agent86.tools.builtin.web import WebFetchTool
+
+    captured: dict = {}
+
+    class FakeResp:
+        status_code = 200
+        is_success = True
+        headers = {"content-type": "text/plain"}
+        text = "hello"
+
+    def fake_get(url, **kwargs):
+        captured.update(kwargs)
+        return FakeResp()
+
+    monkeypatch.setattr(web.httpx, "get", fake_get)
+    WebFetchTool().run(
+        ToolCall(id="1", name="web_fetch", arguments={"url": "https://example.com"}), _ctx(tmp_path)
+    )
+    ua = captured["headers"]["User-Agent"]
+    # Descriptive UA with a contact URL — required by sites like Wikipedia (a generic UA 403s).
+    assert ua.startswith("agent86/") and "github.com/tdfleming/agent86CLI" in ua
+
+
 def test_web_fetch_sets_error_on_non_2xx(tmp_path, monkeypatch):
     import agent86.tools.builtin.web as web
     from agent86.tools.builtin.web import WebFetchTool
