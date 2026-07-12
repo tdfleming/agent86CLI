@@ -42,7 +42,7 @@ dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "ruff>=0.6", "mypy>=1.11"]
 agent86 = "agent86.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/tonyfleming/agent86CLI"
+Homepage = "https://github.com/tdfleming/agent86CLI"
 
 [build-system]
 requires = ["hatchling"]
