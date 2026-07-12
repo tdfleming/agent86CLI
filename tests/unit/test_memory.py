@@ -101,6 +101,29 @@ def test_prune_leaves_memories_by_default(tmp_path):
     assert store.counts()["memories"] == 0
 
 
+def test_enforce_retention_per_table_caps(tmp_path):
+    store = _store(tmp_path)
+    for i in range(10):
+        store.add_episode("s1", task=f"t{i}", outcome="ok")
+    for i in range(6):
+        store.save_session(f"sess{i}", "{}")
+    store.add_memory("a curated fact")
+    removed = store.enforce_retention(max_episodes=4, max_sessions=2)
+    assert removed == {"episodes": 6, "sessions": 4}
+    assert store.counts()["episodes"] == 4
+    assert store.counts()["sessions"] == 2
+    assert store.counts()["memories"] == 1  # facts never auto-pruned
+
+
+def test_enforce_retention_zero_disables_cap(tmp_path):
+    store = _store(tmp_path)
+    for i in range(3):
+        store.add_episode("s1", task=f"t{i}", outcome="ok")
+    removed = store.enforce_retention(max_episodes=0, max_sessions=0, max_age_days=0.0)
+    assert removed == {}  # nothing capped
+    assert store.counts()["episodes"] == 3
+
+
 def test_episode_roundtrip_and_recall(tmp_path):
     store = _store(tmp_path)
     store.add_episode("s1", task="deploy the web app", outcome="succeeded via run_command")

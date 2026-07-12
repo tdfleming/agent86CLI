@@ -6,6 +6,15 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Automatic log retention.** The harness now auto-prunes the flight-recorder log to
+  configurable caps at startup, so episodes and sessions can't grow unbounded. New
+  `[memory]` settings: `retention_max_episodes` (default 1000), `retention_max_sessions`
+  (default 500), and `retention_max_age_days` (default 0 = off); any cap set to 0 is
+  disabled. Curated semantic facts are never auto-pruned. Prunes are logged to the flight
+  recorder as a `memory/retention_prune` event.
+
 ## [0.3.0] - 2026-07-11
 
 Memory management release.

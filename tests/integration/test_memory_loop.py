@@ -35,6 +35,23 @@ def test_turn_persists_session_and_episode(tmp_path):
     assert hits and hits[0].metadata["outcome"] == "all done"
 
 
+def test_harness_auto_prunes_log_to_retention_cap(tmp_path):
+    mem = _memory(tmp_path)
+    # Seed more episodes/sessions than the cap will allow.
+    for i in range(8):
+        mem.store.add_episode("s1", task=f"t{i}", outcome="ok")
+        mem.store.save_session(f"sess{i}", "{}")
+    cfg = load_config()
+    cfg.memory.retention_max_episodes = 3
+    cfg.memory.retention_max_sessions = 2
+
+    # Constructing the harness enforces retention at startup.
+    Harness(cfg, provider=make_text_provider("x"), memory=mem, workspace=tmp_path)
+
+    assert mem.store.counts()["episodes"] == 3
+    assert mem.store.counts()["sessions"] == 2
+
+
 def test_resume_restores_prior_conversation(tmp_path):
     mem = _memory(tmp_path)
     harness = Harness(

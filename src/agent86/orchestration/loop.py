@@ -108,6 +108,20 @@ class Harness:
         self.egress = EgressGuardrail(config.guardrails.egress)
         self.recorder: Recorder = build_recorder(config)
         self.tracer: Tracer = build_tracer(config.observability.otel)
+        self._enforce_retention()
+
+    def _enforce_retention(self) -> None:
+        """Auto-prune the flight-recorder log to its configured caps at startup."""
+        if not self.memory:
+            return
+        mem_cfg = self.config.memory
+        removed = self.memory.store.enforce_retention(
+            max_episodes=mem_cfg.retention_max_episodes,
+            max_sessions=mem_cfg.retention_max_sessions,
+            max_age_days=mem_cfg.retention_max_age_days,
+        )
+        if removed:
+            self.recorder.event("memory", "retention_prune", **removed)
 
     @property
     def memory_note(self) -> str | None:

@@ -274,6 +274,36 @@ class MemoryStore:
             )
         return removed
 
+    def enforce_retention(
+        self,
+        *,
+        max_episodes: int = 0,
+        max_sessions: int = 0,
+        max_age_days: float = 0.0,
+    ) -> dict[str, int]:
+        """Apply per-table retention caps to the log. A cap of 0 disables it.
+
+        Unlike :meth:`prune`, each table gets its own count cap. Curated semantic memories
+        are never touched. Returns rows deleted per table (only for tables that were capped).
+        """
+        age = max_age_days or None
+        removed: dict[str, int] = {}
+        if max_episodes or age:
+            n = self._prune_table(
+                "episodes", "ts", "id",
+                older_than_days=age, keep_last=(max_episodes or None),
+            )
+            if n:
+                removed["episodes"] = n
+        if max_sessions or age:
+            n = self._prune_table(
+                "sessions", "updated_at", "session_id",
+                older_than_days=age, keep_last=(max_sessions or None),
+            )
+            if n:
+                removed["sessions"] = n
+        return removed
+
     # ---- misc ---------------------------------------------------------- #
 
     def counts(self) -> dict[str, int]:

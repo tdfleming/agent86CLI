@@ -72,6 +72,11 @@ class MemoryConfig(BaseModel):
     enabled: bool = True
     path: str = "~/.agent86/memory.db"
     embeddings: str = "sentence-transformers:all-MiniLM-L6-v2"
+    # Retention caps for the append-only flight-recorder log, applied automatically when the
+    # harness starts. 0 disables a cap. Curated semantic facts are never auto-pruned.
+    retention_max_episodes: int = 1000
+    retention_max_sessions: int = 500
+    retention_max_age_days: float = 0.0
 
     def resolved_path(self) -> Path:
         return Path(os.path.expanduser(self.path))
