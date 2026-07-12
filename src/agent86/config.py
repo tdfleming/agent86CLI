@@ -78,6 +78,16 @@ class LimitsConfig(BaseModel):
     max_context_tokens: int = 8000
 
 
+class SkillsConfig(BaseModel):
+    enabled: bool = True
+    # Extra directories to search, in addition to ~/.agent86/skills and ./.agent86/skills.
+    paths: list[str] = Field(default_factory=list)
+
+
+class MCPConfig(BaseModel):
+    enabled: bool = True
+
+
 class ObservabilityConfig(BaseModel):
     trace: bool = True  # write the JSONL flight recorder
     path: str = "~/.agent86/traces"
@@ -114,6 +124,8 @@ class Config(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
     # Provenance — which files actually contributed (for `agent86 config path`).
@@ -149,10 +161,14 @@ def _read_toml(path: Path) -> dict[str, Any]:
 def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     """Map a few TOML spellings onto the pydantic field names."""
     data = dict(raw)
-    # `[mcp.servers.NAME]` in TOML -> mcp_servers on the model.
+    # `[mcp.servers.NAME]` -> mcp_servers; `[mcp] enabled=...` -> mcp config.
     mcp = data.pop("mcp", None)
-    if isinstance(mcp, dict) and "servers" in mcp:
-        data["mcp_servers"] = mcp["servers"]
+    if isinstance(mcp, dict):
+        servers = mcp.pop("servers", None)
+        if servers is not None:
+            data["mcp_servers"] = servers
+        if mcp:  # remaining keys (e.g. enabled) form the mcp config
+            data["mcp"] = mcp
     return data
 
 
@@ -209,6 +225,8 @@ __all__ = [
     "MemoryConfig",
     "LimitsConfig",
     "ObservabilityConfig",
+    "SkillsConfig",
+    "MCPConfig",
     "MCPServerConfig",
     "load_config",
     "config_paths",

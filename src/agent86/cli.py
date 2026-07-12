@@ -8,6 +8,8 @@ where that plugs in is marked with ``# PHASE 2`` below.
 
 from __future__ import annotations
 
+import sys
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -16,6 +18,14 @@ from rich.table import Table
 from agent86 import __version__
 from agent86.config import Config, config_paths, load_config
 from agent86.types import ModelRef
+
+# Models routinely emit Unicode/emoji; force UTF-8 (with replacement) so a Windows console's
+# legacy code page can't crash streaming output on a character it can't encode.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError):  # pragma: no cover - non-reconfigurable stream
+        pass
 
 console = Console()
 err_console = Console(stderr=True)
@@ -122,6 +132,10 @@ def _repl(cfg: Config, resume: str | None = None) -> None:
 
     if harness.memory_note:
         console.print(f"[dim]memory: {harness.memory_note}[/dim]")
+    if harness.mcp_note:
+        console.print(f"[dim]mcp: {harness.mcp_note}[/dim]")
+    if harness.skills:
+        console.print(f"[dim]skills: {', '.join(harness.skills)}[/dim]")
 
     state = None
     if resume:
@@ -160,6 +174,13 @@ def _repl(cfg: Config, resume: str | None = None) -> None:
             continue
         if line == "/tools":
             console.print("[dim]tools:[/dim] " + ", ".join(harness.registry.names()))
+            continue
+        if line == "/skills":
+            if harness.skills:
+                for s in harness.skills.values():
+                    console.print(f"  [cyan]{s.name}[/cyan] - {s.description}")
+            else:
+                console.print("[dim]no skills discovered[/dim]")
             continue
         if line == "/memory":
             if harness.memory:
@@ -206,6 +227,7 @@ def _print_repl_help() -> None:
     table.add_row("[cyan]/config[/cyan]", "Show the resolved configuration")
     table.add_row("[cyan]/models[/cyan]", "List configured models")
     table.add_row("[cyan]/tools[/cyan]", "List available tools")
+    table.add_row("[cyan]/skills[/cyan]", "List available skills")
     table.add_row("[cyan]/memory[/cyan]", "Show memory stats and session id")
     table.add_row("[cyan]/cost[/cyan]", "Show token usage and cost this session")
     table.add_row("[cyan]/clear[/cyan]", "Start a fresh conversation")
@@ -438,17 +460,47 @@ def memory_search_cmd(
 # `agent86 skills` / `mcp` / `trace`  -  scaffolded stubs
 # --------------------------------------------------------------------------- #
 
-skills_app = typer.Typer(help="Manage skills (Phase 6).")
+skills_app = typer.Typer(help="Manage skills.")
 app.add_typer(skills_app, name="skills")
 
 
 @skills_app.command("list")
 def skills_list_cmd() -> None:
     """List discovered skills."""
-    console.print("[dim]Skills load in Phase 6 (see docs/ARCHITECTURE.md).[/dim]")
+    from agent86.skills.loader import default_skill_paths, discover_skills
+
+    cfg = load_config()
+    skills = discover_skills(cfg)
+    if not skills:
+        paths = ", ".join(str(p) for p in default_skill_paths(cfg))
+        console.print(f"[dim]No skills found. Searched: {paths}[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Skill")
+    table.add_column("Description", overflow="fold")
+    for skill in skills.values():
+        table.add_row(skill.name, skill.description)
+    console.print(table)
 
 
-mcp_app = typer.Typer(help="Manage MCP servers (Phase 6).")
+@skills_app.command("show")
+def skills_show_cmd(name: str = typer.Argument(..., help="Skill name.")) -> None:
+    """Show a skill's full instructions."""
+    from agent86.skills.loader import discover_skills
+
+    skills = discover_skills(load_config())
+    skill = skills.get(name)
+    if skill is None:
+        known = ", ".join(skills) or "(none)"
+        err_console.print(f"[red]No skill named '{name}'.[/red] Known: {known}")
+        raise typer.Exit(code=1)
+    console.print(f"[bold]{skill.name}[/bold] - {skill.description}\n")
+    console.print(skill.instructions())
+    if skill.resources():
+        console.print(f"\n[dim]resources: {', '.join(skill.resources())}[/dim]")
+
+
+mcp_app = typer.Typer(help="Manage MCP servers.")
 app.add_typer(mcp_app, name="mcp")
 
 
@@ -465,6 +517,31 @@ def mcp_list_cmd(ctx: typer.Context) -> None:
     for name, srv in cfg.mcp_servers.items():
         table.add_row(name, " ".join([srv.command, *srv.args]))
     console.print(table)
+
+
+@mcp_app.command("tools")
+def mcp_tools_cmd() -> None:
+    """Start configured MCP servers and list the tools they expose."""
+    from agent86.tools.mcp_client import build_mcp
+
+    cfg = load_config()
+    manager = build_mcp(cfg)
+    if manager is None:
+        console.print("[dim]No MCP servers configured (or MCP disabled).[/dim]")
+        return
+    if manager.note:
+        err_console.print(f"[yellow]{manager.note}[/yellow]")
+    tools = manager.tools()
+    if not tools:
+        console.print("[dim]No MCP tools discovered.[/dim]")
+    else:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Tool")
+        table.add_column("Description", overflow="fold")
+        for tool in tools:
+            table.add_row(tool.name, tool.description)
+        console.print(table)
+    manager.close()
 
 
 trace_app = typer.Typer(help="Inspect the flight-data recorder.")

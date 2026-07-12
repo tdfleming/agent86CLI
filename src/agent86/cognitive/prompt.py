@@ -7,9 +7,14 @@ identity; tool/skill sections are appended here as those tiers come online.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from agent86 import __version__
 from agent86.config import Config
 from agent86.types import Message, Role
+
+if TYPE_CHECKING:
+    from agent86.skills.models import Skill
 
 _BASE_IDENTITY = """\
 You are agent86, an autonomous agent running inside a deterministic agentic harness.
@@ -26,14 +31,22 @@ Principles:
 """
 
 
-def build_system_prompt(config: Config) -> Message:
+def build_system_prompt(
+    config: Config, skills: dict[str, Skill] | None = None
+) -> Message:
     """Compile the system prompt into a single SYSTEM message."""
     parts = [_BASE_IDENTITY.strip()]
     parts.append(
         f"\nEnvironment: agent86 v{__version__}. "
         f"Default model: {config.model.default}. Sandbox: {config.sandbox.mode}."
     )
-    # PHASE 3/6: append tool catalog and loaded-skill summaries here.
+    if skills:
+        # Progressive disclosure: advertise only name + description here. The full
+        # instructions load when the model calls use_skill(name).
+        lines = ["\nAvailable skills (call use_skill with the name to load full instructions):"]
+        for skill in skills.values():
+            lines.append(f"- {skill.name}: {skill.description}")
+        parts.append("\n".join(lines))
     return Message(role=Role.SYSTEM, content="\n".join(parts))
 
 

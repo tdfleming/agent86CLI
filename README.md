@@ -10,32 +10,38 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**Phase 5 — Guardrails + Observability (completes Tier 5).** The harness now defends and
-records itself.
+**Phase 6 — Skills + MCP.** The registry is now extensible from two more sources.
 
-- **Ingress guardrail** — scans user input *and tool output* for prompt-injection / PII;
-  `off` / `warn` / `block`. Suspicious tool output is banded as untrusted DATA before the
-  model sees it (the real injection vector in an agent).
-- **Egress guardrail** — scans model output for leaked secrets (API keys, private keys) and
-  PII; `off` / `warn` / `redact`.
-- **Circuit breakers** — per-turn bounds on steps, cumulative cost, wall-clock, and
-  consecutive tool errors — the antidote to the runaway ReAct loop.
-- **Flight recorder** — append-only JSONL trace of every turn / model call / tool call /
-  guardrail hit, tagged by session. Read it with `agent86 trace show`.
-- **OpenTelemetry** — spans per step / model call / tool when enabled (no-op otherwise).
+- **Skills** — a skill is a folder with a `SKILL.md` (frontmatter + instructions). Only
+  each skill's name + description sit in context (progressive disclosure); the model calls
+  `use_skill(name)` to load the full instructions on demand. Discovered from
+  `~/.agent86/skills` and `./.agent86/skills`. Manage with `agent86 skills list|show`.
+- **MCP client** — agent86 is an MCP client: for each configured server it spawns the
+  process, lists its tools, and mounts each as a first-class tool (same schema, approval
+  gating, and tracing as built-ins). `agent86 mcp list|tools`.
 
-All prior tiers hold: Reason→Act→Observe loop, **Anthropic** + **Ollama**, 9 built-in tools,
-secret-scrubbing subprocess sandbox, HITL approvals, and persistent working/episodic/semantic
-memory. MCP and skills join in Phase 6. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+All prior tiers hold: Reason→Act→Observe loop, **Anthropic** + **Ollama** providers, built-in
+tools, secret-scrubbing sandbox, HITL approvals, working/episodic/semantic memory, ingress/
+egress guardrails, circuit breakers, and the flight recorder. Remaining: more providers +
+routing (Phase 7), multi-agent (Phase 8), Docker sandbox (Phase 9). See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Try it (with a running Ollama chat model, or `ANTHROPIC_API_KEY` set):
 
 ```bash
-agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /memory /cost /clear /exit
+agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /skills /memory /cost /exit
 agent86 --model ollama:qwen2.5:3b run --yes "Remember that my favorite color is teal"
-agent86 --model ollama:qwen2.5:3b run --yes "What's my favorite color? Use recall."
-agent86 memory stats
+agent86 skills list                           # discovered skills
+agent86 mcp tools                             # tools from configured MCP servers
 agent86 trace show                            # the flight recorder
+```
+
+Configure an MCP server in `.agent86/config.toml`:
+
+```toml
+[mcp.servers.everything]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-everything"]
 ```
 
 ## Install (development)

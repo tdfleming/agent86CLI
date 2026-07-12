@@ -30,7 +30,9 @@ from agent86.observability.recorder import Recorder, build_recorder
 from agent86.observability.tracing import Tracer, build_tracer
 from agent86.orchestration.circuit import CircuitBreaker, CircuitTripped
 from agent86.orchestration.state import AgentState
+from agent86.skills.loader import discover_skills
 from agent86.tools.base import ToolContext
+from agent86.tools.mcp_client import build_mcp
 from agent86.tools.registry import ToolRegistry, default_registry
 from agent86.tools.sandbox.policy import default_policy
 from agent86.types import (
@@ -68,16 +70,28 @@ class Harness:
     ):
         self.config = config
         self.provider = provider or provider_for_model(config.model.default, config)
-        self.system_prompt: Message = build_system_prompt(config)
         self.memory: MemorySystem | None = (
             build_memory(config) if memory is _AUTO else memory  # type: ignore[assignment]
         )
         self.working = WorkingMemory(config.limits.max_context_tokens)
         semantic = self.memory.semantic if self.memory else None
-        self.registry = registry or default_registry(config, memory=semantic)
+
+        # Skills (progressive disclosure) and MCP tools join the registry.
+        self.skills = discover_skills(config)
+        self.system_prompt: Message = build_system_prompt(config, self.skills)
+        self.mcp = build_mcp(config)
+        mcp_tools = self.mcp.tools() if self.mcp else []
+
+        self.registry = registry or default_registry(
+            config, memory=semantic, skills=self.skills, mcp_tools=mcp_tools
+        )
         self.policy = default_policy(config, workspace)
         self.context = ToolContext(
-            workspace=self.policy.workspace, policy=self.policy, config=config, memory=semantic
+            workspace=self.policy.workspace,
+            policy=self.policy,
+            config=config,
+            memory=semantic,
+            skills=self.skills,
         )
         self.gate = ApprovalGate(config.guardrails.approval, approval_prompt)
         self.ingress = IngressGuardrail(config.guardrails.ingress)
@@ -88,6 +102,10 @@ class Harness:
     @property
     def memory_note(self) -> str | None:
         return self.memory.note if self.memory else None
+
+    @property
+    def mcp_note(self) -> str | None:
+        return self.mcp.note if self.mcp else None
 
     # ---- sessions ------------------------------------------------------ #
 
@@ -276,6 +294,8 @@ class Harness:
 
     def close(self) -> None:
         self.recorder.close()
+        if self.mcp:
+            self.mcp.close()
         if self.memory:
             self.memory.close()
 
