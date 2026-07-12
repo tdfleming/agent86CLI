@@ -43,6 +43,9 @@ class ModelConfig(BaseModel):
     default: str = "anthropic:claude-opus-4-8"
     router: str = "off"  # "off" | "triage"
     route: ModelRoute = Field(default_factory=ModelRoute)
+    # Optional per-model context-window overrides for the status-line gauge,
+    # keyed by "provider:model" (e.g. "ollama:qwen2.5:3b" = 32768).
+    context_window: dict[str, int] = Field(default_factory=dict)
 
 
 class ProviderConfig(BaseModel):
@@ -80,6 +83,12 @@ class LimitsConfig(BaseModel):
     max_wall_clock_s: int = 900
     max_consecutive_errors: int = 3
     max_context_tokens: int = 8000
+
+
+class UIConfig(BaseModel):
+    status_line: bool = True  # show the persistent bottom status line (rich REPL)
+    spinner: bool = True  # animate a spinner while the agent is working
+    mode_cycle_key: str = "s-tab"  # prompt_toolkit key that cycles the approval mode
 
 
 class SkillsConfig(BaseModel):
@@ -133,6 +142,7 @@ class Config(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
@@ -238,6 +248,7 @@ __all__ = [
     "MemoryConfig",
     "LimitsConfig",
     "ObservabilityConfig",
+    "UIConfig",
     "SkillsConfig",
     "MCPConfig",
     "AgentsConfig",

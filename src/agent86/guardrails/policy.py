@@ -53,4 +53,25 @@ def _preview(arguments: dict) -> str:
     return text if len(text) <= 300 else text[:300] + " ..."
 
 
-__all__ = ["ApprovalGate", "ApprovalDecision", "ApprovalPrompt"]
+# Order the approval-mode hotkey cycles through.
+_CYCLE = (ApprovalMode.ASK, ApprovalMode.AUTO, ApprovalMode.DENY)
+
+
+def cycle_mode(mode: ApprovalMode) -> ApprovalMode:
+    """Return the next approval mode in the cycle (ask -> auto -> deny -> ask)."""
+    try:
+        idx = _CYCLE.index(mode)
+    except ValueError:
+        return ApprovalMode.ASK
+    return _CYCLE[(idx + 1) % len(_CYCLE)]
+
+
+def parse_mode(text: str) -> ApprovalMode | None:
+    """Parse a mode name from a ``/mode`` command, or None if unrecognized."""
+    try:
+        return ApprovalMode(text.strip().lower())
+    except ValueError:
+        return None
+
+
+__all__ = ["ApprovalGate", "ApprovalDecision", "ApprovalPrompt", "cycle_mode", "parse_mode"]

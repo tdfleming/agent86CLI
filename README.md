@@ -12,9 +12,9 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**Complete — all nine phases (v0.1).** A full five-tier agentic harness that runs on remote
-or local models and uses tools, skills, MCP servers, and sub-agents. Every pillar and tier
-from *The Agentic Harness* is implemented, tested (93 tests), and verified live against a
+**v0.2 — the full harness plus an interactive UX.** A five-tier agentic harness that runs on
+remote or local models and uses tools, skills, MCP servers, and sub-agents. Every pillar and
+tier from *The Agentic Harness* is implemented, tested (107 tests), and verified live against a
 local model.
 
 | Tier / Pillar | What's there |
@@ -26,6 +26,7 @@ local model.
 | **Tier 5 Guardrails/Obs** (Pillar 4) | ingress/egress scanning, HITL approvals, circuit breakers, flight recorder, OpenTelemetry |
 | **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence |
 | **Multi-agent** | sub-agents via `delegate`, message envelopes, broker, supervisor orchestrator |
+| **Interactive REPL** (v0.2) | persistent status line, processing spinner, Shift+Tab approval-mode cycle; plain fallback for any terminal |
 
 Optional heavy deps degrade gracefully: no torch → hash-embedder memory; no Docker → subprocess
 sandbox; no `mcp` → MCP disabled. Install extras as needed: `pip install -e ".[all]"`.

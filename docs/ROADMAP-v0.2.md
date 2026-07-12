@@ -1,5 +1,8 @@
 # agent86 v0.2 — Interactive UX
 
+**Status: shipped in v0.2.0.** All three features and the plain-REPL fallback are implemented,
+tested, and verified live. This document is kept as the design record.
+
 Goal: make the REPL feel alive — never dead air, permission control at your fingertips, and a
 persistent readout of what's going on. Three features, one UI foundation.
 

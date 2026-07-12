@@ -13,7 +13,6 @@ import sys
 import typer
 from rich.console import Console
 from rich.markup import escape
-from rich.panel import Panel
 from rich.table import Table
 
 from agent86 import __version__
@@ -72,6 +71,9 @@ def main(
     resume: str | None = typer.Option(
         None, "--resume", "-r", help="Resume a prior session by id (REPL)."
     ),
+    plain: bool = typer.Option(
+        False, "--plain", help="Force the plain REPL (no status line / spinner / hotkeys)."
+    ),
     _version: bool = typer.Option(
         False, "--version", "-V", callback=_version_callback, is_eager=True, help="Show version."
     ),
@@ -89,174 +91,9 @@ def main(
     ctx.obj = cfg
 
     if ctx.invoked_subcommand is None:
-        _repl(cfg, resume=resume)
+        from agent86.ui.repl import run_repl
 
-
-# --------------------------------------------------------------------------- #
-# REPL (interactive)
-# --------------------------------------------------------------------------- #
-
-
-def _banner(cfg: Config) -> Panel:
-    body = (
-        f"[bold]agent86[/bold] [dim]v{__version__}[/dim]\n"
-        f"model    [cyan]{cfg.model.default}[/cyan]"
-        f"   router [cyan]{cfg.model.router}[/cyan]\n"
-        f"sandbox  [cyan]{cfg.sandbox.mode}[/cyan]"
-        f"   approval [cyan]{cfg.guardrails.approval.value}[/cyan]\n"
-        f"[dim]Type /help for commands, /exit to quit.[/dim]"
-    )
-    return Panel(body, title="agentic harness", border_style="cyan", expand=False)
-
-
-def _repl(cfg: Config, resume: str | None = None) -> None:
-    """Interactive Reason -> Act -> Observe loop against the configured model.
-
-    Uses the stdlib ``input()`` for line entry (not prompt_toolkit) so it works reliably in
-    every terminal — Git Bash/MinTTY, PowerShell, cmd, Windows Terminal — without taking over
-    the terminal or interfering with streamed output.
-    """
-    from agent86.cognitive.base import ProviderError
-    from agent86.orchestration.loop import Harness, HarnessError
-
-    console.print(_banner(cfg))
-
-    def approval_prompt(tool_name: str, preview: str) -> bool:
-        console.print(
-            f"[yellow]approve[/yellow] [bold]{tool_name}[/bold] "
-            f"[dim]{preview}[/dim]"
-        )
-        try:
-            answer = input("  run it? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return False
-        return answer in ("y", "yes")
-
-    try:
-        harness = Harness(cfg, approval_prompt=approval_prompt)
-    except ProviderError as exc:
-        console.print(f"[red]Cannot start:[/red] {exc}")
-        console.print(
-            "[dim]Fix the key/config or choose another model with "
-            "`agent86 --model provider:model`, then retry.[/dim]"
-        )
-        return
-
-    if harness.memory_note:
-        console.print(f"[dim]memory: {escape(harness.memory_note)}[/dim]")
-    if harness.mcp_note:
-        console.print(f"[dim]mcp: {escape(harness.mcp_note)}[/dim]")
-    if harness.sandbox_note:
-        console.print(f"[yellow]sandbox: {escape(harness.sandbox_note)}[/yellow]")
-    if harness.skills:
-        console.print(f"[dim]skills: {', '.join(harness.skills)}[/dim]")
-
-    state = None
-    if resume:
-        state = harness.resume(resume)
-        if state is None:
-            console.print(f"[yellow]No session '{resume}' found; starting fresh.[/yellow]")
-        else:
-            console.print(
-                f"[dim]resumed session {state.session_id} "
-                f"({len(state.messages)} messages)[/dim]"
-            )
-    if state is None:
-        state = harness.new_session()
-    console.print(f"[dim]session {state.session_id}[/dim]")
-
-    while True:
-        try:
-            line = input("agent86> ").strip()
-        except EOFError:
-            console.print("\n[dim]bye[/dim]")
-            return
-        except KeyboardInterrupt:
-            console.print("")  # Ctrl-C clears the current line
-            continue
-
-        if not line:
-            continue
-        if line in ("/exit", "/quit"):
-            console.print("[dim]bye[/dim]")
-            return
-        if line == "/help":
-            _print_repl_help()
-            continue
-        if line == "/config":
-            _show_config(cfg)
-            continue
-        if line == "/models":
-            _list_models(cfg)
-            continue
-        if line == "/tools":
-            console.print("[dim]tools:[/dim] " + ", ".join(harness.registry.names()))
-            continue
-        if line == "/skills":
-            if harness.skills:
-                for s in harness.skills.values():
-                    console.print(f"  [cyan]{s.name}[/cyan] - {s.description}")
-            else:
-                console.print("[dim]no skills discovered[/dim]")
-            continue
-        if line == "/memory":
-            if harness.memory:
-                c = harness.memory.store.counts()
-                console.print(
-                    f"[dim]memory[/dim] sessions {c['sessions']}  "
-                    f"episodes {c['episodes']}  facts {c['memories']}  "
-                    f"[dim]session[/dim] {state.session_id}"
-                )
-            else:
-                console.print("[dim]memory is disabled[/dim]")
-            continue
-        if line == "/cost":
-            _show_cost(state)
-            continue
-        if line == "/clear":
-            state = harness.new_session()
-            console.print("[dim]conversation cleared[/dim]")
-            continue
-
-        console.print("[bold cyan]agent86[/bold cyan] ", end="")
-        printed_any = False
-        try:
-            for delta in harness.run_turn(line, state):
-                if delta.text:
-                    _emit(delta.text)
-                    printed_any = True
-        except (ProviderError, HarnessError) as exc:
-            console.print(f"\n[red]error:[/red] {exc}")
-            continue
-        except KeyboardInterrupt:
-            console.print("\n[dim]interrupted[/dim]")
-            continue
-        if not printed_any:
-            console.print("[dim](no response)[/dim]", end="")
-        console.print()  # end the streamed line
-
-
-def _show_cost(state) -> None:
-    u = state.usage
-    console.print(
-        f"[dim]steps[/dim] {state.step_count}  "
-        f"[dim]in[/dim] {u.input_tokens}  [dim]out[/dim] {u.output_tokens} tok  "
-        f"[dim]cost[/dim] ${u.cost_usd:.4f}"
-    )
-
-
-def _print_repl_help() -> None:
-    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
-    table.add_row("[cyan]/help[/cyan]", "Show this help")
-    table.add_row("[cyan]/config[/cyan]", "Show the resolved configuration")
-    table.add_row("[cyan]/models[/cyan]", "List configured models")
-    table.add_row("[cyan]/tools[/cyan]", "List available tools")
-    table.add_row("[cyan]/skills[/cyan]", "List available skills")
-    table.add_row("[cyan]/memory[/cyan]", "Show memory stats and session id")
-    table.add_row("[cyan]/cost[/cyan]", "Show token usage and cost this session")
-    table.add_row("[cyan]/clear[/cyan]", "Start a fresh conversation")
-    table.add_row("[cyan]/exit[/cyan]", "Quit")
-    console.print(table)
+        run_repl(cfg, resume=resume, plain=plain)
 
 
 # --------------------------------------------------------------------------- #
