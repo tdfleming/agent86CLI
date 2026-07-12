@@ -6,6 +6,18 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Interactive UX (v0.2, in progress):** a rich REPL built on `prompt_toolkit` with a
+  persistent bottom **status line** (model · context-fill % · tokens · cost · sandbox · approval
+  mode), a **processing spinner** during model latency and tool execution (turns run in a worker
+  thread so the spinner animates through dead air), and a **Shift+Tab hotkey** that cycles the
+  approval mode live (also `/mode [ask|auto|deny]`). Per-model context windows drive the fill
+  gauge, with `[model.context_window]` overrides.
+- The stdlib `input()` REPL is retained as an automatic **fallback** for terminals that can't
+  host the rich UI (piped stdin, `--plain`, `AGENT86_PLAIN`, or Git Bash/MinTTY without
+  `winpty`) — so "works in every terminal" still holds.
+
 ### Fixed
 
 - REPL now uses the stdlib `input()` instead of `prompt_toolkit`, so interactive mode works
