@@ -10,6 +10,7 @@ crashes the loop.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -34,6 +35,8 @@ class ToolContext:
     config: Config
     memory: SemanticMemory | None = None
     skills: dict[str, Skill] = field(default_factory=dict)
+    # Spawn a sub-agent: (role, task) -> final result text. Set when multi-agent is enabled.
+    spawn: Callable[[str, str], str] | None = None
     extra: dict[str, object] = field(default_factory=dict)
 
 

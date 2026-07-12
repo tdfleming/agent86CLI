@@ -85,7 +85,11 @@ class Harness:
         mcp_tools = self.mcp.tools() if self.mcp else []
 
         self.registry = registry or default_registry(
-            config, memory=semantic, skills=self.skills, mcp_tools=mcp_tools
+            config,
+            memory=semantic,
+            skills=self.skills,
+            mcp_tools=mcp_tools,
+            enable_delegate=config.agents.enabled,
         )
         self.policy = default_policy(config, workspace)
         self.context = ToolContext(
@@ -94,6 +98,7 @@ class Harness:
             config=config,
             memory=semantic,
             skills=self.skills,
+            spawn=(self.spawn_subagent if config.agents.enabled else None),
         )
         self.gate = ApprovalGate(config.guardrails.approval, approval_prompt)
         self.ingress = IngressGuardrail(config.guardrails.ingress)
@@ -289,6 +294,16 @@ class Harness:
                 )
                 return wrap_untrusted(content)
         return content
+
+    def spawn_subagent(self, role: str, task: str, depth: int = 1) -> str:
+        """Run a delegated task on a role-scoped sub-agent; returns its final result."""
+        from agent86.agents.subagent import SubAgent
+
+        max_depth = self.config.agents.max_depth
+        if depth > max_depth:
+            return f"[delegation refused: max agent depth {max_depth} reached]"
+        self.recorder.event("sub", "spawn", role=role, depth=depth, task=task[:200])
+        return SubAgent(self, role, depth).run(task)
 
     def _finish_turn(self, state: AgentState, task: str, outcome: str) -> None:
         if self.memory:

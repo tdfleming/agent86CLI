@@ -10,28 +10,29 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**Phase 7 — More providers + dynamic routing.** The Cognitive Tier is now complete.
+**Phase 8 — Multi-agent orchestration.** A single harness can now spawn and coordinate
+specialized sub-agents (the book's MAS chapters).
 
-- **OpenAI-compatible provider** — one httpx/SSE adapter for OpenAI, Azure OpenAI, Together,
-  Groq, OpenRouter, vLLM — and local servers (llama.cpp, LM Studio, Ollama's `/v1`).
-  Streaming tool calls are accumulated across chunks.
-- **llama.cpp / LM Studio** — a thin no-key specialization of the OpenAI provider.
-- **Dynamic routing (triage)** — with `model.router = "triage"`, each turn is routed to a
-  cheap/local model or a frontier model by a fast complexity heuristic; the choice is logged
-  to the flight recorder. `off` keeps a single default model.
+- **Sub-agents** — a `delegate(role, task)` tool lets the main agent act as a *supervisor*,
+  spinning up a role-scoped sub-agent that runs its own Reason→Act→Observe loop with the same
+  tools, sandbox, and guardrails, and returns its result. Delegation nests up to
+  `agents.max_depth` (depth-guarded so it can't recurse without bound).
+- **Message envelopes** — agents never exchange raw natural language; every inter-agent
+  message is a structured `AgentMessage` (sender, recipient, intent, correlation id) — the
+  book's answer to the "Babel problem".
+- **Broker + orchestrator** — an in-process `MessageBus` and a `SupervisorOrchestrator` that
+  fans role-scoped tasks out to sub-agents and collects correlated reply envelopes.
 
-All four providers now available: **Anthropic**, **OpenAI-compatible**, **Ollama**,
-**llama.cpp/LM Studio**. Everything else holds: Reason→Act→Observe loop, built-in tools +
-skills + MCP, secret-scrubbing sandbox, HITL approvals, memory, guardrails, circuit breakers,
-and observability. Remaining: multi-agent (Phase 8), Docker sandbox (Phase 9). See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Everything prior holds: four providers, dynamic routing, tools + skills + MCP, memory,
+guardrails, circuit breakers, and observability. Remaining: Docker sandbox + polish (Phase 9).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Try it (with a running Ollama chat model, or provider API keys set):
 
 ```bash
 agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /skills /memory /cost /exit
 agent86 --model openai:gpt-4o run "Summarize the harness in one sentence"
-agent86 --model llamacpp:my-model run "hi"   # local llama.cpp / LM Studio server
+agent86 run --yes "Delegate to a 'researcher' sub-agent: find X. Then summarize."
 agent86 skills list ; agent86 mcp tools ; agent86 trace show
 ```
 

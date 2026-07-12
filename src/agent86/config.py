@@ -88,6 +88,11 @@ class MCPConfig(BaseModel):
     enabled: bool = True
 
 
+class AgentsConfig(BaseModel):
+    enabled: bool = True  # expose the `delegate` tool for sub-agent spawning
+    max_depth: int = 2  # how deep delegation may nest (root=0)
+
+
 class ObservabilityConfig(BaseModel):
     trace: bool = True  # write the JSONL flight recorder
     path: str = "~/.agent86/traces"
@@ -126,6 +131,7 @@ class Config(BaseModel):
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
     # Provenance — which files actually contributed (for `agent86 config path`).
@@ -230,6 +236,7 @@ __all__ = [
     "ObservabilityConfig",
     "SkillsConfig",
     "MCPConfig",
+    "AgentsConfig",
     "MCPServerConfig",
     "load_config",
     "config_paths",

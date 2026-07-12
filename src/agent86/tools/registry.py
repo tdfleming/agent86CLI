@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from agent86.config import Config
 from agent86.tools.base import Tool, ToolContext
+from agent86.tools.builtin.delegate import DelegateTool
 from agent86.tools.builtin.files import (
     EditFileTool,
     ListDirTool,
@@ -75,11 +76,13 @@ def default_registry(
     memory: SemanticMemory | None = None,
     skills: dict[str, Skill] | None = None,
     mcp_tools: list[Tool] | None = None,
+    enable_delegate: bool = False,
 ) -> ToolRegistry:
-    """Registry pre-loaded with the built-in tools, plus memory/skill/MCP tools.
+    """Registry pre-loaded with the built-in tools, plus memory/skill/MCP/agent tools.
 
     - ``remember`` / ``recall`` are added only when semantic memory is available.
     - ``use_skill`` is added only when at least one skill was discovered.
+    - ``delegate`` is added only when multi-agent spawning is enabled.
     - MCP tools (already constructed by the MCP manager) are mounted as-is.
     """
     registry = ToolRegistry()
@@ -90,6 +93,8 @@ def default_registry(
         registry.register(RecallTool())
     if skills:
         registry.register(UseSkillTool())
+    if enable_delegate:
+        registry.register(DelegateTool())
     for tool in mcp_tools or []:
         try:
             registry.register(tool)
