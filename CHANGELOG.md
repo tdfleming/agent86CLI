@@ -4,35 +4,29 @@ All notable changes to agent86 are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-11
+
+Interactive UX release.
 
 ### Added
 
-- **Interactive UX (v0.2, in progress):** a rich REPL built on `prompt_toolkit` with a
-  persistent bottom **status line** (model · context-fill % · tokens · cost · sandbox · approval
-  mode), a **processing spinner** during model latency and tool execution (turns run in a worker
-  thread so the spinner animates through dead air), and a **Shift+Tab hotkey** that cycles the
-  approval mode live (also `/mode [ask|auto|deny]`). Per-model context windows drive the fill
-  gauge, with `[model.context_window]` overrides.
-- The stdlib `input()` REPL is retained as an automatic **fallback** for terminals that can't
-  host the rich UI (piped stdin, `--plain`, `AGENT86_PLAIN`, or Git Bash/MinTTY without
-  `winpty`) — so "works in every terminal" still holds.
+- **Rich interactive REPL** (prompt_toolkit): a persistent bottom **status line** (active model,
+  context-fill %, output tokens, session cost, sandbox mode, approval mode); a **processing
+  spinner** that animates through model latency and tool execution (turns run in a worker thread
+  so dead air is never silent); and a **Shift+Tab** hotkey that cycles the approval mode live
+  (also `/mode [ask|auto|deny]`). Per-model context windows drive the fill gauge, with
+  `[model.context_window]` overrides and a new `[ui]` config section.
+- **Automatic plain-REPL fallback** for terminals that can't host the rich UI (piped stdin,
+  `--plain`, `AGENT86_PLAIN`, or a console prompt_toolkit can't initialize), so the REPL works
+  in every terminal — PowerShell, cmd, Windows Terminal, and Git Bash/MinTTY.
 
 ### Fixed
 
-- Memory store opens its SQLite connection with `check_same_thread=False` so a turn can run in
-  the rich REPL's worker thread without a `sqlite3.ProgrammingError`. Access stays serialized
-  (one thread at a time), so it's safe.
-- REPL now uses the stdlib `input()` instead of `prompt_toolkit`, so interactive mode works
-  reliably in every terminal — Git Bash/MinTTY (which `prompt_toolkit` fails in with
-  `NoConsoleScreenBufferError`), PowerShell, cmd, and Windows Terminal. Streamed output no
-  longer gets swallowed by the input library taking over the terminal.
-- Streamed model text is written to stdout with an explicit flush (raw write, not a buffered
-  Rich print), so incremental output shows immediately across terminals; a turn that yields no
-  text prints `(no response)` instead of a blank line.
-- Dynamic status notes (memory/mcp/sandbox) are escaped before printing, so bracketed content
-  like `agent86[local]` is no longer eaten by Rich markup parsing.
-- Removed the now-unused `prompt_toolkit` dependency.
+- Interactive REPL reliability: streamed output is written with an explicit flush (empty turns
+  show `(no response)`), and status notes are escaped so bracketed text like `agent86[local]`
+  renders correctly (previously the install hint dropped `[local]`).
+- The memory store opens its SQLite connection with `check_same_thread=False` so a turn can run
+  in the rich REPL's worker thread without a `sqlite3.ProgrammingError` (access stays serialized).
 
 ## [0.1.0] - 2026-07-11
 
@@ -82,4 +76,5 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.2.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.2.0
 [0.1.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.1.0
