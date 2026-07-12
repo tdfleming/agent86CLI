@@ -5,9 +5,13 @@
 > implementation of the five-tier architecture and four pillars described in
 > *The Agentic Harness* (Tony Fleming, 2026).
 
-**Status:** Implemented (Phases 1–9 complete). This document is the contract the code was
-built against; the build followed §14 phase-by-phase, each phase verified with tests and a
-live run against a local model.
+**Status:** Implemented (Phases 1–9 complete), then extended through v0.4.0. This document is
+the contract the code was built against; the build followed §14 phase-by-phase, each phase
+verified with tests and a live run against a local model. Post-v0.1 releases added an
+interactive REPL with a persistent status line, processing spinner, and live approval-mode
+and model switching (v0.2, v0.4); memory management via `memory prune`/`forget` plus automatic
+log retention (v0.3, v0.4); and first-class OpenAI-compatible cloud providers — OpenRouter,
+Groq, and any configured `base_url` endpoint (v0.4).
 **Version:** 0.4.0
 
 ---
