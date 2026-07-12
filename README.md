@@ -1,5 +1,7 @@
 # agent86
 
+[![CI](https://github.com/tonyfleming/agent86CLI/actions/workflows/ci.yml/badge.svg)](https://github.com/tonyfleming/agent86CLI/actions/workflows/ci.yml)
+
 **An agentic harness on the command line.** A Python CLI that connects to remote or
 local models and lets them use tools and skills — a faithful, runnable implementation of
 the five-tier architecture and four pillars from *The Agentic Harness* (Tony Fleming, 2026).
