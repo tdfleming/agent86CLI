@@ -192,7 +192,12 @@ class MemoryStore:
             blob = row["embedding"]
             if not blob:
                 continue
-            score = _cosine(qvec, _unpack(blob))
+            vec = _unpack(blob)
+            if len(vec) != len(qvec):
+                # Row was embedded by a different embedder (dimension changed); skip it
+                # rather than compute a meaningless cross-dimension similarity.
+                continue
+            score = _cosine(qvec, vec)
             meta = json.loads(row["metadata_json"] or "{}")
             if extra_key:
                 meta = {**meta, extra_key: row[extra_key]}

@@ -56,6 +56,18 @@ def test_semantic_add_and_search_ranks_relevant_first(tmp_path):
     assert "Python" in hits[0].text
 
 
+def test_search_skips_mismatched_dimension_rows(tmp_path):
+    # Simulate an embedder change: write with dim 32, then search with a dim-64 store.
+    path = tmp_path / "mem.db"
+    MemoryStore(path, HashingEmbedder(32)).add_memory("old fact from a 32-dim embedder")
+    store = MemoryStore(path, HashingEmbedder(64))
+    store.add_memory("new fact from a 64-dim embedder")
+    hits = store.search_memories("fact", k=5)
+    # The mismatched-dimension (old) row is skipped; only the current-dim row ranks.
+    assert len(hits) == 1
+    assert "64-dim" in hits[0].text
+
+
 def test_episode_roundtrip_and_recall(tmp_path):
     store = _store(tmp_path)
     store.add_episode("s1", task="deploy the web app", outcome="succeeded via run_command")
