@@ -8,15 +8,26 @@ import pytest
 
 from agent86.cognitive.base import ModelProvider, ProviderError, provider_for_model
 from agent86.config import load_config
-from agent86.orchestration.loop import Harness
+from agent86.orchestration.loop import Harness, _summarize
 from agent86.types import (
     AgentPhase,
     Completion,
     CompletionDelta,
     CompletionRequest,
     Role,
+    ToolResult,
     Usage,
 )
+
+
+def test_summarize_failed_result_without_error_string():
+    # Regression: a failed result with no error string (e.g. web_fetch on a non-2xx status)
+    # must not IndexError on an empty splitlines().
+    r = ToolResult(call_id="1", name="web_fetch", ok=False, content="HTTP 403 https://x\nblocked")
+    out = _summarize(r)
+    assert out.startswith("error:") and "HTTP 403" in out
+    # A wholly empty failed result falls back to a placeholder rather than crashing.
+    assert _summarize(ToolResult(call_id="1", name="x", ok=False)) == "error: (failed)"
 
 
 class FakeProvider(ModelProvider):

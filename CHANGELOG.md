@@ -13,6 +13,12 @@ All notable changes to agent86 are documented here. The format follows
   output paused for >0.12s — which happens between tokens on slow local models — so its
   redraw overwrote the partial line of a multi-line response mid-stream. The spinner now
   animates only when the cursor is on a fresh line, and clears exactly the width it drew.
+- **A failed tool no longer crashes the turn (and drops the rich UI).** `_summarize` did
+  `(error or "").splitlines()[0]`, which raised `IndexError` when a tool failed with no error
+  string — e.g. `web_fetch` on a non-2xx response (a site returning HTTP 403 to the bot
+  User-Agent). `web_fetch` now sets an error on non-success, `_summarize` is defensive against
+  an empty error, and the rich REPL reports an unexpected turn error inline instead of
+  collapsing to the plain REPL for the rest of the session.
 
 ## [0.4.1] - 2026-07-12
 

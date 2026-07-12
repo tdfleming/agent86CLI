@@ -302,6 +302,8 @@ class _Repl:
                 console.print(f"\n[red]error:[/red] {exc}")
             except KeyboardInterrupt:
                 console.print("\n[dim]interrupted[/dim]")
+            except Exception as exc:  # a turn blew up — report it, but keep the rich UI alive
+                console.print(f"\n[red]turn failed ({type(exc).__name__}):[/red] {exc}")
             self._refresh_status()
 
     def _run_turn_rich(self, line: str) -> None:

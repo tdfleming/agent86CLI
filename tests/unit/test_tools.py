@@ -32,6 +32,24 @@ def test_path_jail_allows_inside_and_blocks_outside(tmp_path):
         policy.resolve_within("../escape.txt")
 
 
+def test_web_fetch_sets_error_on_non_2xx(tmp_path, monkeypatch):
+    import agent86.tools.builtin.web as web
+    from agent86.tools.builtin.web import WebFetchTool
+
+    class FakeResp:
+        status_code = 403
+        is_success = False
+        headers = {"content-type": "text/html"}
+        text = "<html>Forbidden</html>"
+
+    monkeypatch.setattr(web.httpx, "get", lambda *a, **k: FakeResp())
+    res = WebFetchTool().run(
+        ToolCall(id="1", name="web_fetch", arguments={"url": "https://example.com"}), _ctx(tmp_path)
+    )
+    assert res.ok is False
+    assert res.error and "403" in res.error  # a failed fetch now carries a usable error string
+
+
 def test_env_is_scrubbed_of_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
     monkeypatch.setenv("PATH", "/usr/bin")

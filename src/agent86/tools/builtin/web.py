@@ -48,6 +48,7 @@ class WebFetchTool(Tool):
         return ToolResult(
             call_id="", name=self.name, ok=resp.is_success,
             content=ctx.policy.truncate(header + text.strip()),
+            error=None if resp.is_success else f"HTTP {resp.status_code} ({args.url})",
         )
 
 

@@ -365,7 +365,10 @@ def _preview(arguments: dict) -> str:
 
 def _summarize(result: ToolResult) -> str:
     if not result.ok:
-        return f"error: {(result.error or '').splitlines()[0][:160]}"
+        # A failed result may carry no error string (only content, or nothing) — fall back
+        # so the first-line lookup can't IndexError on an empty splitlines().
+        detail = (result.error or "").strip() or (result.content or "").strip() or "(failed)"
+        return f"error: {detail.splitlines()[0][:160]}"
     first = (result.content or "").strip().splitlines()
     head = first[0] if first else "(no output)"
     return head[:160]
