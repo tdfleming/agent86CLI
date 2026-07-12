@@ -6,6 +6,16 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-12
+
+Documentation release.
+
+### Changed
+
+- `docs/ARCHITECTURE.md` version bumped to 0.4.0 and its status line refreshed to reflect the
+  v0.2–v0.4 additions (interactive REPL, memory management + retention, cloud providers, live
+  model switching).
+
 ## [0.4.0] - 2026-07-11
 
 Cloud providers & model switching release.
@@ -137,6 +147,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.4.1]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.1
 [0.4.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.0
 [0.3.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.3.0
 [0.2.2]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.2.2
