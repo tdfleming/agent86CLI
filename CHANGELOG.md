@@ -6,6 +6,8 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-12
+
 ### Changed
 
 - The REPL now prints a blank line after each question and after each response (both the rich
@@ -178,6 +180,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.4.3]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.3
 [0.4.2]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.2
 [0.4.1]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.1
 [0.4.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.0
