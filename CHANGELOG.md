@@ -6,6 +6,14 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ollama responses no longer get cut off mid-sentence.** The Ollama provider never set a
+  context window, so Ollama used its small default (~4k) — a tool observation (e.g. a
+  `web_fetch` result) filled it, leaving no room to generate, so long answers were truncated.
+  The provider now sends `num_ctx` (default 8192, configurable via `[providers.ollama] num_ctx`)
+  so the model has room for both the prompt and its full response.
+
 ## [0.5.2] - 2026-07-12
 
 Better `web_fetch` — clean content extraction and model-friendly sizing.

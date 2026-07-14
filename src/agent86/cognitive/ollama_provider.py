@@ -35,6 +35,7 @@ class OllamaProvider(ModelProvider):
     def __init__(self, model: str, config: ProviderConfig):
         self.model = model
         self._base_url = (config.base_url or _DEFAULT_BASE_URL).rstrip("/")
+        self._num_ctx = config.num_ctx
 
     # ------------------------------------------------------------------ #
     # Conversion helpers
@@ -75,11 +76,16 @@ class OllamaProvider(ModelProvider):
     # ------------------------------------------------------------------ #
 
     def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+        options: dict[str, Any] = {"temperature": request.temperature}
+        if self._num_ctx:
+            # Give the model room for the prompt AND its answer; Ollama's small default window
+            # otherwise gets filled by tool observations, truncating the response mid-sentence.
+            options["num_ctx"] = self._num_ctx
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": self._to_messages(request.messages),
             "stream": True,
-            "options": {"temperature": request.temperature},
+            "options": options,
         }
         if request.tools:
             payload["tools"] = self._to_tools(request.tools)

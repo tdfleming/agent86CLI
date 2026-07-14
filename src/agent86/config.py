@@ -52,6 +52,10 @@ class ModelConfig(BaseModel):
 class ProviderConfig(BaseModel):
     api_key_env: str | None = None
     base_url: str | None = None
+    # Ollama only: context window (num_ctx) to request. Ollama otherwise defaults to a small
+    # window that a tool observation (e.g. web_fetch) can fill, leaving no room to generate —
+    # so responses get cut off mid-sentence. None uses Ollama's default.
+    num_ctx: int | None = None
 
 
 def _default_user_agent() -> str:
@@ -159,7 +163,7 @@ def _default_providers() -> dict[str, ProviderConfig]:
         "groq": ProviderConfig(
             api_key_env="GROQ_API_KEY", base_url="https://api.groq.com/openai/v1"
         ),
-        "ollama": ProviderConfig(base_url="http://localhost:11434"),
+        "ollama": ProviderConfig(base_url="http://localhost:11434", num_ctx=8192),
         "llamacpp": ProviderConfig(base_url="http://localhost:8080"),
     }
 
