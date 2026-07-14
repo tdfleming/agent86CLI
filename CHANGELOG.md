@@ -6,6 +6,11 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-12
+
+Code-quality & type-safety release (from an external code review). No user-facing behavior
+changes, but note the `Tool` base-class change below if you subclass it.
+
 ### Added
 
 - **Coverage reporting.** `pytest-cov` is now a dev dependency and CI runs with
@@ -32,6 +37,10 @@ All notable changes to agent86 are documented here. The format follows
   (`memory/system.py`, `guardrails/scanners.py`, `tools/sandbox/executor.py`, the `memory`/
   `delegate`/`skills_tool` built-ins), and documented the Gateway (Tier 1) as intentionally
   thin — its responsibilities live in `cli.py`, `orchestration/`, and `guardrails/`.
+- **`Tool` base class is now generic** (`Tool[TArgs]`). Built-in tools subclass
+  `Tool["MyTool.Args"]`; a no-argument tool uses `Tool[EmptyArgs]`. The `Args = EmptyArgs`
+  default was removed from the base — external tool subclasses must now declare an `Args`
+  model (or bind `EmptyArgs`). Runtime behavior is unchanged for all built-in tools.
 
 ## [0.4.4] - 2026-07-12
 
@@ -217,6 +226,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.5.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.0
 [0.4.4]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.4
 [0.4.3]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.3
 [0.4.2]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.2
