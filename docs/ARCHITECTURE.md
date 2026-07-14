@@ -297,6 +297,14 @@ Single embedded store: **SQLite** for relational state + **`sqlite-vec`** for ve
 Embeddings default to local **sentence-transformers** (`all-MiniLM-L6-v2` / `bge-small`) —
 fully offline. `Embedder` is an ABC so provider embeddings can be swapped in later.
 
+**Retrieval & scale.** Search uses sqlite-vec's native `vec_distance_cosine` (distance in C,
+sort/limit in SQLite) when the extension is loaded, and a dependency-free Python cosine scan
+otherwise. Both are a **full linear scan** — there is no ANN index. This is a deliberate fit
+for personal-scale memory (comfortably into the tens of thousands of rows); it is *not* built
+for millions. Retention caps bound the episode/session log automatically; curated facts are
+never auto-pruned. If scale ever demands it, sqlite-vec's `vec0` virtual table would add a
+true vector index — an intentional, isolated upgrade behind the same `MemoryStore` API.
+
 ---
 
 ## 9. Guardrails & Observability (Tier 5 / Pillar 4)

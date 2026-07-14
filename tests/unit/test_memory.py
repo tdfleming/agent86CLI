@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agent86.config import load_config
 from agent86.memory import embeddings as emb
 from agent86.memory.embeddings import HashingEmbedder, build_embedder
@@ -89,6 +91,28 @@ def test_search_skips_mismatched_dimension_rows(tmp_path):
     # The mismatched-dimension (old) row is skipped; only the current-dim row ranks.
     assert len(hits) == 1
     assert "64-dim" in hits[0].text
+
+
+def test_python_fallback_search_ranks_relevant_first(tmp_path, monkeypatch):
+    # Force the dependency-free brute-force path regardless of whether sqlite-vec is installed.
+    store = _store(tmp_path)
+    monkeypatch.setattr(store, "has_vec", False)
+    store.add_memory("The user's favorite language is Python.")
+    store.add_memory("The capital of France is Paris.")
+    hits = store.search_memories("Which programming language does the user like?", k=2)
+    assert hits and "Python" in hits[0].text
+
+
+def test_native_vec_search_matches_python_path(tmp_path):
+    # When sqlite-vec is loaded, the native vec_distance_cosine path must rank identically.
+    store = _store(tmp_path)
+    if not store.has_vec:
+        pytest.skip("sqlite-vec not available / extension loading disabled")
+    store.add_memory("The user's favorite language is Python.")
+    store.add_memory("The capital of France is Paris.")
+    hits = store.search_memories("Which programming language does the user like?", k=2)
+    assert hits and "Python" in hits[0].text
+    assert all(0.0 <= h.score <= 1.0001 for h in hits)  # similarity, not distance
 
 
 def test_delete_memory(tmp_path):

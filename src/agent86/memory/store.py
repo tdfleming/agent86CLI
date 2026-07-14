@@ -6,9 +6,14 @@ One embedded database holds three kinds of memory:
 - **episodes**  — one row per completed turn (task + outcome), the "flight data recorder"
 - **memories**  — semantic facts for RAG retrieval
 
-Embeddings are stored as float32 BLOBs. When the ``sqlite-vec`` extension loads, KNN uses its
-native ``vec_distance_cosine``; otherwise the store falls back to a brute-force cosine scan in
-Python — correct everywhere, and fast enough for a local CLI's memory sizes.
+Embeddings are stored as float32 BLOBs. When the ``sqlite-vec`` extension loads, search uses
+its native ``vec_distance_cosine`` with the sort/limit done in SQLite (C-speed); otherwise the
+store falls back to a brute-force cosine scan in Python. Both paths are a full scan — correct
+everywhere and fast enough for a personal CLI's memory sizes (comfortably into the tens of
+thousands of rows). This is not approximate nearest-neighbour: there is no ANN index. If memory
+ever grows to a scale where the linear scan matters, sqlite-vec's ``vec0`` virtual table would
+add a real index; retention caps (see :meth:`enforce_retention`) already bound the episode/
+session log, though curated facts are never auto-pruned.
 """
 
 from __future__ import annotations
@@ -152,6 +157,8 @@ class MemoryStore:
 
     def search_episodes(self, query: str, k: int = 3) -> list[Hit]:
         qvec = self.embedder.encode_one(query)
+        if self.has_vec:
+            return self._knn_vec("episodes", qvec, k, text_key="task", extra_key="outcome")
         rows = self.conn.execute(
             "SELECT id, task, outcome, embedding, metadata_json FROM episodes"
         ).fetchall()
@@ -171,12 +178,49 @@ class MemoryStore:
 
     def search_memories(self, query: str, k: int = 5) -> list[Hit]:
         qvec = self.embedder.encode_one(query)
+        if self.has_vec:
+            return self._knn_vec("memories", qvec, k, text_key="text")
         rows = self.conn.execute(
             "SELECT id, text, embedding, metadata_json FROM memories"
         ).fetchall()
         return self._rank(qvec, rows, k, text_key="text")
 
     # ---- ranking ------------------------------------------------------- #
+
+    def _knn_vec(
+        self,
+        table: str,
+        qvec: list[float],
+        k: int,
+        *,
+        text_key: str,
+        extra_key: str | None = None,
+    ) -> list[Hit]:
+        """KNN via sqlite-vec's native ``vec_distance_cosine`` (used when the extension loaded).
+
+        The distance is computed in C and the sort/limit happen in SQLite. Rows whose stored
+        embedding has a different byte-length (a different embedder/dimension) are excluded, so
+        the function is never handed mismatched vectors.
+        """
+        qblob = _pack(qvec)
+        extra_sel = f", {extra_key}" if extra_key else ""
+        rows = self.conn.execute(
+            f"SELECT id, {text_key}{extra_sel}, metadata_json, "  # noqa: S608 (fixed idents)
+            f"vec_distance_cosine(embedding, ?) AS dist FROM {table} "
+            f"WHERE embedding IS NOT NULL AND length(embedding) = ? "
+            f"ORDER BY dist ASC LIMIT ?",
+            (qblob, len(qblob), k),
+        ).fetchall()
+        hits: list[Hit] = []
+        for row in rows:
+            meta = json.loads(row["metadata_json"] or "{}")
+            if extra_key:
+                meta = {**meta, extra_key: row[extra_key]}
+            # cosine distance -> similarity, matching the Python path's unit-norm dot product.
+            hits.append(
+                Hit(id=row["id"], text=row[text_key], score=1.0 - row["dist"], metadata=meta)
+            )
+        return hits
 
     def _rank(
         self,

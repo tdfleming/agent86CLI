@@ -6,6 +6,17 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Semantic search now actually uses sqlite-vec when it's installed.** `search_memories` /
+  `search_episodes` always ran the Python brute-force scan even when the `sqlite-vec` extension
+  was loaded — so the extension did nothing and the "native `vec_distance_cosine`" docs were
+  false. Search now uses sqlite-vec's native cosine distance (computed in C, sorted/limited in
+  SQLite) when available, with the Python scan as the dependency-free fallback; both paths
+  exclude mismatched-dimension rows. The scaling story is documented honestly (full linear
+  scan, personal-scale; no ANN index — `vec0` is the upgrade path if ever needed). `sqlite-vec`
+  is now a dev dependency so CI exercises the native path.
+
 ### Added
 
 - **Integration tests for the REPL turn loop and the MCP client** — the two least-covered
