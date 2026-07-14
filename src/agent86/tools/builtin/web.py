@@ -56,10 +56,17 @@ class WebFetchTool(Tool["WebFetchTool.Args"]):
         text = resp.text
         if "html" in content_type or text.lstrip().lower().startswith("<!doctype html"):
             text = _html_to_text(text)
+        text = text.strip()
+        # Keep the observation to a size a model can actually attend to — the lead/main content
+        # is what matters; a full long article otherwise drowns it and biases the answer to the
+        # tail. Users can raise or disable (0) the cap via [tools] web_max_chars.
+        cap = ctx.config.tools.web_max_chars
+        if cap and len(text) > cap:
+            text = text[:cap].rstrip() + f"\n\n... [truncated to {cap} chars]"
         header = f"HTTP {resp.status_code} {args.url} ({content_type})\n\n"
         return ToolResult(
             call_id="", name=self.name, ok=resp.is_success,
-            content=ctx.policy.truncate(header + text.strip()),
+            content=ctx.policy.truncate(header + text),
             error=None if resp.is_success else f"HTTP {resp.status_code} ({args.url})",
         )
 

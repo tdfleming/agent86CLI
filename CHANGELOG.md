@@ -15,6 +15,11 @@ All notable changes to agent86 are documented here. The format follows
   section). `web_fetch` now extracts the main content region and drops boilerplate: it uses
   BeautifulSoup (the new `web` extra) when available, with an improved regex reducer as the
   dependency-free fallback. A page's lead/summary now leads the observation.
+- **`web_fetch` output is capped to a model-friendly size** (`[tools] web_max_chars`, default
+  8000). A long article previously filled the context with ~25k tokens, so a small model
+  fixated on whatever happened to sit at the truncation boundary (e.g. summarising a page's
+  tail instead of answering). The lead/main content now dominates. Raise or disable (`0`) the
+  cap in config.
 
 ## [0.5.1] - 2026-07-12
 

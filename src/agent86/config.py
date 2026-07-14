@@ -62,6 +62,10 @@ def _default_user_agent() -> str:
 
 class ToolsConfig(BaseModel):
     web_user_agent: str = Field(default_factory=_default_user_agent)
+    # Cap web_fetch's extracted text so a huge page (e.g. a long Wikipedia article) doesn't
+    # bury the lead/relevant content in more tokens than a model can usefully attend to.
+    # 0 = no web-specific cap (still bounded by the sandbox output limit). ~8k chars ≈ 2k tokens.
+    web_max_chars: int = 8000
 
 
 class SandboxConfig(BaseModel):

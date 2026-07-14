@@ -57,6 +57,28 @@ def test_web_fetch_sends_descriptive_user_agent(tmp_path, monkeypatch):
     assert ua.startswith("agent86/") and "github.com/tdfleming/agent86CLI" in ua
 
 
+def test_web_fetch_caps_extracted_text(tmp_path, monkeypatch):
+    import agent86.tools.builtin.web as web
+    from agent86.tools.builtin.web import WebFetchTool
+
+    class FakeResp:
+        status_code = 200
+        is_success = True
+        headers = {"content-type": "text/plain"}
+        text = "word " * 5000  # ~25k chars, far over the default cap
+
+    monkeypatch.setattr(web.httpx, "get", lambda *a, **k: FakeResp())
+    ctx = _ctx(tmp_path)
+    ctx.config.tools.web_max_chars = 500
+    res = WebFetchTool().run(
+        ToolCall(id="1", name="web_fetch", arguments={"url": "https://example.com"}), ctx
+    )
+    assert res.ok
+    assert "[truncated to 500 chars]" in res.content
+    # body (excluding the HTTP header + truncation note) is bounded by the cap
+    assert len(res.content) < 800
+
+
 def test_web_fetch_sets_error_on_non_2xx(tmp_path, monkeypatch):
     import agent86.tools.builtin.web as web
     from agent86.tools.builtin.web import WebFetchTool
