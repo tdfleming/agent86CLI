@@ -1,6 +1,6 @@
 [project]
 name = "agent86"
-version = "0.5.2"
+version = "0.5.3"
 description = "An agentic harness on the command line — connects to remote or local models and lets them use tools and skills."
 readme = "README.md"
 requires-python = ">=3.11"

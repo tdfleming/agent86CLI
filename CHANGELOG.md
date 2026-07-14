@@ -6,6 +6,8 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-07-12
+
 ### Fixed
 
 - **Ollama responses no longer get cut off mid-sentence.** The Ollama provider never set a
@@ -276,6 +278,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.5.3]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.3
 [0.5.2]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.2
 [0.5.1]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.1
 [0.5.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.0
