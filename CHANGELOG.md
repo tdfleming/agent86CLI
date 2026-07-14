@@ -6,6 +6,14 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Integration tests for the REPL turn loop and the MCP client** — the two least-covered
+  modules. The new `test_repl_turns.py` drives `_run_turn_rich` (worker-thread streaming, tool
+  turns) and the plain loop end-to-end with fake providers (no TTY/network), locking in the
+  v0.4.2/v0.4.3 render fixes; `test_mcp_client.py` covers `MCPTool` (spec/run/error) and the
+  MCP degradation paths. `ui/repl.py` coverage 34% → 58%; overall 65% → 68%.
+
 ## [0.5.0] - 2026-07-12
 
 Code-quality & type-safety release (from an external code review). No user-facing behavior
