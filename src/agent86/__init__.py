@@ -9,6 +9,6 @@ Core principle — Separation of Concerns: the Cognitive Core (the model) only e
 The model never touches the sandbox, the database, or the terminal directly.
 """
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 __all__ = ["__version__"]

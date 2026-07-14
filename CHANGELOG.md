@@ -6,6 +6,10 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-12
+
+Better `web_fetch` — clean content extraction and model-friendly sizing.
+
 ### Fixed
 
 - **`web_fetch` returns clean article text instead of page chrome.** The old HTML→text reducer
@@ -264,6 +268,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.5.2]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.2
 [0.5.1]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.1
 [0.5.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.0
 [0.4.4]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.4
