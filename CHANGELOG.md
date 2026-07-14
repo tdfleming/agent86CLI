@@ -6,6 +6,27 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Coverage reporting.** `pytest-cov` is now a dev dependency and CI runs with
+  `--cov --cov-report=term-missing` (plus `[tool.coverage]` config). Coverage is observable
+  (currently ~65%), not yet gated — the report highlights the thin spots (the REPL loop, the
+  MCP client, and the sandbox executors) for future test work.
+
+### Fixed
+
+- **Type safety in the REPL.** `_Repl.state` is now typed `AgentState` (it is never `None`
+  past construction), clearing 9 mypy `union-attr`/`arg-type` errors in `ui/repl.py`.
+
+### Changed
+
+- **`docs/ARCHITECTURE.md` synced to the real source tree.** Corrected stale paths
+  (`cognitive/pricing.py` not `budget.py`, `agents/subagent.py` not `agent.py`,
+  `ui/status.py`+`spinner.py` not `render.py`), added files that existed but weren't listed
+  (`memory/system.py`, `guardrails/scanners.py`, `tools/sandbox/executor.py`, the `memory`/
+  `delegate`/`skills_tool` built-ins), and documented the Gateway (Tier 1) as intentionally
+  thin — its responsibilities live in `cli.py`, `orchestration/`, and `guardrails/`.
+
 ## [0.4.4] - 2026-07-12
 
 ### Fixed

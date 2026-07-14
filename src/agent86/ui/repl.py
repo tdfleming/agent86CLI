@@ -61,21 +61,23 @@ def _tool_label(text: str) -> str | None:
 class _Repl:
     def __init__(self, cfg: Config, resume: str | None, harness=None):  # noqa: ANN001
         from agent86.orchestration.loop import Harness
+        from agent86.orchestration.state import AgentState
 
         self.cfg = cfg
         self.harness = harness if harness is not None else Harness(cfg)
-        self.state = None
+        state: AgentState | None = None
         if resume:
-            self.state = self.harness.resume(resume)
-            if self.state is None:
+            state = self.harness.resume(resume)
+            if state is None:
                 console.print(f"[yellow]No session '{resume}' found; starting fresh.[/yellow]")
             else:
                 console.print(
-                    f"[dim]resumed session {self.state.session_id} "
-                    f"({len(self.state.messages)} messages)[/dim]"
+                    f"[dim]resumed session {state.session_id} "
+                    f"({len(state.messages)} messages)[/dim]"
                 )
-        if self.state is None:
-            self.state = self.harness.new_session()
+        # Past this point state is always an AgentState (never None) — annotate it so, which
+        # removes the union-attr / arg-type mypy errors on every self.state access below.
+        self.state: AgentState = state if state is not None else self.harness.new_session()
 
         p = self.harness.provider
         self.status = StatusState(

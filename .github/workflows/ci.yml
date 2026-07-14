@@ -51,5 +51,5 @@ jobs:
         run: |
           uv venv
           uv pip install -e ".[dev]"
-      - name: pytest
-        run: uv run pytest -q
+      - name: pytest (with coverage)
+        run: uv run pytest -q --cov --cov-report=term-missing --cov-report=xml

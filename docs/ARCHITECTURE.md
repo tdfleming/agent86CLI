@@ -77,6 +77,12 @@ the motherboard + OS; the model is the CPU.
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+> **Note on Tier 1.** In this implementation the Gateway tier is deliberately thin: the
+> `gateway/` package is a namespace, and its responsibilities are folded into the surrounding
+> code — session lifecycle in `orchestration/state.py` + `loop.py`, and input sanitization in
+> `cli.py` + `guardrails/ingress.py`. For a single-user CLI there was no separate gateway to
+> build; the concern still exists, just not as its own module.
+
 ### 3.2 Four Pillars
 
 | Pillar | Book role | Module(s) |
@@ -103,9 +109,9 @@ agent86CLI/
 │   ├── config.py                  # layered config (defaults→file→env→flags), profiles, secrets
 │   ├── types.py                   # shared dataclasses/Pydantic: Message, Step, ToolCall, ToolResult
 │   │
-│   ├── gateway/                   # ── Tier 1 ──
-│   │   ├── session.py             #   session lifecycle, identity→role mapping
-│   │   └── ingress.py             #   input sanitization, file/MIME validation
+│   ├── gateway/                   # ── Tier 1 (thin) ──
+│   │   └── __init__.py            #   session lifecycle folded into orchestration/state.py + loop.py;
+│   │                             #   input sanitization lives in cli.py + guardrails/ingress.py
 │   │
 │   ├── orchestration/             # ── Tier 2 / Pillar 1 ──
 │   │   ├── loop.py                #   ReAct execution loop (perceive→reason→act→observe)
@@ -120,19 +126,23 @@ agent86CLI/
 │   │   ├── ollama_provider.py     #   local Ollama HTTP API
 │   │   ├── llamacpp_provider.py   #   llama.cpp server / LM Studio local server
 │   │   ├── prompt.py              #   prompt compilation (system + skills + history + schema)
-│   │   └── budget.py              #   token budgeting, sliding window, recursive summarization
+│   │   └── pricing.py             #   per-model token pricing → usage cost
 │   │
 │   ├── tools/                     # ── Tier 4 / Pillar 3 ──
 │   │   ├── base.py                #   Tool ABC, JSON-Schema spec, ToolResult
 │   │   ├── registry.py            #   registration, schema export, dispatch, per-tool policy
+│   │   ├── mcp_client.py          #   MCP client — mounts external MCP-server tools
 │   │   ├── builtin/
 │   │   │   ├── shell.py           #   run_command (sandboxed)
 │   │   │   ├── files.py           #   read_file / write_file / edit_file / list_dir (path-jailed)
-│   │   │   ├── web.py             #   web_fetch / web_search
-│   │   │   └── python_exec.py     #   python interpreter tool (sandboxed)
-│   │   ├── mcp_client.py          #   MCP client — mounts external MCP-server tools
+│   │   │   ├── web.py             #   web_fetch (policy-compliant User-Agent)
+│   │   │   ├── python_exec.py     #   python interpreter tool (sandboxed)
+│   │   │   ├── memory.py          #   remember / recall (semantic memory)
+│   │   │   ├── delegate.py        #   delegate(role, task) — sub-agent spawning
+│   │   │   └── skills_tool.py     #   use_skill — load a skill's full instructions
 │   │   └── sandbox/
 │   │       ├── policy.py          #   allow/deny paths, network, env scrub, timeouts, limits
+│   │       ├── executor.py        #   executor selection + shared execution result
 │   │       ├── subprocess_exec.py #   default restricted-subprocess executor
 │   │       └── docker_exec.py     #   opt-in Docker container executor
 │   │
@@ -141,15 +151,17 @@ agent86CLI/
 │   │   └── models.py              #   Skill dataclass (name, description, instructions, resources)
 │   │
 │   ├── memory/                    # ── Pillar 2 ──
-│   │   ├── store.py               #   MemoryStore: SQLite schema + sqlite-vec vector index
+│   │   ├── store.py               #   MemoryStore: SQLite schema + optional sqlite-vec, retention
+│   │   ├── system.py              #   assembles the store + episodic/semantic facets from config
 │   │   ├── working.py             #   working memory (context window) manager
 │   │   ├── episodic.py            #   episodic traces — "flight data recorder" of past runs
 │   │   ├── semantic.py            #   semantic memory / RAG retrieval
-│   │   └── embeddings.py          #   Embedder ABC + sentence-transformers default
+│   │   └── embeddings.py          #   Embedder ABC + sentence-transformers default (+ hash fallback)
 │   │
 │   ├── guardrails/                # ── Tier 5 / Pillar 4 ──
 │   │   ├── ingress.py             #   prompt-injection & PII/jailbreak scan
 │   │   ├── egress.py              #   secret/PII leak scan, output schema validation
+│   │   ├── scanners.py            #   shared regex scanners (injection / secrets / PII)
 │   │   └── policy.py              #   operational policy + HITL approval gate
 │   │
 │   ├── observability/             # ── Tier 5 ──
@@ -157,14 +169,15 @@ agent86CLI/
 │   │   └── recorder.py            #   local JSONL trace (append-only audit trail)
 │   │
 │   ├── agents/                    # ── Multi-agent (MAS) ──
-│   │   ├── agent.py               #   Agent = harness instance with a role + toolset
+│   │   ├── subagent.py            #   SubAgent = harness instance with a role + toolset
 │   │   ├── envelope.py            #   structured agent message envelope
-│   │   ├── broker.py              #   in-process async message broker
-│   │   └── orchestrator.py        #   sub-agent spawning, topologies, conflict resolution
+│   │   ├── broker.py              #   in-process message bus
+│   │   └── orchestrator.py        #   supervisor orchestrator — sub-agent fan-out
 │   │
 │   └── ui/
 │       ├── repl.py                #   Rich/prompt_toolkit interactive loop, streaming render
-│       └── render.py              #   markdown, tool-call panels, approval prompts, cost meter
+│       ├── status.py              #   status-line model (context %, tokens, cost, modes)
+│       └── spinner.py             #   threaded processing spinner
 │
 └── tests/
     ├── unit/                      # prompt templates, schema validators, state transitions

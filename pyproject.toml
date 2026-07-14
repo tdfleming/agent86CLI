@@ -36,7 +36,7 @@ all = [
     "opentelemetry-exporter-otlp>=1.27",
     "docker>=7.1",
 ]
-dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "pytest-cov>=5.0", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
 agent86 = "agent86.cli:app"
@@ -62,6 +62,21 @@ select = ["E", "F", "I", "UP", "B", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["agent86"]
+branch = true
+
+[tool.coverage.report]
+# Coverage is observable, not yet gated — no fail_under until the suite catches up. Skip
+# lines that are defensive/unreachable or platform-specific.
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "pragma: no cover",
+]
 
 [tool.mypy]
 python_version = "3.11"
