@@ -7,6 +7,7 @@ only ever talks to the registry, never to concrete tools.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from agent86.config import Config
@@ -75,7 +76,7 @@ def default_registry(
     config: Config,
     memory: SemanticMemory | None = None,
     skills: dict[str, Skill] | None = None,
-    mcp_tools: list[Tool] | None = None,
+    mcp_tools: Sequence[Tool] | None = None,
     enable_delegate: bool = False,
 ) -> ToolRegistry:
     """Registry pre-loaded with the built-in tools, plus memory/skill/MCP/agent tools.

@@ -83,3 +83,14 @@ python_version = "3.11"
 packages = ["agent86"]
 strict = false
 warn_unused_ignores = true
+
+# Optional heavy backends ship no type stubs; they're imported lazily behind extras.
+[[tool.mypy.overrides]]
+module = [
+    "sentence_transformers.*",
+    "sqlite_vec.*",
+    "docker.*",
+    "mcp.*",
+    "opentelemetry.*",
+]
+ignore_missing_imports = true

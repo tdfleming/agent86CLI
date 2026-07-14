@@ -15,7 +15,7 @@ _SCRIPT_STYLE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.
 _WS = re.compile(r"\n{3,}")
 
 
-class WebFetchTool(Tool):
+class WebFetchTool(Tool["WebFetchTool.Args"]):
     name = "web_fetch"
     description = (
         "Fetch a URL over HTTP(S) and return its text content (HTML is reduced to text). "

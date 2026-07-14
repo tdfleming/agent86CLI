@@ -13,7 +13,7 @@ from agent86.tools.base import Tool, ToolContext
 from agent86.types import ToolResult
 
 
-class PythonExecTool(Tool):
+class PythonExecTool(Tool["PythonExecTool.Args"]):
     name = "python_exec"
     description = (
         "Execute a Python 3 snippet in a fresh sandboxed process and return its stdout, "

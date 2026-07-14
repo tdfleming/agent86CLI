@@ -19,7 +19,7 @@ import threading
 from typing import Any
 
 from agent86.config import Config, MCPServerConfig
-from agent86.tools.base import Tool, ToolContext
+from agent86.tools.base import EmptyArgs, Tool, ToolContext
 from agent86.types import ToolCall, ToolResult, ToolSpec
 
 _NAME_RE = re.compile(r"[^A-Za-z0-9_-]")
@@ -29,8 +29,10 @@ def _sanitize(name: str) -> str:
     return _NAME_RE.sub("_", name)[:64]
 
 
-class MCPTool(Tool):
+class MCPTool(Tool[EmptyArgs]):
     """A registry tool backed by a remote MCP server tool."""
+
+    Args = EmptyArgs  # unused: spec() and run() are overridden (schema comes from the server)
 
     def __init__(self, manager: MCPManager, server: str, tool_name: str,
                  description: str, input_schema: dict):
@@ -48,8 +50,8 @@ class MCPTool(Tool):
             parameters=self._schema, side_effecting=True,
         )
 
-    def execute(self, args, ctx):  # pragma: no cover - run() is overridden
-        raise NotImplementedError
+    def execute(self, args: EmptyArgs, ctx: ToolContext) -> ToolResult:  # pragma: no cover
+        raise NotImplementedError  # run() is overridden; execute is never called
 
     def run(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
         try:

@@ -13,7 +13,7 @@ from agent86.tools.base import Tool, ToolContext
 from agent86.types import ToolResult
 
 
-class RememberTool(Tool):
+class RememberTool(Tool["RememberTool.Args"]):
     name = "remember"
     description = (
         "Persist a durable, user-specific fact to long-term memory for future sessions — "
@@ -35,7 +35,7 @@ class RememberTool(Tool):
         return ToolResult(call_id="", name=self.name, content="Remembered.")
 
 
-class RecallTool(Tool):
+class RecallTool(Tool["RecallTool.Args"]):
     name = "recall"
     description = "Search long-term semantic memory for facts relevant to a query."
     side_effecting = False

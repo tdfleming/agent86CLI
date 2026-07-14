@@ -12,7 +12,7 @@ def _fail(name: str, msg: str) -> ToolResult:
     return ToolResult(call_id="", name=name, ok=False, error=msg)
 
 
-class ReadFileTool(Tool):
+class ReadFileTool(Tool["ReadFileTool.Args"]):
     name = "read_file"
     description = "Read a UTF-8 text file within the workspace and return its contents."
     side_effecting = False
@@ -30,7 +30,7 @@ class ReadFileTool(Tool):
         return ToolResult(call_id="", name=self.name, content=ctx.policy.truncate(text))
 
 
-class WriteFileTool(Tool):
+class WriteFileTool(Tool["WriteFileTool.Args"]):
     name = "write_file"
     description = "Create or overwrite a text file within the workspace (creates parent dirs)."
     side_effecting = True
@@ -48,7 +48,7 @@ class WriteFileTool(Tool):
         )
 
 
-class EditFileTool(Tool):
+class EditFileTool(Tool["EditFileTool.Args"]):
     name = "edit_file"
     description = (
         "Replace an exact substring in a workspace file. The old text must appear "
@@ -77,7 +77,7 @@ class EditFileTool(Tool):
         return ToolResult(call_id="", name=self.name, content=f"Edited {args.path}.")
 
 
-class ListDirTool(Tool):
+class ListDirTool(Tool["ListDirTool.Args"]):
     name = "list_dir"
     description = "List the entries of a directory within the workspace."
     side_effecting = False

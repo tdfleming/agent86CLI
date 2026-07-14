@@ -14,7 +14,7 @@ from agent86.tools.base import Tool, ToolContext
 from agent86.types import ToolResult
 
 
-class DelegateTool(Tool):
+class DelegateTool(Tool["DelegateTool.Args"]):
     name = "delegate"
     description = (
         "Delegate a focused subtask to a fresh sub-agent with a given role (e.g. "

@@ -8,7 +8,7 @@ from agent86.tools.base import Tool, ToolContext
 from agent86.types import ToolResult
 
 
-class RunCommandTool(Tool):
+class RunCommandTool(Tool["RunCommandTool.Args"]):
     name = "run_command"
     description = (
         "Run a shell command in the workspace and return its stdout, stderr, and exit "

@@ -17,6 +17,12 @@ All notable changes to agent86 are documented here. The format follows
 
 - **Type safety in the REPL.** `_Repl.state` is now typed `AgentState` (it is never `None`
   past construction), clearing 9 mypy `union-attr`/`arg-type` errors in `ui/repl.py`.
+- **mypy is now clean (24 → 0 errors), and CI enforces it.** The `Tool` base class is generic
+  over its `Args` model (`Tool[TArgs]`), so each tool's `execute` is type-checked against its
+  concrete argument type without the Liskov-substitution violations mypy was flagging across
+  every built-in tool. The registry accepts `Sequence[Tool]` (fixing the `list[MCPTool]`
+  invariance error), `MemoryStore` insert helpers handle `lastrowid`, and optional untyped
+  backends are declared in `[tool.mypy]`. CI now runs `mypy src/agent86` alongside ruff.
 
 ### Changed
 

@@ -13,7 +13,7 @@ from agent86.tools.base import Tool, ToolContext
 from agent86.types import ToolResult
 
 
-class UseSkillTool(Tool):
+class UseSkillTool(Tool["UseSkillTool.Args"]):
     name = "use_skill"
     description = (
         "Load the full instructions for a named skill. Call this when a skill from the "

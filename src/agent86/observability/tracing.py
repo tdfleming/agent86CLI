@@ -16,7 +16,7 @@ class Tracer:
         self._tracer: Any = None
         if enabled:
             try:
-                from opentelemetry import trace  # type: ignore
+                from opentelemetry import trace
 
                 self._tracer = trace.get_tracer("agent86")
             except Exception:

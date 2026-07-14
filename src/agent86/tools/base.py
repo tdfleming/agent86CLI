@@ -13,11 +13,15 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from agent86.types import ToolCall, ToolResult, ToolSpec
+
+#: Each tool binds this to its own ``Args`` model, so ``execute`` is type-checked against the
+#: concrete argument type without violating the base-class contract (Liskov).
+TArgs = TypeVar("TArgs", bound=BaseModel)
 
 if TYPE_CHECKING:
     from agent86.config import Config
@@ -52,15 +56,20 @@ class EmptyArgs(BaseModel):
     """Default argument model for tools that take no parameters."""
 
 
-class Tool(ABC):
-    """Base class for all tools (built-in, MCP-backed, or skill-provided)."""
+class Tool(ABC, Generic[TArgs]):
+    """Base class for all tools (built-in, MCP-backed, or skill-provided).
+
+    Generic over the tool's ``Args`` model. A tool binds it by subclassing
+    ``Tool["MyTool.Args"]`` (or ``Tool[EmptyArgs]`` for a no-argument tool), which lets
+    ``execute`` take the concrete argument type without breaking the base contract.
+    """
 
     name: str = ""
     description: str = ""
     #: True if invoking the tool causes an external side effect (gated by the HITL gate).
     side_effecting: bool = False
-    #: Pydantic model describing this tool's arguments.
-    Args: type[BaseModel] = EmptyArgs
+    #: Pydantic model describing this tool's arguments (bound to the generic ``TArgs``).
+    Args: type[TArgs]
 
     def spec(self) -> ToolSpec:
         """Advertise this tool to the model as a validated JSON-Schema function."""
@@ -77,7 +86,7 @@ class Tool(ABC):
         )
 
     @abstractmethod
-    def execute(self, args: BaseModel, ctx: ToolContext) -> ToolResult:
+    def execute(self, args: TArgs, ctx: ToolContext) -> ToolResult:
         """Run the tool with already-validated ``args``."""
         raise NotImplementedError
 

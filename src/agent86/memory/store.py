@@ -66,7 +66,7 @@ class MemoryStore:
 
     def _try_load_vec(self) -> bool:
         try:
-            import sqlite_vec  # type: ignore
+            import sqlite_vec
 
             self.conn.enable_load_extension(True)
             sqlite_vec.load(self.conn)
@@ -148,7 +148,7 @@ class MemoryStore:
             (session_id, self._now(), task, outcome, emb, json.dumps(metadata or {})),
         )
         self.conn.commit()
-        return int(cur.lastrowid)
+        return int(cur.lastrowid or 0)  # lastrowid is set after a successful INSERT
 
     def search_episodes(self, query: str, k: int = 3) -> list[Hit]:
         qvec = self.embedder.encode_one(query)
@@ -167,7 +167,7 @@ class MemoryStore:
             (self._now(), kind, text, emb, json.dumps(metadata or {})),
         )
         self.conn.commit()
-        return int(cur.lastrowid)
+        return int(cur.lastrowid or 0)  # lastrowid is set after a successful INSERT
 
     def search_memories(self, query: str, k: int = 5) -> list[Hit]:
         qvec = self.embedder.encode_one(query)
