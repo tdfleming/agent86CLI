@@ -26,6 +26,7 @@ local = ["sentence-transformers>=3.0", "sqlite-vec>=0.1.1"]
 mcp = ["mcp>=1.0"]
 otel = ["opentelemetry-sdk>=1.27", "opentelemetry-exporter-otlp>=1.27"]
 docker = ["docker>=7.1"]
+web = ["beautifulsoup4>=4.12"]  # clean article extraction for web_fetch (falls back to regex)
 all = [
     "anthropic>=0.40",
     "openai>=1.40",
@@ -35,10 +36,12 @@ all = [
     "opentelemetry-sdk>=1.27",
     "opentelemetry-exporter-otlp>=1.27",
     "docker>=7.1",
+    "beautifulsoup4>=4.12",
 ]
 dev = [
     "pytest>=8.2", "pytest-asyncio>=0.23", "pytest-cov>=5.0", "ruff>=0.6", "mypy>=1.11",
     "sqlite-vec>=0.1.1",  # exercise the native vec_distance_cosine search path in CI
+    "beautifulsoup4>=4.12",  # exercise the readability extraction path in CI
 ]
 
 [project.scripts]

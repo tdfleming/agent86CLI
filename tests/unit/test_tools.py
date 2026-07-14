@@ -75,6 +75,40 @@ def test_web_fetch_sets_error_on_non_2xx(tmp_path, monkeypatch):
     assert res.error and "403" in res.error  # a failed fetch now carries a usable error string
 
 
+_SAMPLE_HTML = """
+<html><head><title>t</title><style>.x{}</style></head>
+<body>
+  <nav>Home About Login Donate</nav>
+  <header>Site chrome</header>
+  <main>
+    <h1>Jane Doe</h1>
+    <p>Jane Doe was a pioneering scientist.<sup>[1]</sup></p>
+    <table class="infobox"><tr><td>Born</td><td>1900</td></tr></table>
+  </main>
+  <footer>Copyright</footer>
+</body></html>
+"""
+
+
+def test_html_to_text_drops_boilerplate_and_keeps_article():
+    from agent86.tools.builtin.web import _html_to_text
+
+    text = _html_to_text(_SAMPLE_HTML)
+    assert "Jane Doe was a pioneering scientist." in text
+    # navigation / chrome / footer / reference markers are stripped
+    assert "Donate" not in text and "Site chrome" not in text and "Copyright" not in text
+    assert "[1]" not in text
+
+
+def test_html_to_text_regex_fallback_without_bs4():
+    # The regex fallback (no BeautifulSoup) still removes chrome and keeps the article.
+    from agent86.tools.builtin.web import _html_to_text_regex
+
+    text = _html_to_text_regex(_SAMPLE_HTML)
+    assert "Jane Doe was a pioneering scientist." in text
+    assert "Donate" not in text and "Copyright" not in text
+
+
 def test_env_is_scrubbed_of_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
     monkeypatch.setenv("PATH", "/usr/bin")

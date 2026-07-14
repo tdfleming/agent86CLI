@@ -11,7 +11,19 @@ from agent86.tools.base import Tool, ToolContext
 from agent86.types import ToolResult
 
 _TAG = re.compile(r"<[^>]+>")
-_SCRIPT_STYLE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+# Whole non-content blocks to drop before extracting text (nav bars, page chrome, footnotes,
+# tables/figures) — otherwise a page's menus and boilerplate dominate the byte budget.
+_DROP_BLOCKS = re.compile(
+    r"<(script|style|nav|header|footer|aside|form|noscript|figure|table)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SUP_REF = re.compile(r"<sup\b[^>]*>.*?</sup>", re.IGNORECASE | re.DOTALL)  # [1], [362] markers
+# Isolate the main article region when the page marks one (covers most sites + Wikipedia).
+_MAIN_REGIONS = (
+    re.compile(r"<main\b[^>]*>(.*?)</main>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"<article\b[^>]*>(.*?)</article>", re.IGNORECASE | re.DOTALL),
+    re.compile(r'<div\b[^>]*id=["\']mw-content-text["\'][^>]*>(.*)', re.IGNORECASE | re.DOTALL),
+)
 _WS = re.compile(r"\n{3,}")
 
 
@@ -52,8 +64,52 @@ class WebFetchTool(Tool["WebFetchTool.Args"]):
         )
 
 
+_BOILERPLATE = ("script", "style", "nav", "header", "footer", "aside", "form", "figure", "table",
+                "sup")
+
+
 def _html_to_text(html: str) -> str:
-    html = _SCRIPT_STYLE.sub(" ", html)
+    """Reduce HTML to readable article text.
+
+    Uses BeautifulSoup (the ``web`` extra) when available — it parses the DOM, drops
+    navigation/boilerplate, and isolates the main content region, which keeps a page's menus,
+    infoboxes, and reference markers out of what the model sees. Falls back to a regex reducer
+    when BeautifulSoup isn't installed.
+    """
+    cleaned = _html_to_text_bs4(html)
+    if cleaned is None:
+        cleaned = _html_to_text_regex(html)
+    return _WS.sub("\n\n", cleaned)
+
+
+def _html_to_text_bs4(html: str) -> str | None:
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    for element in soup.find_all(_BOILERPLATE):
+        element.decompose()
+    main = (
+        soup.find(id="mw-content-text")
+        or soup.find("main")
+        or soup.find("article")
+        or soup.body
+        or soup
+    )
+    lines = [ln.strip() for ln in main.get_text("\n").splitlines() if ln.strip()]
+    return "\n".join(lines)
+
+
+def _html_to_text_regex(html: str) -> str:
+    # Prefer the main article region so navigation/sidebars/boilerplate don't dominate.
+    for region in _MAIN_REGIONS:
+        m = region.search(html)
+        if m:
+            html = m.group(1)
+            break
+    html = _DROP_BLOCKS.sub(" ", html)
+    html = _SUP_REF.sub(" ", html)  # drop citation superscripts like [362]
     text = _TAG.sub(" ", html)
     text = (
         text.replace("&nbsp;", " ")
@@ -62,8 +118,7 @@ def _html_to_text(html: str) -> str:
         .replace("&gt;", ">")
     )
     lines = [line.strip() for line in text.splitlines()]
-    text = "\n".join(line for line in lines if line)
-    return _WS.sub("\n\n", text)
+    return "\n".join(line for line in lines if line)
 
 
 __all__ = ["WebFetchTool"]

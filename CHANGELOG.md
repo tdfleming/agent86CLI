@@ -6,6 +6,16 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`web_fetch` returns clean article text instead of page chrome.** The old HTML→text reducer
+  kept navigation menus, sidebars, infobox template JSON, and reference markers, so the first
+  ~7 KB the model saw of a Wikipedia page was boilerplate — and the real content got pushed
+  past the size cap, producing lopsided answers (e.g. a "bio" summarising a mid-article
+  section). `web_fetch` now extracts the main content region and drops boilerplate: it uses
+  BeautifulSoup (the new `web` extra) when available, with an improved regex reducer as the
+  dependency-free fallback. A page's lead/summary now leads the observation.
+
 ## [0.5.1] - 2026-07-12
 
 Semantic-search correctness and test coverage for the thin modules.
