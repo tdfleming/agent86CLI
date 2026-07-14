@@ -90,9 +90,12 @@ packages = ["agent86"]
 strict = false
 warn_unused_ignores = true
 
-# Optional heavy backends ship no type stubs; they're imported lazily behind extras.
+# Optional backends imported lazily behind extras; CI's [dev] install omits them, so mypy
+# can't resolve them there. (openai ships py.typed and resolves when installed; the rest don't.)
 [[tool.mypy.overrides]]
 module = [
+    "anthropic.*",
+    "openai.*",
     "sentence_transformers.*",
     "sqlite_vec.*",
     "docker.*",
