@@ -6,6 +6,17 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-07-14
+
+### Fixed
+
+- **CI mypy no longer fails on the `anthropic` extra.** CI installs only `.[dev]`, which
+  excludes the `anthropic` and `openai` provider extras, so mypy could not resolve
+  `import anthropic` and failed with `import-not-found`. The runtime import is already guarded;
+  this only affected static analysis in CI's minimal-install environment. The mypy overrides
+  already whitelisted every other extras-gated backend — `anthropic` and `openai` were simply
+  omitted. Both are now added to `ignore_missing_imports`. No behaviour change.
+
 ## [0.5.3] - 2026-07-12
 
 ### Fixed
