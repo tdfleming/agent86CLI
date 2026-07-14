@@ -6,6 +6,10 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-12
+
+Semantic-search correctness and test coverage for the thin modules.
+
 ### Fixed
 
 - **Semantic search now actually uses sqlite-vec when it's installed.** `search_memories` /
@@ -245,6 +249,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.5.1]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.1
 [0.5.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.0
 [0.4.4]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.4
 [0.4.3]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.4.3
