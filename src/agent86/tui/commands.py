@@ -61,19 +61,8 @@ def _help_table():
     from rich.table import Table
 
     table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
-    table.add_row("[cyan]/help[/cyan]", "Show this help")
-    table.add_row("[cyan]/config[/cyan]", "Show the resolved configuration")
-    table.add_row("[cyan]/models[/cyan]", "List configured models")
-    table.add_row(
-        "[cyan]/model <provider:model>[/cyan]", "Switch the active model for this session"
-    )
-    table.add_row("[cyan]/tools[/cyan]", "List available tools")
-    table.add_row("[cyan]/skills[/cyan]", "List available skills")
-    table.add_row("[cyan]/memory[/cyan]", "Show memory stats and session id")
-    table.add_row("[cyan]/mode [ask|auto|deny][/cyan]", "Show/set approval mode (Shift+Tab cycles)")
-    table.add_row("[cyan]/cost[/cyan]", "Show token usage and cost this session")
-    table.add_row("[cyan]/clear[/cyan]", "Start a fresh conversation")
-    table.add_row("[cyan]/exit[/cyan]", "Quit")
+    for entry in COMMANDS:
+        table.add_row(f"[cyan]{entry.usage}[/cyan]", entry.description)
     return table
 
 

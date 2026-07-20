@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
-from agent86.tui.commands import CommandResult, handle_command
+from agent86.tui.commands import COMMANDS, CommandResult, _help_table, handle_command
 from agent86.types import ApprovalMode
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
@@ -95,3 +95,34 @@ def test_clear_command_starts_new_session(tmp_path):
     result = handle_command(repl, "/clear")
     assert result.action == "handled"
     assert repl.state.session_id != before_id
+
+
+def test_help_matches_registry(tmp_path):
+    table = _help_table()
+    assert len(table.rows) == len(COMMANDS)
+
+    cell_text = "\n".join(
+        "\n".join(str(cell) for cell in column._cells) for column in table.columns
+    )
+    for entry in COMMANDS:
+        assert entry.description in cell_text
+
+
+def test_models_vs_model_routing(tmp_path):
+    repl, _ = _repl(tmp_path)
+
+    result = handle_command(repl, "/models")
+    assert isinstance(result.render, tuple)
+    assert len(result.render) == 2
+
+    result = handle_command(repl, "/model")
+    assert isinstance(result.render, str)
+    assert "current model" in result.render
+
+
+def test_trailing_whitespace_arg(tmp_path):
+    repl, _ = _repl(tmp_path)
+
+    result_bare = handle_command(repl, "/model")
+    result_trailing = handle_command(repl, "/model ")
+    assert result_trailing.render == result_bare.render
