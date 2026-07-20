@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-07-20T03:34:34.898Z"
+last_updated: "2026-07-20T04:42:02.239Z"
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 9
+  completed_plans: 8
 ---
 
 # Project State
@@ -19,7 +19,7 @@ See: .planning/PROJECT.md (updated 2026-07-19)
 
 **Core value:** Run, configure, and steer the agent entirely from within an interactive terminal
 app — no hand-editing TOML, no restarts.
-**Current focus:** Phase 01 — tui-skeleton-live-status-line (complete; ready for Phase 2)
+**Current focus:** Phase 02 — command-palette-menus
 
 ## Milestone
 
@@ -37,6 +37,13 @@ app — no hand-editing TOML, no restarts.
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-07-20 — Plan 02-02 complete: wave-0 spike (`tests/tui/test_palette_keys.py`) resolves
+  RESEARCH Open Question 1 empirically — a permanent App-level priority `enter` Binding
+  suppresses `Input.Submitted` even when its action no-ops. **Enter-routing decision: Approach B**
+  — Plan 04 must dynamically bind/unbind `enter` only while the palette is open, never register
+  it as a permanent priority binding. `up`/`down` confirmed safe as permanent priority bindings.
+  Full suite green (190 tests).
 
 - 2026-07-20 — Plan 01-05 complete: `run_repl` now routes the default rich-capable TTY path to
   `run_tui` (lazy-imported inside the branch), with `--plain`/`AGENT86_PLAIN`/non-TTY and any

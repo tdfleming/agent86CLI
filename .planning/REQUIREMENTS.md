@@ -19,9 +19,9 @@ Requirements for the v0.6 interactive milestone. Each maps to exactly one roadma
       resolving the worker thread's approval event
 - [ ] **TUI-06**: The plain loop and `run --json` continue to work unchanged; keyring/Textual
       absence degrades gracefully to the plain loop
-- [ ] **TUI-03**: A command palette offers autocomplete over slash-commands (`/model`, `/mcp`,
+- [x] **TUI-03**: A command palette offers autocomplete over slash-commands (`/model`, `/mcp`,
       `/config`, `/cost`, `/clear`, …) and runs the selected one
-- [ ] **TUI-04**: Interactive choices are made via arrow-key selectable menus/modals
+- [x] **TUI-04**: Interactive choices are made via arrow-key selectable menus/modals
 
 ### Model & Provider Configuration
 
@@ -66,8 +66,8 @@ Deferred — acknowledged but not in this milestone's roadmap.
 | TUI-01 | Phase 1 | Complete |
 | TUI-02 | Phase 1 | Complete |
 | TUI-05 | Phase 1 | Complete |
-| TUI-03 | Phase 2 | Pending |
-| TUI-04 | Phase 2 | Pending |
+| TUI-03 | Phase 2 | Complete |
+| TUI-04 | Phase 2 | Complete |
 | SEC-01 | Phase 3 | Pending |
 | MODEL-01 | Phase 3 | Pending |
 | MODEL-02 | Phase 3 | Pending |
