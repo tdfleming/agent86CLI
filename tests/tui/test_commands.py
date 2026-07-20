@@ -112,8 +112,10 @@ def test_models_vs_model_routing(tmp_path):
     repl, _ = _repl(tmp_path)
 
     result = handle_command(repl, "/models")
-    assert isinstance(result.render, tuple)
-    assert len(result.render) == 2
+    from rich.console import Group
+
+    assert isinstance(result.render, Group)
+    assert not isinstance(result.render, tuple)
 
     result = handle_command(repl, "/model")
     assert isinstance(result.render, str)
