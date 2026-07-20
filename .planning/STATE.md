@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-07-20T03:10:12.597Z"
+last_updated: "2026-07-20T03:16:43.099Z"
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -30,13 +30,21 @@ app — no hand-editing TOML, no restarts.
 
 | Phase | Status | Plans | Progress |
 |-------|--------|-------|----------|
-| 1 — TUI Skeleton + Live Status | ◐ | 3/5 | 60% |
+| 1 — TUI Skeleton + Live Status | ◐ | 4/5 | 80% |
 | 2 — Command Palette + Menus | ○ | 0/? | 0% |
 | 3 — Secrets + Model Config | ○ | 0/? | 0% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-07-20 — Plan 01-04 complete: `Agent86App(App)` composes the RichLog transcript + streaming
+  Static line + prompt Input + `StatusFooter`; turns run on a Textual thread worker
+  (`run_turn_worker` + `post_message`), the footer stays live during processing, and
+  `ApprovalModal` resolves the worker's blocked `threading.Event` on every dismissal path —
+  proven by headless `App.run_test()` Pilot tests covering shell, live streaming, and both
+  approve/deny approval outcomes. `run_tui(cfg, resume)` is the TUI entry point. Full suite green
+  (174 tests).
 
 - 2026-07-20 — Plan 01-02 complete: `StatusFooter(Static)` reactive widget (always_update=True on
   a `StatusState` attribute) makes `format_status_line`'s working/phase branch live, and
@@ -61,4 +69,4 @@ app — no hand-editing TOML, no restarts.
 
 ## Next Step
 
-`/gsd:execute-phase 1` — continue Phase 1 (wave 2: 01-02-PLAN.md)
+`/gsd:execute-phase 1` — continue Phase 1 (wave 4: 01-05-PLAN.md)
