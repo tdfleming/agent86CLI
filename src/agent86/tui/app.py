@@ -32,7 +32,7 @@ class Agent86App(App):
     """The default interactive UI: transcript + prompt + live status footer."""
 
     BINDINGS = [
-        Binding("shift+tab", "cycle_mode", "cycle approval mode"),
+        Binding("shift+tab", "cycle_mode", "cycle approval mode", priority=True),
         Binding("up", "palette_up", show=False, priority=True),
         Binding("down", "palette_down", show=False, priority=True),
         Binding("escape", "palette_dismiss", show=False, priority=True),
@@ -268,6 +268,14 @@ class Agent86App(App):
     # ---- bindings ----------------------------------------------------------- #
 
     def action_cycle_mode(self) -> None:
+        # `shift+tab` is a priority binding (App-level, checked before focus-traversal and the
+        # focused widget's own bindings — see RESEARCH/02-02-SUMMARY.md). While a modal
+        # (ApprovalModal / ModePickerModal / ModelPickerModal) is pushed, Shift+Tab must fall
+        # through to that screen's own focus/traversal handling instead of cycling the approval
+        # mode underneath it — mirrors the `action_palette_up`/`_down`/`_dismiss` SkipAction
+        # pattern above.
+        if len(self.screen_stack) > 1:
+            raise SkipAction()
         self.repl._cycle_approval()
         self.query_one("#status", StatusFooter).status = self.repl.status
 
