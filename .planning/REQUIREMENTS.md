@@ -13,7 +13,7 @@ Requirements for the v0.6 interactive milestone. Each maps to exactly one roadma
 
 - [x] **TUI-01**: A full-screen Textual app launches as the default interactive UI (no
       subcommand), with a scrollable transcript, a prompt input, and a footer status bar
-- [ ] **TUI-02**: The status bar stays live and updates model, context %, tokens, cost, and the
+- [x] **TUI-02**: The status bar stays live and updates model, context %, tokens, cost, and the
       current phase (thinking / running tool) *while a turn is processing*
 - [x] **TUI-05**: Tool-approval requests appear as a modal dialog (replacing the inline `y/N`),
       resolving the worker thread's approval event
@@ -64,7 +64,7 @@ Deferred — acknowledged but not in this milestone's roadmap.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | TUI-01 | Phase 1 | Complete |
-| TUI-02 | Phase 1 | Pending |
+| TUI-02 | Phase 1 | Complete |
 | TUI-05 | Phase 1 | Complete |
 | TUI-03 | Phase 2 | Pending |
 | TUI-04 | Phase 2 | Pending |

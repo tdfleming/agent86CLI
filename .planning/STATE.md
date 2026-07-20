@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-07-20T03:04:49.037Z"
+last_updated: "2026-07-20T03:10:12.597Z"
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
+  completed_plans: 3
 ---
 
 # Project State
@@ -30,13 +30,23 @@ app — no hand-editing TOML, no restarts.
 
 | Phase | Status | Plans | Progress |
 |-------|--------|-------|----------|
-| 1 — TUI Skeleton + Live Status | ◐ | 1/5 | 20% |
+| 1 — TUI Skeleton + Live Status | ◐ | 3/5 | 60% |
 | 2 — Command Palette + Menus | ○ | 0/? | 0% |
 | 3 — Secrets + Model Config | ○ | 0/? | 0% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-07-20 — Plan 01-02 complete: `StatusFooter(Static)` reactive widget (always_update=True on
+  a `StatusState` attribute) makes `format_status_line`'s working/phase branch live, and
+  `ApprovalModal(ModalScreen[bool])` resolves approve/deny/escape to an explicit bool on every
+  dismissal path — proven by headless `App.run_test()` widget tests. Full suite green (170 tests).
+
+- 2026-07-20 — Plan 01-03 complete: `agent86/tui/commands.py` ports `_Repl.dispatch` slash-command
+  behavior into a `CommandResult`/`handle_command`/`startup_notes` adapter that returns renderables
+  instead of printing to stdout — proven by parity tests mirroring `tests/integration/test_repl.py`.
+  Full suite green (170 tests).
 
 - 2026-07-20 — Plan 01-01 complete: tui package skeleton, textual core-but-lazy dep, Message
   vocabulary (TurnDelta/ToolAnnounce/ApprovalRequest/TurnDone/TurnError), and the turn_bridge
