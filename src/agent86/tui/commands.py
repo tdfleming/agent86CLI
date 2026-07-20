@@ -67,6 +67,7 @@ def _help_table():
 
 
 def _models_tables(cfg):
+    from rich.console import Group
     from rich.table import Table
 
     from agent86.types import ModelRef
@@ -94,7 +95,7 @@ def _models_tables(cfg):
             valid = "[red]invalid[/red]"
         roles.add_row(role, ref, valid)
 
-    return table, roles
+    return Group(table, roles)
 
 
 def _set_mode(repl, arg: str) -> str:
