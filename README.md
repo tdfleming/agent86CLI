@@ -12,21 +12,25 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**v0.2 — the full harness plus an interactive UX.** A five-tier agentic harness that runs on
-remote or local models and uses tools, skills, MCP servers, and sub-agents. Every pillar and
-tier from *The Agentic Harness* is implemented, tested (107 tests), and verified live against a
-local model.
+**v0.5 — the full harness, an interactive UX, and cloud providers.** A five-tier agentic harness
+that runs on remote or local models and uses tools, skills, MCP servers, and sub-agents. Every
+pillar and tier from *The Agentic Harness* is implemented, tested (141 tests), and verified live
+against a local model.
 
 | Tier / Pillar | What's there |
 |---|---|
 | **Tier 1 Gateway** | session lifecycle, input sanitization |
 | **Tier 2 Orchestration** (Pillar 1) | ReAct loop, FSM state, dynamic routing, circuit breakers |
-| **Tier 3 Cognitive** | Anthropic · OpenAI-compatible · Ollama · llama.cpp/LM Studio; prompt compilation; token budgeting |
+| **Tier 3 Cognitive** | Anthropic · OpenAI-compatible (incl. built-in OpenRouter & Groq) · Ollama · llama.cpp/LM Studio; prompt compilation; token budgeting |
 | **Tier 4 Tools** (Pillar 3) | built-ins (files, shell, python, web) + memory/skill/delegate + MCP; **subprocess or Docker** sandbox |
 | **Tier 5 Guardrails/Obs** (Pillar 4) | ingress/egress scanning, HITL approvals, circuit breakers, flight recorder, OpenTelemetry |
-| **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence |
+| **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence, automatic retention/pruning |
 | **Multi-agent** | sub-agents via `delegate`, message envelopes, broker, supervisor orchestrator |
-| **Interactive REPL** (v0.2) | persistent status line, processing spinner, Shift+Tab approval-mode cycle; plain fallback for any terminal |
+| **Interactive REPL** | persistent status line, processing spinner, Shift+Tab approval-mode cycle, live `/model` switching; plain fallback for any terminal |
+
+Since v0.2: first-class cloud providers (OpenRouter/Groq built in, any OpenAI-compatible endpoint
+via config), live mid-session `/model` switching, automatic memory retention/pruning, and cleaner
+`web_fetch` (main-content extraction, model-friendly sizing).
 
 Optional heavy deps degrade gracefully: no torch → hash-embedder memory; no Docker → subprocess
 sandbox; no `mcp` → MCP disabled. Install extras as needed: `pip install -e ".[all]"`.
