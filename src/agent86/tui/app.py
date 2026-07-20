@@ -10,14 +10,18 @@ whatever calls `run_tui` — never at `cli.py` module-import time (RESEARCH Pitf
 from __future__ import annotations
 
 from textual import work
+from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Input, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 
 from agent86.config import Config
-from agent86.tui.commands import handle_command, startup_notes
+from agent86.tui.commands import COMMANDS, find_command, handle_command, startup_notes
 from agent86.tui.messages import ApprovalRequest, ToolAnnounce, TurnDelta, TurnDone, TurnError
 from agent86.tui.screens.approval import ApprovalModal
+from agent86.tui.screens.mode_picker import ModePickerModal
+from agent86.tui.screens.model_picker import ModelPickerModal, model_choices
 from agent86.tui.turn_bridge import run_turn_worker
 from agent86.tui.widgets.status_footer import StatusFooter
 
@@ -27,7 +31,12 @@ __all__ = ["Agent86App", "run_tui"]
 class Agent86App(App):
     """The default interactive UI: transcript + prompt + live status footer."""
 
-    BINDINGS = [Binding("shift+tab", "cycle_mode", "cycle approval mode")]
+    BINDINGS = [
+        Binding("shift+tab", "cycle_mode", "cycle approval mode"),
+        Binding("up", "palette_up", show=False, priority=True),
+        Binding("down", "palette_down", show=False, priority=True),
+        Binding("escape", "palette_dismiss", show=False, priority=True),
+    ]
 
     CSS = """
     #transcript {
@@ -35,6 +44,11 @@ class Agent86App(App):
     }
     #stream {
         height: auto;
+    }
+    #palette {
+        display: none;
+        max-height: 10;
+        border: round $accent;
     }
     #status {
         dock: bottom;
@@ -51,6 +65,7 @@ class Agent86App(App):
     def compose(self) -> ComposeResult:
         yield RichLog(id="transcript", markup=True, wrap=True, highlight=False)
         yield Static(id="stream")
+        yield OptionList(id="palette")
         yield Input(id="prompt", placeholder="agent86> ")
         yield StatusFooter(id="status")
 
@@ -59,16 +74,52 @@ class Agent86App(App):
         log = self.query_one("#transcript", RichLog)
         for note in startup_notes(self.repl):
             log.write(f"[dim]{note}[/dim]")
+        self.query_one("#palette", OptionList).display = False
         self.query_one("#prompt", Input).focus()
+
+    # ---- palette ----------------------------------------------------------- #
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "prompt":
+            return
+        self._sync_palette(event.value)
+
+    def _sync_palette(self, text: str) -> None:
+        palette = self.query_one("#palette", OptionList)
+        if not text.startswith("/") or " " in text:
+            palette.display = False
+            return
+        matches = [c for c in COMMANDS if c.name.startswith(text)]
+        palette.display = bool(matches)
+        if matches:
+            palette.clear_options()
+            palette.add_options(
+                Option(f"{c.name}  [dim]{c.description}[/dim]", id=c.name) for c in matches
+            )
+            palette.highlighted = 0
 
     # ---- input submission ------------------------------------------------ #
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Approach B (02-02-SUMMARY.md): no permanent priority `enter` Binding is registered at
+        # the App level, so Input.Submitted still fires normally when the palette is closed. An
+        # open palette consumes this Enter itself, before the typed-line dispatch below.
+        palette = self.query_one("#palette", OptionList)
+        if palette.display:
+            self._select_palette()
+            return
         line = event.value.strip()
         event.input.value = ""
         if not line:
             return
+        self._dispatch_line(line)
 
+    def _dispatch_line(self, line: str) -> None:
+        """Run one command/turn line through the existing execution path.
+
+        Shared by typed Input submission and picker-chained selections (palette / /model /
+        /mode) so both paths behave identically.
+        """
         log = self.query_one("#transcript", RichLog)
         log.write(f"[bold]> {line}[/bold]")
 
@@ -83,6 +134,74 @@ class Agent86App(App):
         if result.render is not None:
             log.write(result.render)
         self.query_one("#status", StatusFooter).status = self.repl.status
+
+    # ---- palette selection + picker chaining -------------------------------- #
+
+    def action_palette_up(self) -> None:
+        # These bindings are registered with priority=True (App-level, checked before the
+        # focused widget's own bindings — see RESEARCH/02-02-SUMMARY.md). When the palette is
+        # hidden — e.g. while a ModePickerModal/ModelPickerModal is on top and its RadioSet /
+        # OptionList owns up/down/escape — raising SkipAction lets the key event fall through to
+        # that widget's own binding instead of being silently swallowed here.
+        palette = self.query_one("#palette", OptionList)
+        if not palette.display:
+            raise SkipAction()
+        palette.action_cursor_up()
+
+    def action_palette_down(self) -> None:
+        palette = self.query_one("#palette", OptionList)
+        if not palette.display:
+            raise SkipAction()
+        palette.action_cursor_down()
+
+    def action_palette_dismiss(self) -> None:
+        palette = self.query_one("#palette", OptionList)
+        if not palette.display:
+            raise SkipAction()
+        palette.display = False
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id == "palette":
+            self._select_palette()
+
+    def _select_palette(self) -> None:
+        palette = self.query_one("#palette", OptionList)
+        highlighted = palette.highlighted
+        if highlighted is None:
+            palette.display = False
+            return
+        option = palette.get_option_at_index(highlighted)
+        name = option.id
+        palette.display = False
+        prompt = self.query_one("#prompt", Input)
+        prompt.value = ""
+        entry = find_command(name)
+        if entry is not None:
+            self._run_or_chain(entry)
+
+    def _run_or_chain(self, entry) -> None:  # noqa: ANN001
+        if entry.needs_choice == "mode":
+            self.push_screen(
+                ModePickerModal(self.repl.harness.gate.mode.value), self._on_mode_picked
+            )
+        elif entry.needs_choice == "model":
+            choices = model_choices(self.repl.cfg)
+            if not choices:
+                prompt = self.query_one("#prompt", Input)
+                prompt.value = "/model "
+                prompt.focus()
+                return
+            self.push_screen(ModelPickerModal(choices), self._on_model_picked)
+        else:
+            self._dispatch_line(entry.name)
+
+    def _on_mode_picked(self, value: str | None) -> None:
+        if value is not None:
+            self._dispatch_line(f"/mode {value}")
+
+    def _on_model_picked(self, value: str | None) -> None:
+        if value is not None:
+            self._dispatch_line(f"/model {value}")
 
     # ---- turn worker ------------------------------------------------------ #
 
