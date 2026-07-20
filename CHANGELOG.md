@@ -6,6 +6,8 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-07-19
+
 ### Changed
 
 - **README status refreshed to v0.5.** The status block still described v0.2 (107 tests) and
@@ -297,6 +299,8 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.5.5]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.5
+[0.5.4]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.4
 [0.5.3]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.3
 [0.5.2]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.2
 [0.5.1]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.1
