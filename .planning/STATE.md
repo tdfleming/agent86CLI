@@ -17,7 +17,7 @@ app — no hand-editing TOML, no restarts.
 
 | Phase | Status | Plans | Progress |
 |-------|--------|-------|----------|
-| 1 — TUI Skeleton + Live Status | ○ | 0/? | 0% |
+| 1 — TUI Skeleton + Live Status | ◐ | 0/5 | 0% |
 | 2 — Command Palette + Menus | ○ | 0/? | 0% |
 | 3 — Secrets + Model Config | ○ | 0/? | 0% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
@@ -25,9 +25,11 @@ app — no hand-editing TOML, no restarts.
 
 ## Recent Activity
 
+- 2026-07-19 — Phase 1 planned: 5 plans across 4 waves (foundation/turn-bridge → widgets+commands →
+  app shell → entry routing/fallback). Wave 0 test scaffolds included per 01-VALIDATION.md.
 - 2026-07-19 — Project initialized from a pre-agreed plan (brownfield; codebase already read in
   session, formal mapping skipped). PROJECT.md, config.json, REQUIREMENTS.md, ROADMAP.md written.
 
 ## Next Step
 
-`/gsd:plan-phase 1` — plan Phase 1 (TUI Skeleton + Live Status Line)
+`/gsd:execute-phase 1` — execute Phase 1 (start with wave 1: 01-01-PLAN.md)
