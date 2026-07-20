@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-07-20T04:42:02.239Z"
+last_updated: "2026-07-20T05:40:00.000Z"
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -19,7 +19,7 @@ See: .planning/PROJECT.md (updated 2026-07-19)
 
 **Core value:** Run, configure, and steer the agent entirely from within an interactive terminal
 app — no hand-editing TOML, no restarts.
-**Current focus:** Phase 02 — command-palette-menus
+**Current focus:** Phase 02 — command-palette-menus (complete; next: Phase 3 — Secrets + Model Config)
 
 ## Milestone
 
@@ -31,12 +31,23 @@ app — no hand-editing TOML, no restarts.
 | Phase | Status | Plans | Progress |
 |-------|--------|-------|----------|
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
-| 2 — Command Palette + Menus | ○ | 0/? | 0% |
+| 2 — Command Palette + Menus | ● | 4/4 | 100% |
 | 3 — Secrets + Model Config | ○ | 0/? | 0% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-07-20 — Plan 02-04 complete (Phase 2 now feature-complete, 4/4 plans): `#palette`
+  `OptionList` wired into `Agent86App` — typing `/` filters `COMMANDS` by prefix into a dropdown;
+  priority `up`/`down`/`escape` App bindings navigate/dismiss it, each raising `SkipAction` when
+  hidden so the key falls through to a focused modal's own widget (a bug found while wiring
+  picker chaining — the same footgun 02-02 proved for `enter`, now closed for arrow keys too).
+  Enter-routing follows the 02-02 Approach B decision exactly: no permanent priority `enter`
+  binding; `on_input_submitted` checks the palette first, otherwise dispatches unchanged.
+  Selecting `/model`/`/mode` chains into the Plan 03 pickers via `_run_or_chain`; every path —
+  typed, plain-turn, or picker-chained — now funnels through one shared `_dispatch_line` helper.
+  Full suite green (196 tests) including D-11 backward-compat and lazy-import guards.
 
 - 2026-07-20 — Plan 02-01 complete: `tui/commands.py::handle_command` refactored from a flat
   if/else chain into a declarative `COMMANDS: list[CommandEntry]` registry (`CommandEntry` =
@@ -91,5 +102,5 @@ app — no hand-editing TOML, no restarts.
 
 ## Next Step
 
-Phase 1 complete (5/5 plans). Next: `/gsd:execute-phase 2` — Command Palette + Menus (after
-manual Windows Terminal verification of Phase 1 per 01-VALIDATION.md).
+Phase 2 complete (4/4 plans) — TUI-03 and TUI-04 delivered. Next: `/gsd:execute-phase 3` —
+Secrets + Model Config.

@@ -6,7 +6,7 @@
 | # | Phase | Goal | Requirements | Success Criteria |
 |---|-------|------|--------------|------------------|
 | 1 | TUI Skeleton + Live Status | 5/5 | Complete   | 2026-07-20 |
-| 2 | Command Palette + Menus | 3/4 | In Progress|  |
+| 2 | Command Palette + Menus | 4/4 | Complete   | 2026-07-20 |
 | 3 | Secrets + Model Config | Keyring-backed keys; add/switch/test models with config write-back | SEC-01, MODEL-01, MODEL-02 | 4 |
 | 4 | MCP Config UI | Add/remove/enable/test MCP servers from within the app | MCP-01 | 3 |
 | 5 | Packaging & Hardening | Lazy-import packaging, graceful degradation, docs, release | TUI-06 | 4 |
@@ -54,11 +54,11 @@ and arrow-key selectable menus/modals.
    rather than requiring typed arguments.
 3. All existing slash-commands are reachable via the palette with behavior unchanged.
 
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 - [x] 02-01-PLAN.md — Declarative COMMANDS registry backing dispatch + /help (wave 1)
 - [x] 02-02-PLAN.md — Wave-0 spike: priority `enter` binding vs Input.Submitted fallthrough (wave 1)
 - [x] 02-03-PLAN.md — Arrow-key ModePicker (RadioSet) + ModelPicker (OptionList) + model_choices source (wave 1)
-- [ ] 02-04-PLAN.md — `/`-triggered palette dropdown + key routing + picker chaining in app.py (wave 2)
+- [x] 02-04-PLAN.md — `/`-triggered palette dropdown + key routing + picker chaining in app.py (wave 2)
 
 ### Phase 3: Secrets + Model/Provider Config
 **Goal:** Keyring-backed API keys and an in-app model-config modal that lists, switches, adds, and
