@@ -38,6 +38,14 @@ app — no hand-editing TOML, no restarts.
 
 ## Recent Activity
 
+- 2026-07-20 — Plan 02-01 complete: `tui/commands.py::handle_command` refactored from a flat
+  if/else chain into a declarative `COMMANDS: list[CommandEntry]` registry (`CommandEntry` =
+  name/usage/description/handler/needs_choice/terminal) with `find_command` lookup; `_help_table`
+  now renders from `COMMANDS` instead of hand-written rows, so `/help` and the palette can never
+  drift. `needs_choice` is `"model"` on `/model` and `"mode"` on `/mode` for Plan 03/04 to consume.
+  All existing behavior preserved byte-for-byte (including the `/quit` alias and the `/models` vs
+  `/model` prefix edge case), pinned by three new regression tests. Full suite green (190 tests).
+
 - 2026-07-20 — Plan 02-02 complete: wave-0 spike (`tests/tui/test_palette_keys.py`) resolves
   RESEARCH Open Question 1 empirically — a permanent App-level priority `enter` Binding
   suppresses `Input.Submitted` even when its action no-ops. **Enter-routing decision: Approach B**
