@@ -54,6 +54,12 @@ and arrow-key selectable menus/modals.
    rather than requiring typed arguments.
 3. All existing slash-commands are reachable via the palette with behavior unchanged.
 
+**Plans:** 4 plans across 2 waves
+- [ ] 02-01-PLAN.md — Declarative COMMANDS registry backing dispatch + /help (wave 1)
+- [ ] 02-02-PLAN.md — Wave-0 spike: priority `enter` binding vs Input.Submitted fallthrough (wave 1)
+- [ ] 02-03-PLAN.md — Arrow-key ModePicker (RadioSet) + ModelPicker (OptionList) + model_choices source (wave 1)
+- [ ] 02-04-PLAN.md — `/`-triggered palette dropdown + key routing + picker chaining in app.py (wave 2)
+
 ### Phase 3: Secrets + Model/Provider Config
 **Goal:** Keyring-backed API keys and an in-app model-config modal that lists, switches, adds, and
 live-tests providers/models, writing changes back to user config non-destructively.
