@@ -6,6 +6,11 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **README status header bumped to v0.5.6** and the tagline now notes remote MCP, reflecting
+  the SSE/streamable-HTTP transport support. Docs-only; no behavior change.
+
 ## [0.5.6] - 2026-07-19
 
 ### Added
