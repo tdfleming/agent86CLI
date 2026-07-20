@@ -6,6 +6,13 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **`mcp` is now a dev dependency**, so CI installs it with `.[dev]` and the live MCP transport
+  test (`test_mcp_live.py`) runs in CI instead of skipping. It also means CI's mypy now
+  type-checks `tools/mcp_client.py` against the real (py.typed) `mcp` API rather than treating it
+  as an ignored missing import.
+
 ## [0.5.8] - 2026-07-19
 
 ### Added
