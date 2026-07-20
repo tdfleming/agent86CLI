@@ -6,10 +6,12 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-07-19
+
 ### Changed
 
-- **README status header bumped to v0.5.6** and the tagline now notes remote MCP, reflecting
-  the SSE/streamable-HTTP transport support. Docs-only; no behavior change.
+- **README status header synced to the current release** and the tagline now notes remote MCP,
+  reflecting the SSE/streamable-HTTP transport support. Docs-only; no behavior change.
 
 ## [0.5.6] - 2026-07-19
 
@@ -318,6 +320,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.5.7]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.7
 [0.5.6]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.6
 [0.5.5]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.5
 [0.5.4]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.4
