@@ -14,7 +14,7 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 **v0.5 — the full harness, an interactive UX, and cloud providers.** A five-tier agentic harness
 that runs on remote or local models and uses tools, skills, MCP servers, and sub-agents. Every
-pillar and tier from *The Agentic Harness* is implemented, tested (141 tests), and verified live
+pillar and tier from *The Agentic Harness* is implemented, tested (156 tests), and verified live
 against a local model.
 
 | Tier / Pillar | What's there |
@@ -22,7 +22,7 @@ against a local model.
 | **Tier 1 Gateway** | session lifecycle, input sanitization |
 | **Tier 2 Orchestration** (Pillar 1) | ReAct loop, FSM state, dynamic routing, circuit breakers |
 | **Tier 3 Cognitive** | Anthropic · OpenAI-compatible (incl. built-in OpenRouter & Groq) · Ollama · llama.cpp/LM Studio; prompt compilation; token budgeting |
-| **Tier 4 Tools** (Pillar 3) | built-ins (files, shell, python, web) + memory/skill/delegate + MCP; **subprocess or Docker** sandbox |
+| **Tier 4 Tools** (Pillar 3) | built-ins (files, shell, python, web) + memory/skill/delegate + MCP (stdio · SSE · streamable HTTP); **subprocess or Docker** sandbox |
 | **Tier 5 Guardrails/Obs** (Pillar 4) | ingress/egress scanning, HITL approvals, circuit breakers, flight recorder, OpenTelemetry |
 | **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence, automatic retention/pruning |
 | **Multi-agent** | sub-agents via `delegate`, message envelopes, broker, supervisor orchestrator |
@@ -104,6 +104,34 @@ agent86 -m "localvllm:my-model" run "hello"
 
 To override an endpoint (e.g. point `openai` at an Azure deployment), set its `base_url`
 and `api_key_env` under `[providers.openai]`. Run `agent86 models` to see what's configured.
+
+## Connecting MCP servers
+
+Each `[mcp.servers.<name>]` block mounts an external [MCP](https://modelcontextprotocol.io)
+server's tools as first-class harness tools (same schema, approval gating, and tracing).
+Servers are reached over one of three transports:
+
+```toml
+# stdio — spawn a local subprocess (transport inferred from `command`)
+[mcp.servers.files]
+command = "npx"
+args    = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+# streamable HTTP — connect to a remote URL (the default when `url` is set)
+[mcp.servers.remote]
+url = "https://mcp.example.com/mcp"
+[mcp.servers.remote.headers]      # optional auth / custom headers
+Authorization = "Bearer sk-..."
+
+# SSE — the legacy HTTP transport; opt in explicitly
+[mcp.servers.legacy]
+url       = "https://mcp.example.com/sse"
+transport = "sse"
+```
+
+Set exactly one of `command` (stdio) or `url` (sse/http); `transport` is inferred but can be
+given explicitly (`stdio` | `sse` | `http`). Inspect with `agent86 mcp list` and
+`agent86 mcp tools`. Requires the `mcp` extra (`pip install -e ".[mcp]"`).
 
 ## Install (development)
 

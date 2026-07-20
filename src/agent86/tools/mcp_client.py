@@ -1,11 +1,13 @@
 """MCP client (Tier 4) — mount external Model Context Protocol server tools.
 
-agent86 acts as an MCP *client*: for each configured server it spawns the process, lists its
+agent86 acts as an MCP *client*: for each configured server it opens a transport, lists its
 tools, and wraps each as a first-class :class:`Tool` in the registry — so MCP tools get the
 same schema advertisement, approval gating, and observability as built-ins.
 
-The MCP Python SDK is async and its stdio sessions are long-lived; this manager runs a
-dedicated background event loop so the synchronous harness can call MCP tools via
+Three transports are supported: ``stdio`` (spawn a local subprocess), ``sse``, and ``http``
+(streamable HTTP) — the last two connect to a remote ``url`` with optional auth ``headers``.
+The MCP Python SDK is async and its sessions are long-lived; this manager runs a dedicated
+background event loop so the synchronous harness can call MCP tools via
 ``run_coroutine_threadsafe``. Everything degrades gracefully: no servers configured, or the
 ``mcp`` package missing, yields zero tools and a note rather than an error.
 """
@@ -16,6 +18,7 @@ import asyncio
 import os
 import re
 import threading
+from contextlib import asynccontextmanager
 from typing import Any
 
 from agent86.config import Config, MCPServerConfig
@@ -80,8 +83,7 @@ class MCPManager:
         try:
             from contextlib import AsyncExitStack
 
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
+            from mcp import ClientSession
         except ImportError:
             self.note = (
                 'mcp package not installed; MCP tools unavailable (pip install "agent86[mcp]").'
@@ -98,12 +100,10 @@ class MCPManager:
             tools: list[MCPTool] = []
             for name, cfg in self.servers.items():
                 try:
-                    params = StdioServerParameters(
-                        command=cfg.command,
-                        args=cfg.args,
-                        env={**os.environ, **cfg.env} if cfg.env else None,
-                    )
-                    read, write = await stack.enter_async_context(stdio_client(params))
+                    streams = await stack.enter_async_context(_open_transport(cfg))
+                    # sse/stdio yield (read, write); streamable HTTP yields a 3rd
+                    # get_session_id we don't need — take the first two either way.
+                    read, write = streams[0], streams[1]
                     session = await stack.enter_async_context(ClientSession(read, write))
                     await session.initialize()
                     self._sessions[name] = session
@@ -156,6 +156,50 @@ class MCPManager:
         if self._thread:
             self._thread.join(timeout=5)
         self._loop = None
+
+
+@asynccontextmanager
+async def _streamable_http(url: str, headers: dict[str, str]) -> Any:
+    """Streamable-HTTP transport, owning the httpx client's lifecycle.
+
+    The SDK's ``streamable_http_client`` takes a caller-provided httpx client (the older
+    all-in-one ``streamablehttp_client`` is deprecated), so we create one here — carrying any
+    auth ``headers`` — and close it with the transport. Yields the transport's stream tuple.
+    """
+    import httpx
+    from mcp.client.streamable_http import streamable_http_client
+
+    async with httpx.AsyncClient(headers=headers or None) as client:
+        async with streamable_http_client(url, http_client=client) as streams:
+            yield streams
+
+
+def _open_transport(cfg: MCPServerConfig) -> Any:
+    """Return the async transport context manager for a server's configured transport.
+
+    Imports are lazy and per-transport so a server that only uses stdio never pulls in the
+    HTTP transports (and vice versa). The caller enters the returned context on the MCP loop.
+    """
+    # The config validator guarantees command/url are set for their transport; assert the
+    # invariant so the type checker can narrow away the Optional.
+    if cfg.transport == "stdio":
+        assert cfg.command is not None
+        from mcp import StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        params = StdioServerParameters(
+            command=cfg.command,
+            args=cfg.args,
+            env={**os.environ, **cfg.env} if cfg.env else None,
+        )
+        return stdio_client(params)
+    assert cfg.url is not None
+    if cfg.transport == "sse":
+        from mcp.client.sse import sse_client
+
+        return sse_client(cfg.url, headers=cfg.headers or None)
+    # "http" -> streamable HTTP (the modern successor to the SSE transport)
+    return _streamable_http(cfg.url, cfg.headers)
 
 
 def _content_to_text(result: Any) -> str:

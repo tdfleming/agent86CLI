@@ -360,8 +360,14 @@ frontier  = "anthropic:claude-opus-4-8"
 [memory]      path = "~/.agent86/memory.db"  embeddings = "sentence-transformers:all-MiniLM-L6-v2"
 [limits]      max_steps = 40  max_cost_usd = 5.0  max_wall_clock_s = 900
 
-[mcp.servers.example]  command = "npx"  args = ["-y", "some-mcp-server"]
+[mcp.servers.example]  command = "npx"  args = ["-y", "some-mcp-server"]   # stdio (local subprocess)
+[mcp.servers.remote]   url = "https://mcp.example.com/mcp"                  # streamable HTTP (transport inferred)
+[mcp.servers.remote.headers]  Authorization = "Bearer ${TOKEN}"           # optional auth headers
 ```
+
+An MCP server is reached over one of three transports: **stdio** (default — set `command`),
+**streamable HTTP** (default when `url` is set), or **SSE** (`url` + `transport = "sse"`). Exactly
+one of `command`/`url` is required; the transport is inferred but can be set explicitly.
 
 ---
 

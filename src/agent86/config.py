@@ -20,7 +20,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from agent86 import __version__
 from agent86.types import ApprovalMode
@@ -144,9 +144,41 @@ class ObservabilityConfig(BaseModel):
 
 
 class MCPServerConfig(BaseModel):
-    command: str
+    """A configured MCP server, reached over one of three transports.
+
+    ``stdio`` (default) spawns a local subprocess (``command``/``args``/``env``); ``sse`` and
+    ``http`` (streamable HTTP) connect to a remote ``url`` with optional ``headers`` (e.g. auth).
+    ``transport`` is inferred when omitted: ``stdio`` if ``command`` is set, else ``http``.
+    """
+
+    # stdio transport: spawn a subprocess
+    command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    # sse / http transports: connect to a URL (headers carry auth, etc.)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    # "stdio" | "sse" | "http"; inferred from command/url when omitted
+    transport: str | None = None
+
+    @model_validator(mode="after")
+    def _resolve_transport(self) -> MCPServerConfig:
+        has_cmd, has_url = bool(self.command), bool(self.url)
+        if has_cmd and has_url:
+            raise ValueError("MCP server sets both 'command' and 'url'; use one transport")
+        if not has_cmd and not has_url:
+            raise ValueError("MCP server needs 'command' (stdio) or 'url' (sse/http)")
+        t = (self.transport or ("stdio" if has_cmd else "http")).lower().replace("-", "_")
+        if t == "streamable_http":
+            t = "http"
+        if t not in ("stdio", "sse", "http"):
+            raise ValueError(f"unknown MCP transport '{self.transport}' (stdio|sse|http)")
+        if t == "stdio" and not has_cmd:
+            raise ValueError("stdio transport requires 'command'")
+        if t in ("sse", "http") and not has_url:
+            raise ValueError(f"{t} transport requires 'url'")
+        self.transport = t
+        return self
 
 
 def _default_providers() -> dict[str, ProviderConfig]:

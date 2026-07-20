@@ -450,9 +450,11 @@ def mcp_list_cmd(ctx: typer.Context) -> None:
         return
     table = Table(show_header=True, header_style="bold")
     table.add_column("Name")
-    table.add_column("Command")
+    table.add_column("Transport")
+    table.add_column("Endpoint", overflow="fold")
     for name, srv in cfg.mcp_servers.items():
-        table.add_row(name, " ".join([srv.command, *srv.args]))
+        endpoint = srv.url or " ".join([srv.command or "", *srv.args]).strip()
+        table.add_row(name, srv.transport or "?", endpoint)
     console.print(table)
 
 

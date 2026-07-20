@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from agent86.config import load_config
-from agent86.tools.mcp_client import MCPManager, MCPTool, _sanitize, build_mcp
+import pytest
+
+from agent86.config import MCPServerConfig, load_config
+from agent86.tools.mcp_client import MCPManager, MCPTool, _open_transport, _sanitize, build_mcp
 from agent86.types import ToolCall
 
 
@@ -50,3 +52,60 @@ def test_mcp_tool_run_handles_error():
     tool = MCPTool(FailManager(), "s", "t", "", {})
     res = tool.run(ToolCall(id="1", name="x", arguments={}), ctx=None)
     assert not res.ok and "boom" in (res.error or "")
+
+
+# --- transport config: inference & validation ------------------------------- #
+
+
+def test_transport_defaults_to_stdio_for_command():
+    assert MCPServerConfig(command="mcp-server").transport == "stdio"
+
+
+def test_transport_defaults_to_http_for_url():
+    assert MCPServerConfig(url="https://example.com/mcp").transport == "http"
+
+
+def test_transport_streamable_http_alias_normalizes():
+    cfg = MCPServerConfig(url="https://x/mcp", transport="streamable-http")
+    assert cfg.transport == "http"
+
+
+def test_transport_sse_explicit():
+    assert MCPServerConfig(url="https://x/sse", transport="sse").transport == "sse"
+
+
+def test_rejects_both_command_and_url():
+    with pytest.raises(ValueError, match="both"):
+        MCPServerConfig(command="x", url="https://y/mcp")
+
+
+def test_rejects_neither_command_nor_url():
+    with pytest.raises(ValueError, match="command.*stdio.*url|url.*sse"):
+        MCPServerConfig()
+
+
+def test_rejects_unknown_transport():
+    with pytest.raises(ValueError, match="unknown MCP transport"):
+        MCPServerConfig(url="https://x", transport="carrier-pigeon")
+
+
+def test_rejects_stdio_without_command():
+    with pytest.raises(ValueError):
+        MCPServerConfig(url="https://x", transport="stdio")
+
+
+def test_rejects_http_without_url():
+    with pytest.raises(ValueError):
+        MCPServerConfig(command="x", transport="http")
+
+
+def test_open_transport_selects_client_per_transport():
+    # stdio -> a stdio_client context manager; url transports -> their respective clients.
+    stdio_cm = _open_transport(MCPServerConfig(command="echo", args=["hi"]))
+    assert "stdio" in type(stdio_cm).__module__ or hasattr(stdio_cm, "__aenter__")
+
+    sse_cm = _open_transport(MCPServerConfig(url="https://x/sse", transport="sse"))
+    assert hasattr(sse_cm, "__aenter__")
+
+    http_cm = _open_transport(MCPServerConfig(url="https://x/mcp", transport="http"))
+    assert hasattr(http_cm, "__aenter__")

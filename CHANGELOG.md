@@ -6,6 +6,20 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-07-19
+
+### Added
+
+- **MCP servers over SSE and streamable HTTP, not just stdio.** An `[mcp.servers.<name>]` block
+  can now point at a remote `url` (with optional auth `headers`) instead of spawning a local
+  `command`. Three transports are supported: `stdio` (subprocess, the default when `command` is
+  set), `http` (streamable HTTP, the default when `url` is set), and `sse` (opt in with
+  `transport = "sse"`). Exactly one of `command`/`url` is required and the transport is inferred,
+  with explicit `transport` and clear validation errors for bad combinations. Remote tools are
+  mounted with the same schema, approval gating, and tracing as stdio ones. `agent86 mcp list`
+  now shows each server's transport and endpoint. The streamable-HTTP path uses the SDK's current
+  `streamable_http_client` (owning its httpx client), avoiding the deprecated all-in-one helper.
+
 ## [0.5.5] - 2026-07-19
 
 ### Changed
@@ -299,6 +313,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.5.6]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.6
 [0.5.5]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.5
 [0.5.4]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.4
 [0.5.3]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.3
