@@ -20,6 +20,10 @@ TOML or restarting.
 
 <!-- Inferred from existing v0.5.8 code — shipped and relied upon. -->
 
+- ✓ **TUI-01**: Full-screen Textual app is the default interactive UI (transcript + input +
+  footer, slash-command parity) — Phase 1
+- ✓ **TUI-02**: Status bar stays live during turn processing (model/ctx%/tokens/cost/phase) — Phase 1
+- ✓ **TUI-05**: Tool-approval requests use a modal dialog that unblocks the worker thread — Phase 1
 - ✓ Interactive REPL (rich prompt_toolkit loop + plain fallback) — existing
 - ✓ One-shot `run` command with `--json` for scripting — existing
 - ✓ Layered TOML config (user → project → env → flags), Pydantic-validated — existing
@@ -33,11 +37,10 @@ TOML or restarting.
 
 <!-- This milestone. Hypotheses until shipped. -->
 
-- [ ] **TUI-01**: Full-screen Textual app replaces the rich REPL as the default interactive UI
-- [ ] **TUI-02**: Status line stays live and updates (model, ctx%, tokens, cost, phase) *during*
-      turn processing, not just at the prompt
 - [ ] **TUI-03**: Command palette with autocomplete for slash-commands
 - [ ] **TUI-04**: Arrow-key selectable menus/modals for interactive choices
+- [ ] **TUI-06**: Plain loop and `run --json` keep working; keyring/Textual absence degrades
+      gracefully (fallback landed in Phase 1; formal packaging/hardening in Phase 5)
 - [ ] **MODEL-01**: Add / switch / test model providers and models from within the CLI
 - [ ] **MODEL-02**: Config changes written back to `~/.agent86/config.toml` non-destructively
 - [ ] **SEC-01**: API keys stored in the OS keyring (env vars still take precedence)
@@ -82,7 +85,8 @@ TOML or restarting.
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Full-screen **Textual** TUI (vs prompt_toolkit Application or incremental Rich) | Most Claude-Code-like; live footer during processing falls out of the async event loop | — Pending |
+| Full-screen **Textual** TUI (vs prompt_toolkit Application or incremental Rich) | Most Claude-Code-like; live footer during processing falls out of the async event loop | ✓ Good (Phase 1) |
+| Reuse threaded turn bridge: `run_worker(thread=True)` + `post_message`; Event-based approval (not `push_screen_wait`) | Approval + streaming already solved in `_run_turn_rich`; avoids under-documented async-worker API | ✓ Good (Phase 1) |
 | Secrets in **OS keyring** (vs env-only or encrypted file) | Safe default, no hand-rolled crypto, env still wins for CI | — Pending |
 | Config writes default to **user** scope (`~/.agent86`), project toggle offered | Applies across projects; repo-specific settings opt-in | — Pending |
 | New deps **lazy-imported**; Textual a core-but-lazy dep | Preserve fast cold-start for `run`/`--plain` | — Pending |
@@ -106,4 +110,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-19 after initialization*
+*Last updated: 2026-07-20 after Phase 1 (TUI Skeleton + Live Status Line)*

@@ -1,8 +1,8 @@
 ---
 phase: 01-tui-skeleton-live-status-line
 verified: 2026-07-19T00:00:00Z
-status: human_needed
-score: 4/4 must-haves verified (automated); 1 item requires human verification
+status: passed
+score: 4/4 must-haves verified (automated); human verification approved 2026-07-19
 human_verification:
   - test: "Run `agent86` in a real terminal (Windows Terminal), submit a tool-using prompt, and watch the footer live"
     expected: "Footer animates through 'thinking'/'running <tool>' while the turn runs; streamed text is readable and doesn't flicker/tear; Shift+Tab visibly flips the approval mode segment; the approval modal renders centered and legibly"
