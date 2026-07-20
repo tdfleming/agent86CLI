@@ -5,7 +5,7 @@
 
 | # | Phase | Goal | Requirements | Success Criteria |
 |---|-------|------|--------------|------------------|
-| 1 | TUI Skeleton + Live Status | 3/5 | In Progress|  |
+| 1 | TUI Skeleton + Live Status | 5/5 | Complete   | 2026-07-20 |
 | 2 | Command Palette + Menus | Autocompleting slash-command palette and arrow-key menus | TUI-03, TUI-04 | 3 |
 | 3 | Secrets + Model Config | Keyring-backed keys; add/switch/test models with config write-back | SEC-01, MODEL-01, MODEL-02 | 4 |
 | 4 | MCP Config UI | Add/remove/enable/test MCP servers from within the app | MCP-01 | 3 |
@@ -34,12 +34,12 @@ threaded turn bridge, with a footer status bar that updates continuously while a
 **Why first:** Proves the load-bearing architecture (async Textual ↔ sync threaded harness
 generator + modal approval) and delivers the headline "live status line" on its own.
 
-**Plans:** 3/5 plans executed
+**Plans:** 5/5 plans complete
 - [x] 01-01-PLAN.md — Foundation: textual dep, tui package skeleton, messages, turn_bridge, Wave 0 scaffolds (wave 1)
 - [x] 01-02-PLAN.md — StatusFooter reactive widget + ApprovalModal screen (wave 2)
 - [x] 01-03-PLAN.md — Slash-command adapter (commands.py) with renderable output (wave 2)
 - [x] 01-04-PLAN.md — Agent86App + run_tui: shell, worker turn bridge, live footer, modal, bindings (wave 3)
-- [ ] 01-05-PLAN.md — Entry routing in run_repl to the TUI with graceful plain-loop fallback (wave 4)
+- [x] 01-05-PLAN.md — Entry routing in run_repl to the TUI with graceful plain-loop fallback (wave 4)
 
 ### Phase 2: Command Palette + Menus
 **Goal:** Replace hand-parsed slash-command strings with a Textual command palette (autocomplete)
