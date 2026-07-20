@@ -38,6 +38,15 @@ app — no hand-editing TOML, no restarts.
 
 ## Recent Activity
 
+- 2026-07-20 — Quick task 260720-1rs complete: fixed Shift+Tab silently doing nothing in the TUI
+  instead of cycling the approval mode. Root cause: Textual's `App` ships a default `shift+tab`
+  binding for focus traversal that intercepted the key ahead of `Agent86App`'s `cycle_mode`
+  binding whenever the prompt `Input` was focused — the same footgun 02-02 documented for `enter`.
+  Fixed by marking the binding `priority=True` and guarding `action_cycle_mode` with `SkipAction`
+  when a modal is pushed, mirroring the existing `action_palette_up`/`_down`/`_dismiss` pattern.
+  New regression test presses the real key via `pilot.press("shift+tab")` (confirmed to fail
+  pre-fix, pass post-fix). Full suite green (39 TUI tests).
+
 - 2026-07-20 — Quick task 260720-1jw complete: fixed the TUI `/models` command printing
   `<rich.table.Table object at 0x...>` reprs. Root cause: `_models_tables` returned a tuple
   `(table, roles)` but `CommandResult.render` must be a single renderable and `RichLog.write`
@@ -111,6 +120,7 @@ app — no hand-editing TOML, no restarts.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260720-1jw | Fix TUI /models rendering bug — wrap tables in a Group | 2026-07-20 | 47da657 | [260720-1jw-fix-tui-models-rendering-bug-wrap-tables](./quick/260720-1jw-fix-tui-models-rendering-bug-wrap-tables/) |
+| 260720-1rs | Fix TUI shift+tab not cycling approval mode — priority binding | 2026-07-20 | 2050765 | [260720-1rs-fix-tui-shift-tab-not-cycling-approval-m](./quick/260720-1rs-fix-tui-shift-tab-not-cycling-approval-m/) |
 
 ## Next Step
 
