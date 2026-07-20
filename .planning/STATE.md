@@ -38,6 +38,12 @@ app — no hand-editing TOML, no restarts.
 
 ## Recent Activity
 
+- 2026-07-20 — Quick task 260720-1jw complete: fixed the TUI `/models` command printing
+  `<rich.table.Table object at 0x...>` reprs. Root cause: `_models_tables` returned a tuple
+  `(table, roles)` but `CommandResult.render` must be a single renderable and `RichLog.write`
+  stringifies a non-renderable tuple. Fixed by returning `Group(table, roles)`; pinning test
+  updated. Full suite green (196 tests).
+
 - 2026-07-20 — Plan 02-04 complete (Phase 2 now feature-complete, 4/4 plans): `#palette`
   `OptionList` wired into `Agent86App` — typing `/` filters `COMMANDS` by prefix into a dropdown;
   priority `up`/`down`/`escape` App bindings navigate/dismiss it, each raising `SkipAction` when
@@ -99,6 +105,12 @@ app — no hand-editing TOML, no restarts.
 
 - 2026-07-19 — Project initialized from a pre-agreed plan (brownfield; codebase already read in
   session, formal mapping skipped). PROJECT.md, config.json, REQUIREMENTS.md, ROADMAP.md written.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260720-1jw | Fix TUI /models rendering bug — wrap tables in a Group | 2026-07-20 | 47da657 | [260720-1jw-fix-tui-models-rendering-bug-wrap-tables](./quick/260720-1jw-fix-tui-models-rendering-bug-wrap-tables/) |
 
 ## Next Step
 
