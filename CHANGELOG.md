@@ -6,6 +6,17 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-07-19
+
+### Added
+
+- **Live MCP transport test.** A new `tests/integration/test_mcp_live.py` spins up a real FastMCP
+  server in a subprocess and drives `MCPManager` against it end-to-end over both remote
+  transports — connect, `list_tools`, and a real `call_tool` round trip — exercising the
+  `_streamable_http` / `sse_client` code that mocked unit tests can't reach. The module skips
+  when the `mcp` extra isn't installed (e.g. CI's minimal `.[dev]` install), so it runs locally
+  and under `.[all]` without adding a subprocess/port dependency to CI.
+
 ## [0.5.7] - 2026-07-19
 
 ### Changed
@@ -320,6 +331,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.5.8]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.8
 [0.5.7]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.7
 [0.5.6]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.6
 [0.5.5]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.5

@@ -12,9 +12,9 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**v0.5.7 — the full harness, an interactive UX, cloud providers, and remote MCP.** A five-tier agentic harness
+**v0.5.8 — the full harness, an interactive UX, cloud providers, and remote MCP.** A five-tier agentic harness
 that runs on remote or local models and uses tools, skills, MCP servers, and sub-agents. Every
-pillar and tier from *The Agentic Harness* is implemented, tested (156 tests), and verified live
+pillar and tier from *The Agentic Harness* is implemented, tested (158 tests), and verified live
 against a local model.
 
 | Tier / Pillar | What's there |
