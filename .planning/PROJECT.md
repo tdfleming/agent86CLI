@@ -24,6 +24,10 @@ TOML or restarting.
   footer, slash-command parity) — Phase 1
 - ✓ **TUI-02**: Status bar stays live during turn processing (model/ctx%/tokens/cost/phase) — Phase 1
 - ✓ **TUI-05**: Tool-approval requests use a modal dialog that unblocks the worker thread — Phase 1
+- ✓ **TUI-03**: Command palette with autocomplete for slash-commands (declarative `COMMANDS`
+  registry + `/`-triggered `OptionList` dropdown) — Phase 2
+- ✓ **TUI-04**: Arrow-key selectable menus/modals for interactive choices (`ModePickerModal`
+  RadioSet + `ModelPickerModal` OptionList, chained from palette selection) — Phase 2
 - ✓ Interactive REPL (rich prompt_toolkit loop + plain fallback) — existing
 - ✓ One-shot `run` command with `--json` for scripting — existing
 - ✓ Layered TOML config (user → project → env → flags), Pydantic-validated — existing
@@ -37,8 +41,6 @@ TOML or restarting.
 
 <!-- This milestone. Hypotheses until shipped. -->
 
-- [ ] **TUI-03**: Command palette with autocomplete for slash-commands
-- [ ] **TUI-04**: Arrow-key selectable menus/modals for interactive choices
 - [ ] **TUI-06**: Plain loop and `run --json` keep working; keyring/Textual absence degrades
       gracefully (fallback landed in Phase 1; formal packaging/hardening in Phase 5)
 - [ ] **MODEL-01**: Add / switch / test model providers and models from within the CLI
@@ -91,6 +93,9 @@ TOML or restarting.
 | Config writes default to **user** scope (`~/.agent86`), project toggle offered | Applies across projects; repo-specific settings opt-in | — Pending |
 | New deps **lazy-imported**; Textual a core-but-lazy dep | Preserve fast cold-start for `run`/`--plain` | — Pending |
 | Reuse existing threaded turn bridge; post Textual messages | Approval + streaming already solved; don't re-derive | — Pending |
+| Single declarative `COMMANDS` registry backs dispatch, `/help`, and the palette | One source of truth — help and palette can't drift from real commands | ✓ Good (Phase 2) |
+| Enter-routing "Approach B": bind/unbind priority `enter` only while palette open (spike-proven) | Permanent priority `enter` swallows `Input.Submitted`; arrow/escape need `SkipAction` fallthrough too | ✓ Good (Phase 2) |
+| Picker callbacks synthesize `/mode`/`/model` lines through `handle_command` (not direct state mutation) | Keeps `_dispatch_line` the single execution path for typed + picker input | ✓ Good (Phase 2) |
 
 ## Evolution
 
@@ -110,4 +115,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-20 after Phase 1 (TUI Skeleton + Live Status Line)*
+*Last updated: 2026-07-20 after Phase 2 (Command Palette + Menus)*
