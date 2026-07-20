@@ -35,7 +35,7 @@ threaded turn bridge, with a footer status bar that updates continuously while a
 generator + modal approval) and delivers the headline "live status line" on its own.
 
 **Plans:** 5 plans (4 waves)
-- [ ] 01-01-PLAN.md — Foundation: textual dep, tui package skeleton, messages, turn_bridge, Wave 0 scaffolds (wave 1)
+- [x] 01-01-PLAN.md — Foundation: textual dep, tui package skeleton, messages, turn_bridge, Wave 0 scaffolds (wave 1)
 - [ ] 01-02-PLAN.md — StatusFooter reactive widget + ApprovalModal screen (wave 2)
 - [ ] 01-03-PLAN.md — Slash-command adapter (commands.py) with renderable output (wave 2)
 - [ ] 01-04-PLAN.md — Agent86App + run_tui: shell, worker turn bridge, live footer, modal, bindings (wave 3)
