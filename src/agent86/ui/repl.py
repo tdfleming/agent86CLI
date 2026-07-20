@@ -437,12 +437,17 @@ def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> Non
 
     if _use_rich(cfg, plain):
         try:
-            repl.rich_loop()
-            return
-        except Exception as exc:  # prompt_toolkit couldn't run this terminal -> fall back
-            console.print(
-                f"[dim]rich UI unavailable ({type(exc).__name__}); using plain REPL.[/dim]"
-            )
+            from agent86.tui.app import run_tui  # lazy: textual imported only here
+        except ImportError as exc:
+            console.print(f"[dim]TUI unavailable ({type(exc).__name__}); using plain REPL.[/dim]")
+        else:
+            try:
+                run_tui(cfg, resume=resume)
+                return
+            except Exception as exc:  # terminal can't host Textual, etc. -> fall back
+                console.print(
+                    f"[dim]TUI could not start ({type(exc).__name__}); using plain REPL.[/dim]"
+                )
     repl.plain_loop()
 
 
