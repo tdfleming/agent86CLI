@@ -146,3 +146,28 @@ async def test_approval_modal_resolves_worker_on_deny(tmp_path):
     lines, path = await _run_approval_case(tmp_path, approve=False)
     assert "done" in lines
     assert not (path / "out.txt").exists()
+
+
+async def test_shift_tab_cycles_approval_mode(tmp_path):
+    """Regression for the shift+tab binding-interception footgun (260720-1rs).
+
+    Textual's `App` ships a default `shift+tab` binding for focus traversal
+    (`focus_previous`). Without `priority=True` on the app's `cycle_mode` binding, that default
+    wins whenever the prompt `Input` is focused and `action_cycle_mode` never fires. This test
+    presses the real key via `pilot.press` — calling `action_cycle_mode()` directly would not
+    catch this regression, since that path always worked.
+    """
+    repl = _make_repl(tmp_path, make_text_provider("hello world"), approval=ApprovalMode.ASK)
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.query_one("#prompt", Input).has_focus
+        assert repl.harness.gate.mode.value == "ask"
+
+        await pilot.press("shift+tab")
+        await pilot.pause()
+        assert repl.harness.gate.mode.value == "auto"
+
+        await pilot.press("shift+tab")
+        await pilot.pause()
+        assert repl.harness.gate.mode.value == "deny"
