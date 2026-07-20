@@ -6,6 +6,14 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **README status refreshed to v0.5.** The status block still described v0.2 (107 tests) and
+  omitted everything shipped in v0.3–v0.5. It now reads v0.5 (141 tests) and reflects the
+  built-in OpenRouter/Groq providers, live mid-session `/model` switching, automatic memory
+  retention/pruning, and the cleaner `web_fetch` (main-content extraction, model-friendly
+  sizing). Docs-only; no behavior change.
+
 ## [0.5.4] - 2026-07-14
 
 ### Fixed
