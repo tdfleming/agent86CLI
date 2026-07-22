@@ -1,0 +1,13 @@
+# hand-written comment: my personal agent86 config
+# do not lose me
+
+[model]
+default = "anthropic:claude-opus-4-8"  # inline comment on the default model
+
+[providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+
+# a comment between sections
+[providers.ollama]
+base_url = "http://localhost:11434"
+num_ctx = 8192

@@ -1,0 +1,1 @@
+{"models": [{"name": "llama3.1:8b", "model": "llama3.1:8b", "modified_at": "2024-08-01T00:00:00Z", "size": 4661224676, "digest": "abc123", "details": {"family": "llama", "parameter_size": "8.0B"}}]}
