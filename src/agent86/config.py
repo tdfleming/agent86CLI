@@ -152,6 +152,8 @@ class MCPServerConfig(BaseModel):
     ``stdio`` (default) spawns a local subprocess (``command``/``args``/``env``); ``sse`` and
     ``http`` (streamable HTTP) connect to a remote ``url`` with optional ``headers`` (e.g. auth).
     ``transport`` is inferred when omitted: ``stdio`` if ``command`` is set, else ``http``.
+    ``enabled = false`` keeps a server configured but stops it from being started (``build_mcp``
+    filters on it).
     """
 
     # stdio transport: spawn a subprocess
@@ -163,6 +165,10 @@ class MCPServerConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     # "stdio" | "sse" | "http"; inferred from command/url when omitted
     transport: str | None = None
+    # Disabled servers stay visible in config and in the manager UI but are never started
+    # (D-09). Lives in the server's own block so a hand-edited config reads naturally and a
+    # toggle is a one-line diff.
+    enabled: bool = True
 
     @model_validator(mode="after")
     def _resolve_transport(self) -> MCPServerConfig:

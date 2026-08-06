@@ -487,10 +487,11 @@ def mcp_list_cmd(ctx: typer.Context) -> None:
     table = Table(show_header=True, header_style="bold")
     table.add_column("Name")
     table.add_column("Transport")
+    table.add_column("Enabled")
     table.add_column("Endpoint", overflow="fold")
     for name, srv in cfg.mcp_servers.items():
         endpoint = srv.url or " ".join([srv.command or "", *srv.args]).strip()
-        table.add_row(name, srv.transport or "?", endpoint)
+        table.add_row(name, srv.transport or "?", "yes" if srv.enabled else "no", endpoint)
     console.print(table)
 
 

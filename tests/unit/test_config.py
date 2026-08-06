@@ -81,12 +81,10 @@ def test_deep_merge_is_recursive():
 # --- Wave 0 scaffolds: MCPServerConfig.enabled + build_mcp filtering (MCP-01) ----------------- #
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-03", strict=False)
 def test_mcp_server_enabled_defaults_true():
     assert MCPServerConfig(command="npx").enabled is True
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-03", strict=False)
 def test_mcp_server_enabled_round_trips_false():
     assert MCPServerConfig(command="npx", enabled=False).enabled is False
 
