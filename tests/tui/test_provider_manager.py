@@ -22,10 +22,6 @@ from agent86.types import ApprovalMode
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
 
-pytestmark = pytest.mark.xfail(
-    reason="Wave 0 scaffold — implemented in plans 03-08/03-09", strict=False
-)
-
 
 class _PickerHost(App):
     def __init__(self, screen) -> None:
@@ -155,6 +151,7 @@ async def test_catalog_empty_falls_back_to_free_text():
     assert host.result == "llamacpp:my-local-model"
 
 
+@pytest.mark.xfail(reason="chain wiring lands in plan 03-09", strict=False)
 async def test_no_key_provider_chains_to_key_entry(monkeypatch, tmp_path):
     from agent86.tui.screens.key_entry import KeyEntryModal
 
@@ -176,6 +173,7 @@ async def test_no_key_provider_chains_to_key_entry(monkeypatch, tmp_path):
         assert isinstance(app.screen, KeyEntryModal)
 
 
+@pytest.mark.xfail(reason="chain wiring lands in plan 03-09", strict=False)
 async def test_save_anyway_override(monkeypatch, tmp_path):
     from agent86.tui.screens.save_diff import SaveDiffModal
 
@@ -195,6 +193,7 @@ async def test_save_anyway_override(monkeypatch, tmp_path):
         assert isinstance(app.screen, SaveDiffModal)
 
 
+@pytest.mark.xfail(reason="chain wiring lands in plan 03-09", strict=False)
 async def test_switch_is_immediate_persist_is_separate(monkeypatch, tmp_path):
     import shutil
     from pathlib import Path
