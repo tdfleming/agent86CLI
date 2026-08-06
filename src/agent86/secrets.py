@@ -11,6 +11,11 @@ entry is legible in Windows Credential Manager / macOS Keychain.
 ``keyring`` is imported lazily inside every function body — importing it eagerly anywhere
 reachable from ``agent86.cli`` breaks the cold-start guarantee for ``run`` and ``--plain``
 (guarded by ``tests/tui/test_lazy_import.py``).
+
+MCP server configs (MCP-01) reference secrets as ``${VAR}`` rather than a literal value; a
+server's command/args/env/headers are resolved at connect time via ``expand_var_refs``, which
+applies the exact same env-first-then-keyring precedence as ``resolve_api_key`` above, keyed by
+variable name.
 """
 
 from __future__ import annotations
@@ -43,6 +48,53 @@ def redact(text: str, *secrets: str | None) -> str:
         if secret and len(secret) >= 8:
             out = out.replace(secret, _REDACTED)
     return _KEY_SHAPES.sub(_REDACTED, out)
+
+
+#: A ${VAR} reference in an MCP server config (D-17). Deliberately strict: the name must be a
+#: valid identifier, so a literal that merely contains "${" cannot masquerade as a reference.
+_VAR_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+class MissingSecretRef(RuntimeError):
+    """A ${VAR} reference has no env var and no OS keyring entry (D-18 chains to KeyEntryModal)."""
+
+    def __init__(self, var_name: str) -> None:
+        self.var_name = var_name
+        super().__init__(f"'${{{var_name}}}' is not set (checked the environment, then the OS keyring)")
+
+
+def find_var_refs(*texts: str | None) -> set[str]:
+    """Every distinct ${VAR} name referenced across ``texts``. Never raises."""
+    names: set[str] = set()
+    for text in texts:
+        if text:
+            names.update(_VAR_REF_RE.findall(text))
+    return names
+
+
+def expand_var_refs(text: str, overrides: dict[str, str] | None = None) -> str:
+    """Substitute every ${VAR} in ``text``, env var first then the OS keyring.
+
+    ``overrides`` carries values typed this session but not yet persisted (D-18): they win over
+    both sources, mirroring the Phase 3 test-before-store flow. Raises :class:`MissingSecretRef`
+    for the first name that resolves nowhere — the caller turns that into a masked key prompt.
+    """
+    if not text:
+        return text
+    overrides = overrides or {}
+
+    def _sub(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name in overrides:
+            return overrides[name]
+        # resolve_api_key(name, name) == "env var named `name`, else keyring account `name`" —
+        # the exact precedence SEC-01 already mandates; do not reimplement it here.
+        value = resolve_api_key(name, name)
+        if value is None:
+            raise MissingSecretRef(name)
+        return value
+
+    return _VAR_REF_RE.sub(_sub, text)
 
 
 class SecretStoreError(RuntimeError):
@@ -128,10 +180,13 @@ def clear_api_key(provider_name: str) -> bool:
 __all__ = [
     "SERVICE_NAME",
     "SecretStoreError",
+    "MissingSecretRef",
     "redact",
     "resolve_api_key",
     "keyring_available",
     "has_stored_key",
     "store_api_key",
     "clear_api_key",
+    "find_var_refs",
+    "expand_var_refs",
 ]
