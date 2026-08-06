@@ -38,6 +38,20 @@ app — no hand-editing TOML, no restarts.
 
 ## Recent Activity
 
+- 2026-08-06 — Plan 03-10 complete (UAT gaps 1 and 4 closure, parallel gap-closure wave):
+  `KeyEntryModal.on_input_submitted` and `CatalogPickerModal.on_input_submitted` now call
+  `event.stop()` as their first statement, and `Agent86App.on_input_submitted` now ignores
+  every `Input` except `#prompt` — three defense-in-depth fixes closing UAT gap 1 (blocker,
+  SEC-01/D-10): a typed API key was being echoed into the transcript and dispatched to the
+  model as a real turn. `Agent86App._on_catalog_picked` now passes the `UNRESOLVED` sentinel
+  (imported from `agent86.cognitive.base`) instead of the stale `None` left by the previous
+  test's `finally` block whenever no key was typed this pass; `ConnectionTestModal.__init__`
+  widens `api_key` to `Any = UNRESOLVED` to match — closing UAT gap 4 (blocker, MODEL-01): a
+  keyring-stored key now resolves on the second and every subsequent connection test in a
+  session, not just the first. Added `tests/tui/test_secret_leak.py` (6 new Pilot regression
+  tests), confirmed 4/6 fail against the pre-fix source and all 6 pass post-fix. Full suite
+  green: 331 passed, 0 failed.
+
 - 2026-08-06 — Plan 03-11 complete (UAT gap 2 closure, parallel gap-closure wave): closes the
   second, independent secret-leak path found during UAT — a startup crash rendering a live
   `sk-ant-...` key in the `locals` panels of four traceback frames. `agent86.cli`'s `typer.Typer`

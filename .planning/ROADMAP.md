@@ -87,7 +87,7 @@ live-tests providers/models, writing changes back to user config non-destructive
 - [x] 03-09-PLAN.md — App wiring: /config model chain, session catalog cache, enriched /model picker (wave 3)
 
 _Gap closure (UAT blockers 1-5, see 03-HUMAN-UAT.md):_
-- [ ] 03-10-PLAN.md — key never echoed to the transcript (event.stop + #prompt guard) + UNRESOLVED pass-through so a keyring key resolves on every test (gaps 1, 4) (wave 1)
+- [x] 03-10-PLAN.md — key never echoed to the transcript (event.stop + #prompt guard) + UNRESOLVED pass-through so a keyring key resolves on every test (gaps 1, 4) (wave 1)
 - [x] 03-11-PLAN.md — no key in crash tracebacks: Typer show_locals off, secrets.redact, provider construction fails soft (gap 2) (wave 1)
 - [x] 03-12-PLAN.md — cognitive/capabilities.py: omit temperature/top_p/top_k for models that removed them (gap 5) (wave 1)
 - [ ] 03-13-PLAN.md — anthropic SDK-version guard + fail-soft startup (gap 3, code hardening only) (wave 2)
