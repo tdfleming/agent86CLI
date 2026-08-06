@@ -75,7 +75,7 @@ live-tests providers/models, writing changes back to user config non-destructive
    project-scope option is offered.
 4. Switching the active model from the modal takes effect for the next turn.
 
-**Plans:** 8/9 plans executed
+**Plans:** 13 plans (9 executed; 4 gap-closure plans added 2026-08-05 from 03-HUMAN-UAT.md)
 - [x] 03-01-PLAN.md — Wave-0 test scaffolds, fixtures, keyring/tomlkit deps + lazy-import guard (wave 0)
 - [x] 03-02-PLAN.md — secrets.py resolve_api_key + provider key seam moved into provider_for_ref (wave 1)
 - [x] 03-03-PLAN.md — config_writer.py: tomlkit round-trip, scope selection, diff, atomic write (wave 1)
@@ -85,6 +85,12 @@ live-tests providers/models, writing changes back to user config non-destructive
 - [x] 03-07-PLAN.md — SaveDiffModal: scope radio + TOML diff preview + confirm/cancel (wave 2)
 - [x] 03-08-PLAN.md — ProviderManagerModal + type-to-filter CatalogPickerModal with free-text fallback (wave 2)
 - [x] 03-09-PLAN.md — App wiring: /config model chain, session catalog cache, enriched /model picker (wave 3)
+
+_Gap closure (UAT blockers 1-5, see 03-HUMAN-UAT.md):_
+- [ ] 03-10-PLAN.md — key never echoed to the transcript (event.stop + #prompt guard) + UNRESOLVED pass-through so a keyring key resolves on every test (gaps 1, 4) (wave 1)
+- [ ] 03-11-PLAN.md — no key in crash tracebacks: Typer show_locals off, secrets.redact, provider construction fails soft (gap 2) (wave 1)
+- [ ] 03-12-PLAN.md — cognitive/capabilities.py: omit temperature/top_p/top_k for models that removed them (gap 5) (wave 1)
+- [ ] 03-13-PLAN.md — anthropic SDK-version guard + fail-soft startup (gap 3, code hardening only) (wave 2)
 
 ### Phase 4: MCP Config UI
 **Goal:** An in-app MCP modal to list, add, remove, and enable/disable servers, validating a
