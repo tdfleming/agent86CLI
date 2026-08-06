@@ -10,8 +10,6 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.xfail(reason="Wave 0 scaffold — implemented in plan 03-03", strict=False)
-
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "config_with_comments.toml"
 
 
