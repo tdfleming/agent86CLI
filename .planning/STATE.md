@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T00:16:31.574Z"
+last_updated: "2026-08-06T00:16:56.050Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 18
-  completed_plans: 15
+  completed_plans: 16
 ---
 
 # Project State
@@ -37,6 +37,20 @@ app — no hand-editing TOML, no restarts.
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Plan 03-05 complete (command-surface + keyring visibility, parallel Wave 2):
+  `/config model` registered in `tui/commands.py`'s `COMMANDS` registry with
+  `needs_choice="config_model"`, discoverable via `/help` and the `/` palette with zero
+  per-surface wiring (MODEL-01). `find_command_for_line` added for longest-name-first multi-word
+  dispatch so `/config model` wins over `/config` while `/models` still beats the `/model` prefix
+  and `/model <arg>`/`/quit`/`/exit` are unchanged; `handle_command` rewritten to use it,
+  `find_command` (palette's exact-name lookup) untouched. `_key_source` helper (env → keyring →
+  none → n/a) added to both `tui/commands.py` and `cli.py`; the TUI `/models` table and `agent86
+  config` (bare — wired via a new `config_app` callback to the existing `_list_models`, since that
+  table lived under `agent86 models` rather than a pre-existing `agent86 config` default action)
+  both now show a `Key` column and an `OS keyring: available/unavailable` line, no secret ever
+  rendered (D-09/D-10, SEC-01). 8 new regression tests added; full suite green: 262 passed,
+  2 xfailed, 1 xpassed, 0 failed.
 
 - 2026-08-06 — Plan 03-07 complete (save-diff modal, parallel Wave 2): `agent86/tui/screens/
   save_diff.py` adds `SaveDiffModal(ModalScreen[ConfigEdit | None])` — the D-16/D-17 trust-building
