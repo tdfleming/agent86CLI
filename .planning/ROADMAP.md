@@ -112,7 +112,7 @@ Plans:
 - [x] 04-03-PLAN.md — MCPServerConfig.enabled + ToolRegistry.unregister + `agent86 mcp list` Enabled column (wave 1)
 - [x] 04-04-PLAN.md — MCPManager task-per-server lifecycle (D-23), connect-time ${VAR} expansion, build_mcp enabled filter (wave 2)
 - [x] 04-05-PLAN.md — tui/screens/mcp_manager.py: server list modal + shared add/edit form with inline validation (wave 2)
-- [ ] 04-06-PLAN.md — Harness.ensure_mcp / add_mcp_server / remove_mcp_server live mount-unmount seam (wave 3)
+- [x] 04-06-PLAN.md — Harness.ensure_mcp / add_mcp_server / remove_mcp_server live mount-unmount seam (wave 3)
 - [x] 04-07-PLAN.md — tui/screens/mcp_test.py: 30s worker-thread connection test with tool enumeration (wave 3)
 - [ ] 04-08-PLAN.md — `/config mcp` registry entry + full app.py chain (form → key → test → diff → save → live mount) (wave 4)
 

@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T05:59:04.666Z"
+last_updated: "2026-08-06T06:02:11.397Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 30
-  completed_plans: 28
+  completed_plans: 29
 ---
 
 # Project State
@@ -51,6 +51,23 @@ app — no hand-editing TOML, no restarts.
   context: `Static.renderable` doesn't exist on the installed Textual 8.2.8 (`.render()` does,
   matching `test_save_diff.py`'s pattern). Full suite green: 418 passed, 2 xfailed (04-08-owned,
   untouched), 0 failed.
+
+- 2026-08-06 — Plan 04-06 complete (Harness live mount/unmount seam, parallel Wave 3):
+  `src/agent86/orchestration/loop.py` adds `Harness.ensure_mcp()` (returns the live `MCPManager`,
+  creating an empty one when the session started with none, idempotent, never touching the
+  registry), `add_mcp_server(name, cfg)` (mounts an already-connected server's tools — never
+  opens a transport itself — into the live registry, returning `(mounted, collisions)` with
+  name collisions reported rather than swallowed, D-24), and `remove_mcp_server(name)`
+  (unregisters a server's tools, stops its session, drops it from `manager.servers`; a no-op for
+  an unknown name or absent manager). Neither new method rebuilds `self.registry` or reads
+  `self.config.mcp_servers` after construction (RESEARCH Pitfall 3) — `self.mcp.servers` and
+  `self.registry` are the only live truth, matching the discipline `set_model()` already used.
+  D-15 needed no code: `_build_request` already reads `self.registry.specs()` fresh every turn,
+  so a mount/unmount takes effect on the very next turn. 15 new unit tests in
+  `tests/unit/test_loop.py` (manager creation/idempotency, mount, collision reporting, config
+  recording, transport-free mounting via a monkeypatched `_open_transport`, and unmount/no-op
+  paths) using a lightweight fake `MCPManager`/`Tool` pair, no real transport. Full suite green:
+  418 passed, 2 xfailed (04-08-owned, untouched), 0 failed.
 
 - 2026-08-06 — Plan 04-04 complete (task-per-server MCPManager lifecycle, parallel Wave 2 —
   the single load-bearing piece of engineering in this phase, D-23): `MCPManager` rewritten
