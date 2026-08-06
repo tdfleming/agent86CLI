@@ -38,6 +38,28 @@ app — no hand-editing TOML, no restarts.
 
 ## Recent Activity
 
+- 2026-08-06 — Plan 04-04 complete (task-per-server MCPManager lifecycle, parallel Wave 2 —
+  the single load-bearing piece of engineering in this phase, D-23): `MCPManager` rewritten
+  from one shared `AsyncExitStack` to one persistent `asyncio.Task` per server, each owning its
+  own stack via `start_server`/`stop_server`/`tools_for`/`_ensure_loop`/`_launch`/`_serve` —
+  anyio binds a transport's cancel scope to the task that entered it, so parking on a per-server
+  `close_event` and letting `async with` unwind in place (rather than closing a shared stack from
+  a different task) is what makes independent per-server teardown legal. Verified for real
+  against two live stdio `FastMCP` servers: `test_independent_teardown_leaves_other_server_intact`
+  passes with no "cancel scope"/"different task" `RuntimeError`, the surviving server keeps
+  answering `call_tool`, and calling the stopped server correctly raises. Added
+  `_resolve_server_secrets`/`unresolved_var_refs` for connect-time `${VAR}` expansion in
+  args/env/url/headers (never `command`) via plan 04-02's `expand_var_refs` (D-17/D-25), and
+  filtered `cfg.enabled=false` servers inside `build_mcp` rather than `MCPManager` (D-09).
+  One deviation: `ClientSession` is now looked up through a small `_get_client_session()`
+  indirection (module globals first, real `from mcp import ClientSession` fallback) instead of
+  the plan's literal function-local import, because the real `mcp` package is installed in this
+  environment and the Wave 0 fake-session scaffold monkeypatches `mcp_client.ClientSession` —
+  without the indirection the test would silently exercise the real SDK against fake streams
+  instead of the intended fake. Removed `xfail` from 3 unit scaffolds, 2 `build_mcp` filter
+  scaffolds, and 5 real-stdio integration scaffolds. Full suite green: 402 passed, 8 xfailed
+  (unrelated, later-plan scaffolds), 0 failed.
+
 - 2026-08-06 — Plan 04-02 complete (secret references + config deletion, parallel Wave 1):
   `agent86/secrets.py` adds `find_var_refs`/`expand_var_refs`/`MissingSecretRef` — MCP server
   configs reference secrets as `${VAR}`, resolved env-first-then-keyring by reusing
