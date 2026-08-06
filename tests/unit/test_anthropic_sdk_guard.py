@@ -4,16 +4,20 @@ must degrade to "Cannot start:" instead of dumping a traceback (which is also th
 gap-2 key leak).
 
 Task 1 (tests 1-6): the version guard in `AnthropicProvider.__init__` itself.
+Task 2 (tests 7-10): the guard proven end-to-end through `run_repl`.
 """
 
 from __future__ import annotations
 
+import io
+
 import anthropic
 import pytest
+from rich.console import Console
 
 from agent86.cognitive.anthropic_provider import AnthropicProvider
 from agent86.cognitive.base import ProviderError
-from agent86.config import ProviderConfig
+from agent86.config import ProviderConfig, load_config
 
 _PCONF = ProviderConfig(api_key_env="ANTHROPIC_API_KEY")
 
@@ -104,3 +108,86 @@ def test_missing_package_path_unchanged(monkeypatch):
         "The 'anthropic' package is not installed. Install it with:\n"
         '    pip install "agent86[anthropic]"'
     )
+
+
+# --------------------------------------------------------------------------- #
+# Task 2: end-to-end through run_repl — fails soft, never a traceback
+# --------------------------------------------------------------------------- #
+
+
+def _cfg():
+    cfg = load_config()
+    cfg.model.default = "anthropic:claude-opus-5"
+    cfg.providers["anthropic"] = ProviderConfig(api_key_env="ANTHROPIC_API_KEY")
+    return cfg
+
+
+def _capture_console(monkeypatch):
+    import agent86.ui.repl as repl_mod
+
+    buf = io.StringIO()
+    monkeypatch.setattr(repl_mod, "console", Console(file=buf, width=200))
+    return repl_mod, buf
+
+
+def test_run_repl_fails_soft_on_opaque_typeerror(monkeypatch):
+    import agent86.ui.repl as repl_mod
+
+    repl_mod, buf = _capture_console(monkeypatch)
+    monkeypatch.setenv("AGENT86_PLAIN", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-TESTKEY-0001")
+
+    def _raise_typeerror(self, model, config, api_key=None):  # noqa: ANN001
+        raise TypeError("Client.__init__() got an unexpected keyword argument 'proxies'")
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _raise_typeerror)
+
+    repl_mod.run_repl(_cfg())  # must not raise
+
+    output = buf.getvalue()
+    assert "Cannot start:" in output
+    # gap-2 cross-check: the resolved key must never reach visible output either.
+    assert "sk-ant-TESTKEY-0001" not in output
+
+
+def test_run_repl_typeerror_output_has_no_traceback(monkeypatch):
+    repl_mod, buf = _capture_console(monkeypatch)
+    monkeypatch.setenv("AGENT86_PLAIN", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-TESTKEY-0001")
+
+    def _raise_typeerror(self, model, config, api_key=None):  # noqa: ANN001
+        raise TypeError("Client.__init__() got an unexpected keyword argument 'proxies'")
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _raise_typeerror)
+
+    repl_mod.run_repl(_cfg())  # must not raise
+
+    output = buf.getvalue()
+    assert "Traceback (most recent call last)" not in output
+
+
+def test_run_repl_stale_sdk_reports_upgrade_command(monkeypatch):
+    repl_mod, buf = _capture_console(monkeypatch)
+    monkeypatch.setenv("AGENT86_PLAIN", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-TESTKEY-0001")
+    monkeypatch.setattr(anthropic, "__version__", "0.25.9", raising=False)
+
+    repl_mod.run_repl(_cfg())  # must not raise
+
+    output = buf.getvalue()
+    assert 'pip install -U "anthropic>=0.40"' in output
+    assert "Traceback (most recent call last)" not in output
+
+
+def test_run_repl_stale_sdk_never_dumps_traceback_or_key(monkeypatch):
+    repl_mod, buf = _capture_console(monkeypatch)
+    monkeypatch.setenv("AGENT86_PLAIN", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-TESTKEY-0001")
+    monkeypatch.setattr(anthropic, "__version__", "0.25.9", raising=False)
+
+    repl_mod.run_repl(_cfg())  # must not raise
+
+    output = buf.getvalue()
+    assert "Cannot start:" in output
+    assert "sk-ant-TESTKEY-0001" not in output
+    assert "Traceback (most recent call last)" not in output
