@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from agent86.cognitive.base import UNRESOLVED, ModelProvider, ProviderError
+from agent86.cognitive.capabilities import apply_sampling_params
 from agent86.cognitive.pricing import priced_usage
 from agent86.config import ProviderConfig
 from agent86.types import (
@@ -114,8 +115,12 @@ class OpenAIProvider(ModelProvider):
             "messages": self._to_messages(request.messages),
             "stream": True,
             "stream_options": {"include_usage": True},
-            "temperature": request.temperature,
         }
+        # Same seam as the Anthropic path (UAT gap 5). This is behaviour-identical for
+        # OpenAI/Groq/OpenRouter today — no OpenAI-family model is in the removed-parameter
+        # list — but a gateway proxying an Anthropic model through an OpenAI-compatible
+        # endpoint gets the correct omission for free.
+        apply_sampling_params(payload, self.model, temperature=request.temperature)
         if request.max_tokens:
             payload["max_tokens"] = request.max_tokens
         if request.tools:
