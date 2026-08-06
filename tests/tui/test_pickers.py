@@ -82,6 +82,25 @@ def test_model_choices_dedups_roles():
     assert len(vals) >= 1
 
 
+def test_model_choices_appends_extras():
+    base = model_choices(load_config())
+    with_extra = model_choices(load_config(), extra=[("openai:gpt-4o", "gpt-4o")])
+    assert len(with_extra) == len(base) + 1
+    assert with_extra[-1][1] == "openai:gpt-4o"
+
+
+def test_model_choices_extras_deduped_against_roles():
+    cfg = load_config()
+    base = model_choices(cfg)
+    with_extra = model_choices(cfg, extra=[(cfg.model.default, "dupe")])
+    assert len(with_extra) == len(base)
+
+
+def test_model_choices_signature_backward_compatible():
+    cfg = load_config()
+    assert model_choices(cfg) == model_choices(cfg)
+
+
 def test_model_choices_empty_fallback():
     class _Route:
         cheap = ""

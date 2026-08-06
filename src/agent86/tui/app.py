@@ -237,13 +237,20 @@ class Agent86App(App):
                 ModePickerModal(self.repl.harness.gate.mode.value), self._on_mode_picked
             )
         elif entry.needs_choice == "model":
-            choices = model_choices(self.repl.cfg)
-            if not choices:
-                prompt = self.query_one("#prompt", Input)
-                prompt.value = "/model "
-                prompt.focus()
+            active = self.repl.harness.provider.name
+            cached = self._catalog_cache.get(active)
+            if cached is None:
+                # D-04: one lazy fetch per provider per session; the picker opens from
+                # on_catalog_ready(purpose="model_picker").
+                from agent86.config import ProviderConfig
+                from agent86.secrets import resolve_api_key
+
+                pconf = self.repl.cfg.providers.get(active, ProviderConfig())
+                self._request_catalog(
+                    active, resolve_api_key(active, pconf.api_key_env), "model_picker"
+                )
                 return
-            self.push_screen(ModelPickerModal(choices), self._on_model_picked)
+            self._open_model_picker(cached)
         elif entry.needs_choice == "config_model":
             self._open_provider_manager()
         else:
@@ -256,6 +263,15 @@ class Agent86App(App):
     def _on_model_picked(self, value: str | None) -> None:
         if value is not None:
             self._dispatch_line(f"/model {value}")
+
+    def _open_model_picker(self, extra: list[tuple[str, str]]) -> None:
+        choices = model_choices(self.repl.cfg, extra=extra)
+        if not choices:
+            prompt = self.query_one("#prompt", Input)
+            prompt.value = "/model "
+            prompt.focus()
+            return
+        self.push_screen(ModelPickerModal(choices), self._on_model_picked)
 
     # ---- /config model chain ------------------------------------------------ #
 

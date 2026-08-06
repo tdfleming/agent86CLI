@@ -19,6 +19,7 @@ from agent86.config import load_config
 from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
 from agent86.tui.screens.approval import ApprovalModal
+from agent86.tui.screens.model_picker import ModelPickerModal
 from agent86.tui.widgets.status_footer import StatusFooter
 from agent86.types import ApprovalMode, Completion, CompletionDelta, CompletionRequest, ToolCall, Usage
 from agent86.ui.repl import _Repl
@@ -238,6 +239,65 @@ async def test_escape_dismisses_catalog_picker_not_palette(monkeypatch, tmp_path
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, CatalogPickerModal)
+
+
+async def test_model_picker_uses_cached_catalog(monkeypatch, tmp_path):
+    import agent86.cognitive.catalog as catalog
+    from agent86.tui.commands import find_command
+
+    calls = {"n": 0}
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        calls["n"] += 1
+        return [("gpt-4o", "gpt-4o")]
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._catalog_cache[repl.harness.provider.name] = [("cached:ref", "cached label")]
+        app._run_or_chain(find_command("/model"))
+        await pilot.pause()
+        assert isinstance(app.screen, ModelPickerModal)
+    assert calls["n"] == 0
+
+
+async def test_model_picker_fetches_then_opens(monkeypatch, tmp_path):
+    import agent86.cognitive.catalog as catalog
+    from agent86.tui.commands import find_command
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        return [("gpt-4o", "gpt-4o")]
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._run_or_chain(find_command("/model"))
+        await _wait_until(lambda: isinstance(app.screen, ModelPickerModal))
+        assert isinstance(app.screen, ModelPickerModal)
+
+
+async def test_model_picker_opens_with_roles_when_catalog_fails(monkeypatch, tmp_path):
+    import agent86.cognitive.catalog as catalog
+    from agent86.tui.commands import find_command
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        raise catalog.CatalogUnavailable("nope")
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._run_or_chain(find_command("/model"))
+        await _wait_until(lambda: isinstance(app.screen, ModelPickerModal))
+        assert isinstance(app.screen, ModelPickerModal)
 
 
 async def test_shift_tab_cycles_approval_mode(tmp_path):

@@ -5,8 +5,10 @@ explicit value via `ModalScreen.dismiss(...)` so a chained caller never blocks i
 
 `model_choices(cfg)` (D-12) sources the picker's options from today's config — the three role
 slots (`model.default`, `model.route.cheap`, `model.route.frontier`) — deduped by ref, with roles
-sharing a ref aggregated into a single label. No per-provider model catalog exists yet (that's
-Phase 3's job); this is a defensive, always-non-empty-in-practice source with a `[]` fallback.
+sharing a ref aggregated into a single label. Phase 3 supplies the live catalog via ``extra`` (a
+list of ``(ref, label)`` pairs fetched from the provider's models endpoint and cached for the app
+session); role slots are still listed first, and entries already covered by a role slot are not
+repeated.
 """
 
 from __future__ import annotations
@@ -18,12 +20,15 @@ from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
 
-def model_choices(cfg) -> list[tuple[str, str]]:
+def model_choices(cfg, extra: list[tuple[str, str]] | None = None) -> list[tuple[str, str]]:
     """Return (label, value) pairs sourced from the three config role slots, deduped by ref.
 
     Value is the raw `provider:model` ref string. Label aggregates the role name(s) sharing that
     ref, e.g. "default, route.frontier — anthropic:claude-opus-4-8". Returns `[]` if no role slot
     has a non-empty ref (defensive D-12 fallback for callers to prefill "/model " for typing).
+
+    ``extra`` (Phase 3, D-04) appends live catalog entries after the role slots, deduped against
+    them by ref.
     """
     roles = (
         ("default", cfg.model.default),
@@ -40,7 +45,14 @@ def model_choices(cfg) -> list[tuple[str, str]]:
             order.append(ref)
         roles_by_ref[ref].append(role_name)
 
-    return [(f"{', '.join(roles_by_ref[ref])} — {ref}", ref) for ref in order]
+    out = [(f"{', '.join(roles_by_ref[ref])} — {ref}", ref) for ref in order]
+    for ref, label in extra or []:
+        if ref in roles_by_ref:
+            continue
+        if ref in {v for _, v in out}:
+            continue
+        out.append((label if label != ref else ref, ref))
+    return out
 
 
 class ModelPickerModal(ModalScreen[str | None]):
