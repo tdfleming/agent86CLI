@@ -52,4 +52,33 @@ class TurnError(Message):
         super().__init__()
 
 
-__all__ = ["TurnDelta", "ToolAnnounce", "ApprovalRequest", "TurnDone", "TurnError"]
+class CatalogReady(Message):
+    """A provider's live model catalog finished loading (or failed).
+
+    `purpose` says who asked: "manager" (the /config model chain) or "model_picker" (the /model
+    quick switch, enriched per Phase 2 D-12). `entries` is empty when `error` is set — the caller
+    falls back to free-text entry (D-01), never a dead end.
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        entries: list[tuple[str, str]],
+        error: str | None,
+        purpose: str,
+    ) -> None:
+        super().__init__()
+        self.provider = provider
+        self.entries = entries
+        self.error = error
+        self.purpose = purpose
+
+
+__all__ = [
+    "TurnDelta",
+    "ToolAnnounce",
+    "ApprovalRequest",
+    "TurnDone",
+    "TurnError",
+    "CatalogReady",
+]

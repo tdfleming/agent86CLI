@@ -148,6 +148,71 @@ async def test_approval_modal_resolves_worker_on_deny(tmp_path):
     assert not (path / "out.txt").exists()
 
 
+def test_catalog_cache_starts_empty(tmp_path):
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    assert app._catalog_cache == {}
+
+
+async def test_catalog_cache_fetches_once_per_provider(monkeypatch, tmp_path):
+    import agent86.cognitive.catalog as catalog
+
+    calls = {"n": 0}
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        calls["n"] += 1
+        return [("gpt-4o", "gpt-4o")]
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    received = []
+    original = Agent86App.on_catalog_ready
+
+    def spy(self, message):
+        received.append(message)
+        original(self, message)
+
+    monkeypatch.setattr(Agent86App, "on_catalog_ready", spy)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._request_catalog("openai", "k", "manager")
+        await _wait_until(lambda: len(received) == 1)
+        app._request_catalog("openai", "k", "manager")
+        await _wait_until(lambda: len(received) == 2)
+    assert calls["n"] == 1
+
+
+async def test_catalog_failure_yields_empty_entries_with_error(monkeypatch, tmp_path):
+    import agent86.cognitive.catalog as catalog
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        raise catalog.CatalogUnavailable("nope")
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    received = []
+    original = Agent86App.on_catalog_ready
+
+    def spy(self, message):
+        received.append(message)
+        original(self, message)
+
+    monkeypatch.setattr(Agent86App, "on_catalog_ready", spy)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._request_catalog("openai", "k", "manager")
+        await _wait_until(lambda: len(received) == 1)
+    message = received[0]
+    assert message.entries == []
+    assert "nope" in message.error
+
+
 async def test_shift_tab_cycles_approval_mode(tmp_path):
     """Regression for the shift+tab binding-interception footgun (260720-1rs).
 

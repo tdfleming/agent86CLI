@@ -18,7 +18,14 @@ from textual.widgets.option_list import Option
 
 from agent86.config import Config
 from agent86.tui.commands import COMMANDS, find_command, handle_command, startup_notes
-from agent86.tui.messages import ApprovalRequest, ToolAnnounce, TurnDelta, TurnDone, TurnError
+from agent86.tui.messages import (
+    ApprovalRequest,
+    CatalogReady,
+    ToolAnnounce,
+    TurnDelta,
+    TurnDone,
+    TurnError,
+)
 from agent86.tui.screens.approval import ApprovalModal
 from agent86.tui.screens.mode_picker import ModePickerModal
 from agent86.tui.screens.model_picker import ModelPickerModal, model_choices
@@ -59,6 +66,14 @@ class Agent86App(App):
         super().__init__()
         self.repl = repl
         self._stream_buf = ""
+        # D-04: live model catalogs are cached for this app session only — one fetch per
+        # provider per launch, lazily on first use. No on-disk cache, no TTL, no invalidation.
+        # RESEARCH Open Question 3: this lives on the App, not on _Repl/Harness — the plain
+        # loop never needs a catalog.
+        self._catalog_cache: dict[str, list[tuple[str, str]]] = {}
+        self._pending_row = None  # ProviderRow being configured
+        self._pending_key: str | None = None  # entered key, in memory only until the test passes
+        self._pending_ref: str | None = None  # chosen provider:model ref
 
     # ---- composition ---------------------------------------------------- #
 
@@ -217,7 +232,45 @@ class Agent86App(App):
     def _run_turn(self, line: str) -> None:
         run_turn_worker(self.repl.harness, line, self.repl.state, self.post_message)
 
+    # ---- model catalog (session cache) -------------------------------------- #
+
+    def _request_catalog(self, provider: str, api_key: str | None, purpose: str) -> None:
+        """Serve the catalog from the session cache, or fetch it on a worker thread."""
+        cached = self._catalog_cache.get(provider)
+        if cached is not None:
+            self.post_message(CatalogReady(provider, cached, None, purpose))
+            return
+        self.query_one("#transcript", RichLog).write(
+            f"[dim]fetching {provider} model catalog…[/dim]"
+        )
+        self._fetch_catalog(provider, api_key, purpose)
+
+    @work(thread=True)
+    def _fetch_catalog(self, provider: str, api_key: str | None, purpose: str) -> None:
+        from agent86.cognitive.catalog import CatalogUnavailable, fetch_catalog
+        from agent86.config import ProviderConfig
+
+        pconf = self.repl.cfg.providers.get(provider, ProviderConfig())
+        try:
+            entries = fetch_catalog(provider, pconf, api_key)
+        except CatalogUnavailable as exc:
+            self.post_message(CatalogReady(provider, [], str(exc), purpose))
+            return
+        except Exception as exc:  # noqa: BLE001 - any failure falls back to free text (D-01)
+            self.post_message(CatalogReady(provider, [], str(exc), purpose))
+            return
+        self.post_message(CatalogReady(provider, entries, None, purpose))
+
     # ---- message handlers (main thread) ------------------------------------ #
+
+    def on_catalog_ready(self, message: CatalogReady) -> None:
+        if message.error is None:
+            self._catalog_cache[message.provider] = message.entries
+        else:
+            self.query_one("#transcript", RichLog).write(
+                f"[yellow]catalog unavailable:[/yellow] {message.error} "
+                "[dim](enter a model name directly)[/dim]"
+            )
 
     def on_turn_delta(self, message: TurnDelta) -> None:
         self._stream_buf += message.text
