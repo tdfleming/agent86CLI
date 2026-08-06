@@ -33,7 +33,7 @@ from agent86.orchestration.router import ModelRouter
 from agent86.orchestration.state import AgentState
 from agent86.skills.loader import discover_skills
 from agent86.tools.base import ToolContext
-from agent86.tools.mcp_client import build_mcp
+from agent86.tools.mcp_client import MCPManager, build_mcp
 from agent86.tools.registry import ToolRegistry, default_registry
 from agent86.tools.sandbox.executor import build_executor
 from agent86.tools.sandbox.policy import default_policy
@@ -145,6 +145,18 @@ class Harness:
     @property
     def mcp_note(self) -> str | None:
         return self.mcp.note if self.mcp else None
+
+    def ensure_mcp(self) -> MCPManager:
+        """Return the live MCP manager, creating an empty one if this session started with none.
+
+        ``build_mcp`` returns None when nothing is configured (or everything is disabled), so
+        adding the *first* MCP server mid-session has no manager to attach to. This creates one
+        with no servers; its background loop starts lazily on the first connection attempt, so
+        calling this costs nothing until a server is actually connected.
+        """
+        if self.mcp is None:
+            self.mcp = MCPManager({})
+        return self.mcp
 
     # ---- sessions ------------------------------------------------------ #
 

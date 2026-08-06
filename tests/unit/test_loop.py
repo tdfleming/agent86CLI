@@ -7,15 +7,19 @@ from collections.abc import Iterator
 import pytest
 
 from agent86.cognitive.base import ModelProvider, ProviderError, provider_for_model
-from agent86.config import load_config
+from agent86.config import MCPServerConfig, load_config
 from agent86.orchestration.loop import Harness, _summarize
+from agent86.tools.base import EmptyArgs, Tool, ToolContext
+from agent86.tools.mcp_client import MCPManager
 from agent86.types import (
     AgentPhase,
     Completion,
     CompletionDelta,
     CompletionRequest,
     Role,
+    ToolCall,
     ToolResult,
+    ToolSpec,
     Usage,
 )
 
@@ -93,3 +97,36 @@ def test_openai_without_key_reports_clearly(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ProviderError, match="API key"):
         provider_for_model("openai:gpt-4o", _config())
+
+
+# ---- ensure_mcp / add_mcp_server / remove_mcp_server (plan 04-06) ---------------- #
+
+
+def _harness_no_mcp():
+    return Harness(_config(), provider=FakeProvider(), memory=None)
+
+
+def test_ensure_mcp_creates_manager_when_none():
+    harness = _harness_no_mcp()
+    assert harness.mcp is None
+
+    manager = harness.ensure_mcp()
+
+    assert isinstance(manager, MCPManager)
+    assert harness.mcp is manager
+
+
+def test_ensure_mcp_is_idempotent():
+    harness = _harness_no_mcp()
+    first = harness.ensure_mcp()
+    second = harness.ensure_mcp()
+    assert first is second
+
+
+def test_ensure_mcp_does_not_touch_registry():
+    harness = _harness_no_mcp()
+    before = harness.registry.names()
+    harness.ensure_mcp()
+    assert harness.registry.names() == before
+
+
