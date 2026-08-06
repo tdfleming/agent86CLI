@@ -6,6 +6,11 @@ from collections.abc import Iterator
 from typing import Any
 
 from agent86.cognitive.base import UNRESOLVED, ModelProvider, ProviderError
+from agent86.cognitive.capabilities import (
+    apply_sampling_params,
+    is_sampling_rejection,
+    mark_sampling_unsupported,
+)
 from agent86.cognitive.pricing import priced_usage
 from agent86.config import ProviderConfig
 from agent86.types import (
@@ -106,27 +111,43 @@ class AnthropicProvider(ModelProvider):
         import anthropic
 
         system, messages = self._to_messages(request.messages)
-        kwargs: dict[str, Any] = {
+        base_kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "max_tokens": request.max_tokens or _DEFAULT_MAX_TOKENS,
-            "temperature": request.temperature,
         }
         if system:
-            kwargs["system"] = system
+            base_kwargs["system"] = system
         if request.tools:
-            kwargs["tools"] = self._to_tools(request.tools)
+            base_kwargs["tools"] = self._to_tools(request.tools)
 
-        try:
-            with self._client.messages.stream(**kwargs) as stream:
-                for text in stream.text_stream:
-                    if text:
-                        yield CompletionDelta(text=text)
-                final = stream.get_final_message()
-        except anthropic.APIError as exc:
-            raise ProviderError(f"Anthropic API error: {exc}") from exc
+        # temperature/top_p/top_k were REMOVED on Opus 5, Opus 4.8, Opus 4.7, Sonnet 5 and
+        # Fable 5 — sending any of them is a 400 with no replacement value, so they must be
+        # omitted entirely (UAT gap 5). The gate is on the model, never on the value:
+        # CompletionRequest.temperature defaults to 0.0, which is a real value everywhere else.
+        kwargs = apply_sampling_params(
+            dict(base_kwargs), self.model, temperature=request.temperature
+        )
 
-        yield CompletionDelta(done=True, completion=self._final(final))
+        for attempt in (0, 1):
+            emitted = False
+            try:
+                with self._client.messages.stream(**kwargs) as stream:
+                    for text in stream.text_stream:
+                        if text:
+                            emitted = True
+                            yield CompletionDelta(text=text)
+                    final = stream.get_final_message()
+            except anthropic.APIError as exc:
+                # Self-correcting fallback: a model released after capabilities.py was written
+                # tells us itself. Only safe before any text has been emitted.
+                if attempt == 0 and not emitted and is_sampling_rejection(str(exc)):
+                    mark_sampling_unsupported(self.model)
+                    kwargs = dict(base_kwargs)
+                    continue
+                raise ProviderError(f"Anthropic API error: {exc}") from exc
+            yield CompletionDelta(done=True, completion=self._final(final))
+            return
 
     def _final(self, message: Any) -> Completion:
         text_parts: list[str] = []
