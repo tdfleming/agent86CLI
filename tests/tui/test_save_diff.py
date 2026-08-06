@@ -8,10 +8,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import pytest
 from textual.app import App, ComposeResult
-
-pytestmark = pytest.mark.xfail(reason="Wave 0 scaffold — implemented in plan 03-07", strict=False)
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "config_with_comments.toml"
 
