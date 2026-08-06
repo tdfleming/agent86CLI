@@ -340,7 +340,7 @@ app — no hand-editing TOML, no restarts.
 |---|-------------|------|--------|-----------|
 | 260720-1jw | Fix TUI /models rendering bug — wrap tables in a Group | 2026-07-20 | 47da657 | [260720-1jw-fix-tui-models-rendering-bug-wrap-tables](./quick/260720-1jw-fix-tui-models-rendering-bug-wrap-tables/) |
 | 260720-1rs | Fix TUI shift+tab not cycling approval mode — priority binding | 2026-07-20 | 2050765 | [260720-1rs-fix-tui-shift-tab-not-cycling-approval-m](./quick/260720-1rs-fix-tui-shift-tab-not-cycling-approval-m/) |
-| 260805-xbw | Surface failed tool tracebacks to the model — fix _observe + debugging-discipline prompt | 2026-08-06 | (pending) | [260805-xbw-surface-failed-tool-tracebacks-to-the-mo](./quick/260805-xbw-surface-failed-tool-tracebacks-to-the-mo/) |
+| 260805-xbw | Surface failed tool tracebacks to the model — fix _observe + debugging-discipline prompt | 2026-08-06 | a092502 | [260805-xbw-surface-failed-tool-tracebacks-to-the-mo](./quick/260805-xbw-surface-failed-tool-tracebacks-to-the-mo/) |
 
 ## Next Step
 
