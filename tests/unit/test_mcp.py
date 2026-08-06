@@ -109,3 +109,144 @@ def test_open_transport_selects_client_per_transport():
 
     http_cm = _open_transport(MCPServerConfig(url="https://x/mcp", transport="http"))
     assert hasattr(http_cm, "__aenter__")
+
+
+# --- Wave 0 scaffolds: ToolRegistry.unregister + per-server MCPManager lifecycle (MCP-01) ----- #
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-03", strict=False)
+def test_registry_unregister_removes_a_tool():
+    from agent86.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    tool = MCPTool(FakeManager(), "srv", "do_thing", "does a thing", {})
+    registry.register(tool)
+    assert registry.unregister(tool.name) is True
+    assert tool.name not in registry.names()
+    assert registry.get(tool.name) is None
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-03", strict=False)
+def test_registry_unregister_unknown_returns_false():
+    from agent86.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    assert registry.unregister("nope") is False
+
+
+class FakeManager:
+    def __init__(self):
+        self.called = None
+
+    def call_tool(self, server, tool, arguments):
+        self.called = (server, tool, arguments)
+        return "result text"
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
+def test_manager_start_server_registers_tools_for_lookup(monkeypatch):
+    import agent86.tools.mcp_client as mcp_client
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _fake_open_transport(cfg):
+        yield (object(), object())
+
+    class _FakeTool:
+        def __init__(self, name):
+            self.name = name
+            self.description = f"does {name}"
+            self.inputSchema = {}
+
+    class _FakeListed:
+        tools = [_FakeTool("alpha"), _FakeTool("beta")]
+
+    class _FakeSession:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def initialize(self):
+            return None
+
+        async def list_tools(self):
+            return _FakeListed()
+
+    monkeypatch.setattr(mcp_client, "_open_transport", _fake_open_transport)
+    monkeypatch.setattr(mcp_client, "ClientSession", _FakeSession, raising=False)
+
+    manager = MCPManager({})
+    cfg = MCPServerConfig(command="npx")
+    tools = manager.start_server("srv", cfg)
+    assert len(tools) == 2
+    assert {t.name for t in tools} == {t.name for t in manager.tools_for("srv")}
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
+def test_manager_stop_server_drops_its_tools(monkeypatch):
+    import agent86.tools.mcp_client as mcp_client
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _fake_open_transport(cfg):
+        yield (object(), object())
+
+    class _FakeTool:
+        def __init__(self, name):
+            self.name = name
+            self.description = f"does {name}"
+            self.inputSchema = {}
+
+    class _FakeListed:
+        tools = [_FakeTool("alpha")]
+
+    class _FakeSession:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def initialize(self):
+            return None
+
+        async def list_tools(self):
+            return _FakeListed()
+
+    monkeypatch.setattr(mcp_client, "_open_transport", _fake_open_transport)
+    monkeypatch.setattr(mcp_client, "ClientSession", _FakeSession, raising=False)
+
+    manager = MCPManager({})
+    cfg = MCPServerConfig(command="npx")
+    manager.start_server("srv", cfg)
+    manager.stop_server("srv")
+    assert manager.tools_for("srv") == []
+    assert "srv" not in manager._sessions
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
+def test_manager_start_server_without_mcp_package_raises_with_note(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _fake_import(name, *a, **k):
+        if name == "mcp" or name.startswith("mcp."):
+            raise ImportError("no module named mcp")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    manager = MCPManager({})
+    cfg = MCPServerConfig(command="npx")
+    with pytest.raises(RuntimeError):
+        manager.start_server("srv", cfg)
+    assert manager.note is not None and 'pip install "agent86[mcp]"' in manager.note

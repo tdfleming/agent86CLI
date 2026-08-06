@@ -168,3 +168,141 @@ def test_atomic_write_leaves_no_temp_files(tmp_path, monkeypatch):
     config_writer.apply_edit(edit)
 
     assert list(tmp_path.glob(".config-*")) == []
+
+
+# --- Wave 0 scaffolds for plan 04-02: DELETE sentinel + forbidden-var-ref guard (MCP-01) ------ #
+
+_MCP_SERVERS_TOML = (
+    '[mcp.servers.foo]\ncommand = "npx"\n\n'
+    "# keep me\n"
+    '[mcp.servers.bar]\ncommand = "uvx"\n'
+)
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_delete_removes_a_server_table(tmp_path, monkeypatch):
+    from agent86.config_writer import DELETE
+
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    target.write_text(_MCP_SERVERS_TOML)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    edit = config_writer.plan_edit(
+        config_writer.SCOPE_USER, [(["mcp", "servers", "foo"], DELETE)]
+    )
+    assert "[mcp.servers.foo]" not in edit.after_text
+    assert "[mcp.servers.bar]" in edit.after_text
+    assert "# keep me" in edit.after_text
+    assert any(
+        line.startswith("-") and "[mcp.servers.foo]" in line
+        for line in edit.diff.splitlines()
+    )
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_delete_of_missing_path_is_noop(tmp_path, monkeypatch):
+    from agent86.config_writer import DELETE
+
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    target.write_text(_MCP_SERVERS_TOML)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    edit = config_writer.plan_edit(
+        config_writer.SCOPE_USER, [(["mcp", "servers", "ghost"], DELETE)]
+    )
+    assert edit.is_noop is True
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_delete_and_set_in_one_edit(tmp_path, monkeypatch):
+    from agent86.config_writer import DELETE
+
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    target.write_text(_MCP_SERVERS_TOML)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    edit = config_writer.plan_edit(
+        config_writer.SCOPE_USER,
+        [
+            (["mcp", "servers", "foo"], DELETE),
+            (["mcp", "servers", "bar", "enabled"], False),
+        ],
+    )
+    assert "[mcp.servers.foo]" not in edit.after_text
+    assert "enabled = false" in edit.after_text
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_forbidden_var_ref_literal_authorization_rejected(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    shutil.copy(FIXTURE, target)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    with pytest.raises(ValueError):
+        config_writer.plan_edit(
+            config_writer.SCOPE_USER,
+            [(["mcp", "servers", "gh", "headers", "Authorization"], "Bearer sk-live-abcdefghijklmnop")],
+        )
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_forbidden_var_ref_reference_accepted(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    shutil.copy(FIXTURE, target)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    edit = config_writer.plan_edit(
+        config_writer.SCOPE_USER,
+        [(["mcp", "servers", "gh", "headers", "Authorization"], "Bearer ${GITHUB_TOKEN}")],
+    )
+    assert "Bearer ${GITHUB_TOKEN}" in edit.after_text
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_forbidden_var_ref_literal_token_rejected(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    shutil.copy(FIXTURE, target)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    with pytest.raises(ValueError):
+        config_writer.plan_edit(
+            config_writer.SCOPE_USER,
+            [(["mcp", "servers", "gh", "env", "TOKEN"], "sk-live-abcdefghijklmnop")],
+        )
+    edit = config_writer.plan_edit(
+        config_writer.SCOPE_USER,
+        [(["mcp", "servers", "gh", "env", "TOKEN"], "${GITHUB_TOKEN}")],
+    )
+    assert "${GITHUB_TOKEN}" in edit.after_text
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_forbidden_var_ref_partial_reference_still_rejected(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    shutil.copy(FIXTURE, target)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    with pytest.raises(ValueError):
+        config_writer.plan_edit(
+            config_writer.SCOPE_USER,
+            [
+                (
+                    ["mcp", "servers", "gh", "headers", "Authorization"],
+                    "sk-abcdefghijklmnopqrst${notreal}",
+                )
+            ],
+        )

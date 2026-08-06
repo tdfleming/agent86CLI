@@ -145,3 +145,57 @@ def test_store_and_clear_roundtrip(monkeypatch):
     assert clear_api_key("groq") is True
     assert has_stored_key("groq") is False
     assert clear_api_key("groq") is False
+
+
+# --- Wave 0 scaffolds for plan 04-02: ${VAR} reference expansion (MCP-01/SEC-01) ------------- #
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_find_var_refs_collects_names_across_texts():
+    from agent86.secrets import find_var_refs
+
+    assert find_var_refs("Bearer ${GH_TOKEN}", "${A}${B}") == {"GH_TOKEN", "A", "B"}
+    assert find_var_refs("no refs here", "") == set()
+    assert find_var_refs("${1BAD}") == set()
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_expand_var_ref_prefers_env(monkeypatch):
+    from agent86.secrets import expand_var_refs
+
+    monkeypatch.setenv("A86_TEST_VAR", "from-env")
+    assert expand_var_refs("Bearer ${A86_TEST_VAR}") == "Bearer from-env"
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_expand_var_ref_falls_back_to_keyring(monkeypatch):
+    from agent86.secrets import expand_var_refs
+
+    monkeypatch.delenv("A86_TEST_VAR", raising=False)
+    _fake_keyring(monkeypatch, store={("agent86", "A86_TEST_VAR"): "from-keyring"})
+    assert expand_var_refs("${A86_TEST_VAR}") == "from-keyring"
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_expand_var_ref_overrides_win(monkeypatch):
+    from agent86.secrets import expand_var_refs
+
+    monkeypatch.setenv("A86_TEST_VAR", "from-env")
+    assert expand_var_refs("${A86_TEST_VAR}", {"A86_TEST_VAR": "typed"}) == "typed"
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_expand_var_ref_missing_raises_missing_secret_ref(monkeypatch):
+    from agent86.secrets import MissingSecretRef, expand_var_refs
+
+    monkeypatch.delenv("A86_NOPE", raising=False)
+    with pytest.raises(MissingSecretRef) as exc:
+        expand_var_refs("${A86_NOPE}")
+    assert exc.value.var_name == "A86_NOPE"
+
+
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
+def test_expand_var_refs_leaves_plain_text_untouched():
+    from agent86.secrets import expand_var_refs
+
+    assert expand_var_refs("npx -y foo") == "npx -y foo"
