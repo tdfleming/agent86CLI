@@ -22,11 +22,12 @@ __all__ = [
     "CommandEntry",
     "COMMANDS",
     "find_command",
+    "find_command_for_line",
     "handle_command",
     "startup_notes",
 ]
 
-ChoiceKind = Literal[None, "model", "mode"]
+ChoiceKind = Literal[None, "model", "mode", "config_model"]
 
 
 @dataclass
@@ -66,18 +67,41 @@ def _help_table():
     return table
 
 
+def _key_source(name: str, prov) -> str:
+    """Where this provider's key comes from — never the key itself (D-10)."""
+    import os
+
+    from agent86.secrets import has_stored_key
+
+    if not prov.api_key_env:
+        return "[dim]n/a[/dim]"
+    if os.getenv(prov.api_key_env):
+        return "[green]env[/green]"
+    if has_stored_key(name):
+        return "[green]keyring[/green]"
+    return "[yellow]none[/yellow]"
+
+
 def _models_tables(cfg):
     from rich.console import Group
     from rich.table import Table
+    from rich.text import Text
 
+    from agent86.secrets import keyring_available
     from agent86.types import ModelRef
 
     table = Table(show_header=True, header_style="bold", title="Providers")
     table.add_column("Provider")
     table.add_column("Base URL")
     table.add_column("API key env")
+    table.add_column("Key")
     for name, prov in cfg.providers.items():
-        table.add_row(name, prov.base_url or "[dim]-[/dim]", prov.api_key_env or "[dim]-[/dim]")
+        table.add_row(
+            name,
+            prov.base_url or "[dim]-[/dim]",
+            prov.api_key_env or "[dim]-[/dim]",
+            _key_source(name, prov),
+        )
 
     roles = Table(show_header=True, header_style="bold", title="Model roles")
     roles.add_column("Role")
@@ -95,7 +119,14 @@ def _models_tables(cfg):
             valid = "[red]invalid[/red]"
         roles.add_row(role, ref, valid)
 
-    return Group(table, roles)
+    keyring_line = Text.from_markup(
+        "OS keyring: [green]available[/green]"
+        if keyring_available()
+        else "OS keyring: [yellow]unavailable[/yellow] "
+        "(keys resolve from environment variables only)"
+    )
+
+    return Group(table, roles, keyring_line)
 
 
 def _set_mode(repl, arg: str) -> str:
@@ -174,6 +205,17 @@ COMMANDS: list[CommandEntry] = [
         ),
     ),
     CommandEntry(
+        name="/config model",
+        usage="/config model",
+        description="Manage providers & models: add, key, test, switch, save",
+        handler=lambda repl, arg: CommandResult(
+            "handled",
+            "The model manager is a TUI surface — press / and pick "
+            "[cyan]/config model[/cyan], or run agent86 without --plain.",
+        ),
+        needs_choice="config_model",
+    ),
+    CommandEntry(
         name="/models",
         usage="/models",
         description="List configured models",
@@ -239,6 +281,21 @@ def find_command(name: str) -> CommandEntry | None:
     return next((c for c in COMMANDS if c.name == name), None)
 
 
+def find_command_for_line(line: str) -> tuple[CommandEntry, str] | None:
+    """Match ``line`` against the registry, longest command name first.
+
+    Multi-word commands (``/config model``) must win over their single-word prefix
+    (``/config``); ``/models`` must not be read as ``/model`` + ``"s"`` — hence exact-or-
+    followed-by-a-space matching rather than ``str.startswith`` alone.
+    """
+    for entry in sorted(COMMANDS, key=lambda e: -len(e.name)):
+        if line == entry.name:
+            return entry, ""
+        if line.startswith(entry.name + " "):
+            return entry, line[len(entry.name) + 1 :].strip()
+    return None
+
+
 def handle_command(repl, line: str) -> CommandResult:
     """Dispatch one input line for ``repl``, returning a :class:`CommandResult`.
 
@@ -251,11 +308,11 @@ def handle_command(repl, line: str) -> CommandResult:
         return CommandResult("exit")
     if not line.startswith("/"):
         return CommandResult("turn")
-    name, _, arg = line.partition(" ")
-    entry = find_command(name)
-    if entry is None:
+    match = find_command_for_line(line)
+    if match is None:
         return CommandResult("handled", f"unknown command {line}")
-    return entry.handler(repl, arg.strip())
+    entry, arg = match
+    return entry.handler(repl, arg)
 
 
 def startup_notes(repl) -> list[str]:

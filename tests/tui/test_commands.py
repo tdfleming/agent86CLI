@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
-from agent86.tui.commands import COMMANDS, CommandResult, _help_table, handle_command
+from agent86.tui.commands import (
+    COMMANDS,
+    CommandResult,
+    _help_table,
+    find_command,
+    find_command_for_line,
+    handle_command,
+)
 from agent86.types import ApprovalMode
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
@@ -128,3 +135,76 @@ def test_trailing_whitespace_arg(tmp_path):
     result_bare = handle_command(repl, "/model")
     result_trailing = handle_command(repl, "/model ")
     assert result_trailing.render == result_bare.render
+
+
+def test_config_model_routes_to_its_own_entry(tmp_path):
+    match = find_command_for_line("/config model")
+    assert match is not None
+    entry, arg = match
+    assert entry.name == "/config model"
+    assert arg == ""
+
+
+def test_config_alone_still_dumps_config(tmp_path):
+    match = find_command_for_line("/config")
+    assert match is not None
+    assert match[0].name == "/config"
+
+
+def test_models_still_beats_model_prefix(tmp_path):
+    match = find_command_for_line("/models")
+    assert match is not None
+    entry, arg = match
+    assert entry.name == "/models"
+    assert arg == ""
+
+
+def test_model_with_arg_still_parses(tmp_path):
+    assert find_command_for_line("/model openai:gpt-4o") == (
+        find_command("/model"),
+        "openai:gpt-4o",
+    )
+
+
+def test_help_lists_config_model(tmp_path):
+    from rich.console import Console
+
+    console = Console(record=True, width=120)
+    console.print(_help_table())
+    text = console.export_text()
+    assert "/config model" in text
+
+
+def test_palette_prefix_matches_both_config_entries(tmp_path):
+    names = [c.name for c in COMMANDS if c.name.startswith("/config")]
+    assert names == ["/config", "/config model"]
+
+
+def test_models_table_shows_key_source_not_key(tmp_path, monkeypatch):
+    from rich.console import Console
+
+    from agent86.tui import commands as commands_mod
+
+    repl, _ = _repl(tmp_path)
+    monkeypatch.setattr("agent86.secrets.has_stored_key", lambda name: name == "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    console = Console(record=True, width=120)
+    console.print(commands_mod._models_tables(repl.cfg))
+    text = console.export_text()
+    assert "keyring" in text
+    assert "sk-" not in text
+
+
+def test_models_table_shows_keyring_availability(tmp_path, monkeypatch):
+    from rich.console import Console
+
+    from agent86.tui import commands as commands_mod
+
+    repl, _ = _repl(tmp_path)
+    monkeypatch.setattr("agent86.secrets.keyring_available", lambda: False)
+
+    console = Console(record=True, width=120)
+    console.print(commands_mod._models_tables(repl.cfg))
+    text = console.export_text()
+    assert "unavailable" in text
