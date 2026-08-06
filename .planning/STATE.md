@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T02:58:42.040Z"
+last_updated: "2026-08-06T03:20:00.000Z"
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 22
-  completed_plans: 21
+  completed_plans: 22
 ---
 
 # Project State
@@ -32,7 +32,7 @@ app — no hand-editing TOML, no restarts.
 |-------|--------|-------|----------|
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
-| 3 — Secrets + Model Config | ● | 9/9 | 100% |
+| 3 — Secrets + Model Config | ● | 13/13 | 100% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
@@ -85,6 +85,29 @@ app — no hand-editing TOML, no restarts.
   byte-unmodified. Full suite green: 331 passed, 0 failed. ROADMAP success criterion 4
   ("switching the active model takes effect for the next turn") now holds in practice for the
   default `anthropic:claude-opus-5` selection. MODEL-01 gap closed.
+
+- 2026-08-06 — Plan 03-13 complete (UAT gap 3 closure, blocker, gap-closure wave — Phase 3 now
+  fully closed, all 6 UAT gaps resolved): `AnthropicProvider.__init__` gains an SDK-version guard
+  — `_MIN_ANTHROPIC_VERSION = (0, 40)` and a tolerant `_version_tuple` parser (stops at the first
+  non-numeric character per dot-segment, so pre-release suffixes never block startup) — that
+  raises `ProviderError` naming the version found, the version needed, and the exact
+  `pip install -U "anthropic>=0.40"` upgrade command, mirroring the existing missing-package
+  `ImportError` path exactly in tone and type. The guard fires before `anthropic.Anthropic(...)`
+  is ever constructed, so a stale SDK below the floor (versions < 0.28 pass `proxies=` to
+  `httpx.Client`, which httpx removed in 0.28) never reaches the opaque
+  `Client.__init__() got an unexpected keyword argument 'proxies'` `TypeError` that dumped a
+  traceback and leaked the key at startup (root cause of UAT gaps 2 and 3 together). Because the
+  guard raises `ProviderError`, it passes through plan 03-11's catch-all and `run_repl`'s existing
+  `except ProviderError` branch untouched — no changes needed to `cognitive/base.py` or
+  `ui/repl.py`. 10 new regression tests in `tests/unit/test_anthropic_sdk_guard.py`: 6 unit tests
+  on the guard itself (stale version raises with exact wording, zero-client-construction proof,
+  real 0.120.2 constructs normally, missing/unparseable version doesn't block startup, missing-
+  package path unchanged), 4 end-to-end through `run_repl` (an opaque `TypeError` and a genuine
+  stale-SDK `ProviderError` both print "Cannot start:" with no traceback and no leaked key).
+  `pyproject.toml`'s `anthropic>=0.40` floor left untouched (verified via empty `git diff --stat`)
+  — no dependency pin was part of this deliverable, per the plan's explicit instruction that the
+  environment (already at anthropic 0.120.2) was not the fix. Full suite green: 341 passed
+  (up from 331), 0 failed, across two consecutive reruns.
 
 - 2026-08-06 — Plan 03-09 complete (full-app chain + live-catalog /model picker, Wave 3 — final
   plan, Phase 3 now feature-complete 9/9): `agent86/tui/messages.py` adds `CatalogReady`.
@@ -305,12 +328,12 @@ app — no hand-editing TOML, no restarts.
 
 ## Next Step
 
-Phase 3 (secrets-model-provider-config) gap-closure wave in progress: plans 03-10, 03-11, 03-12
-complete; 03-13 (UAT blocker) still running in a parallel executor as of this update. Plan 03-12
-closed UAT gap 5 (Anthropic sampling-params 400 on the default `anthropic:claude-opus-5`
-selection) — full suite green at 331 passed, 0 failed after this plan. Manual Windows Terminal
-verification per `03-VALIDATION.md` §Manual-Only (real keyring round-trip, real config.toml
-comment preservation, live OpenRouter/Groq catalog schema check, and a real `hello` turn against
-`anthropic:claude-opus-5`) is still outstanding but does not block automated progress. Next:
-confirm 03-13 lands, then Phase 4 (MCP Config UI) — add/remove/enable/test MCP servers from
-within the CLI, with connection validation (MCP-01).
+Phase 3 (secrets-model-provider-config) is now feature-complete and fully gap-closed: 13/13
+plans done, all 6 UAT items from `03-HUMAN-UAT.md` resolved (1 passed as-is, 5 gaps diagnosed and
+closed by plans 03-10..03-13). Plan 03-13 closed the last blocker, UAT gap 3 (Anthropic SDK
+version guard + fail-soft startup) — full suite green at 341 passed, 0 failed. Manual Windows
+Terminal verification per `03-VALIDATION.md` §Manual-Only (real keyring round-trip, real
+config.toml comment preservation, live OpenRouter/Groq catalog schema check, and a real `hello`
+turn against `anthropic:claude-opus-5`) remains outstanding but does not block automated
+progress. Next: Phase 4 (MCP Config UI) — add/remove/enable/test MCP servers from within the
+CLI, with connection validation (MCP-01).
