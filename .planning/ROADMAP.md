@@ -8,7 +8,7 @@
 | 1 | TUI Skeleton + Live Status | 5/5 | Complete   | 2026-07-20 |
 | 2 | Command Palette + Menus | 4/4 | Complete   | 2026-07-20 |
 | 3 | Secrets + Model Config | 13/13 | Complete   | 2026-08-06 |
-| 4 | MCP Config UI | Add/remove/enable/test MCP servers from within the app | MCP-01, SEC-01 | 3 |
+| 4 | MCP Config UI | 3/8 | In Progress|  |
 | 5 | Packaging & Hardening | Lazy-import packaging, graceful degradation, docs, release | TUI-06 | 4 |
 
 ---
@@ -104,11 +104,11 @@ server's connection and listing its tools before saving.
    tools before the entry is written to config.
 3. Removing or disabling a server updates config non-destructively and reflects in the app.
 
-**Plans:** 8 plans
+**Plans:** 3/8 plans executed
 
 Plans:
 - [x] 04-01-PLAN.md — Wave 0 test scaffolds: secrets/config_writer/config/mcp units, real-stdio D-23 teardown guard, TUI Pilot modules (wave 0)
-- [ ] 04-02-PLAN.md — secrets.py ${VAR} resolver + config_writer DELETE sentinel & SEC-01 authorization guard (wave 1)
+- [x] 04-02-PLAN.md — secrets.py ${VAR} resolver + config_writer DELETE sentinel & SEC-01 authorization guard (wave 1)
 - [x] 04-03-PLAN.md — MCPServerConfig.enabled + ToolRegistry.unregister + `agent86 mcp list` Enabled column (wave 1)
 - [ ] 04-04-PLAN.md — MCPManager task-per-server lifecycle (D-23), connect-time ${VAR} expansion, build_mcp enabled filter (wave 2)
 - [ ] 04-05-PLAN.md — tui/screens/mcp_manager.py: server list modal + shared add/edit form with inline validation (wave 2)

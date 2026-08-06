@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T05:33:46.307Z"
+last_updated: "2026-08-06T05:38:19.946Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 30
-  completed_plans: 24
+  completed_plans: 25
 ---
 
 # Project State
@@ -33,10 +33,27 @@ app — no hand-editing TOML, no restarts.
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
 | 3 — Secrets + Model Config | ● | 13/13 | 100% |
-| 4 — MCP Config UI | ○ | 0/? | 0% |
+| 4 — MCP Config UI | ● | 3/8 | 38% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Plan 04-02 complete (secret references + config deletion, parallel Wave 1):
+  `agent86/secrets.py` adds `find_var_refs`/`expand_var_refs`/`MissingSecretRef` — MCP server
+  configs reference secrets as `${VAR}`, resolved env-first-then-keyring by reusing
+  `resolve_api_key(name, name)` verbatim (no second precedence implementation); an unresolved
+  reference raises `MissingSecretRef` carrying `.var_name`. `agent86/config_writer.py` adds a
+  `DELETE` sentinel so `plan_edit` can remove a whole `[mcp.servers.NAME]` table in the same
+  changes list as an ordinary set (one function, one diff, no `plan_delete`/`deletions=`);
+  `_FORBIDDEN_LEAF_KEYS` gains `"authorization"` (closing the SEC-01 hole in MCP
+  `headers.Authorization`) paired with a `_is_var_ref` exception so the `${VAR}` form saves while
+  a literal — even with a decoy `${notreal}` appended — is refused. Found and fixed a tomlkit
+  quirk while making the delete scaffold pass for real: a hand-written comment between two table
+  headers parses as trailing content of the *preceding* table, so a naive delete silently dropped
+  a surviving sibling's comment; `_apply_delete` now pops that trailing trivia and re-homes it on
+  the parent container. Removed `xfail` from the 6 var_ref scaffolds in `test_secrets.py` and the
+  7 delete/forbidden_var_ref scaffolds in `test_config_writer.py`. Full suite green: 370 passed,
+  35 xfailed (unrelated, later-plan scaffolds), 0 failed.
 
 - 2026-08-06 — Plan 04-03 complete (MCP schema/registry seams, parallel Wave 1): `MCPServerConfig`
   gains `enabled: bool = True` (D-09), TOML round-trippable via the existing `[mcp.servers.NAME]`
