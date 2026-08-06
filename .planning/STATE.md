@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T03:50:38.670Z"
+last_updated: "2026-08-06T04:04:49Z"
 progress:
   total_phases: 5
   completed_phases: 3
@@ -37,6 +37,21 @@ app — no hand-editing TOML, no restarts.
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Quick task 260805-xbw complete: `Harness._observe` (`orchestration/loop.py`)
+  no longer collapses a failed tool result to the bare string `"error"`. `python_exec`/
+  `run_command` report failure with `ok=False`, `error=None`, and the full
+  `exit code / stdout / stderr` traceback in `content` — previously discarded, leaving the
+  model blind to its own bugs and misattributing failures to a flaky sandbox. `_observe` now
+  resolves the failure body from `content` (falling back to `error`, joining both when both
+  are present), then runs the same guardrail scan/`UNTRUSTED_BANNER` wrap the success path
+  already used — one scan site, not two. `_summarize` (the human-facing status line) was
+  already correct and left untouched. `_BASE_IDENTITY` (`cognitive/prompt.py`) gained a
+  `Debugging:` section instructing the model to print `traceback.format_exc()`, inspect data
+  shape (`.keys()`/`type()`/`len()`) before indexing, and treat attempt-to-attempt differences
+  as a clue about its own code, not environment flakiness. RED evidence recorded before the
+  fix: 8/12 new tests failed pre-fix (the intended set), 4/12 passed pre-fix (pins on already-
+  correct behavior). Full suite green: 353 passed (341 baseline + 12 new), 0 failed.
 
 - 2026-08-06 — Plan 03-10 complete (UAT gaps 1 and 4 closure, parallel gap-closure wave):
   `KeyEntryModal.on_input_submitted` and `CatalogPickerModal.on_input_submitted` now call
@@ -325,6 +340,7 @@ app — no hand-editing TOML, no restarts.
 |---|-------------|------|--------|-----------|
 | 260720-1jw | Fix TUI /models rendering bug — wrap tables in a Group | 2026-07-20 | 47da657 | [260720-1jw-fix-tui-models-rendering-bug-wrap-tables](./quick/260720-1jw-fix-tui-models-rendering-bug-wrap-tables/) |
 | 260720-1rs | Fix TUI shift+tab not cycling approval mode — priority binding | 2026-07-20 | 2050765 | [260720-1rs-fix-tui-shift-tab-not-cycling-approval-m](./quick/260720-1rs-fix-tui-shift-tab-not-cycling-approval-m/) |
+| 260805-xbw | Surface failed tool tracebacks to the model — fix _observe + debugging-discipline prompt | 2026-08-06 | (pending) | [260805-xbw-surface-failed-tool-tracebacks-to-the-mo](./quick/260805-xbw-surface-failed-tool-tracebacks-to-the-mo/) |
 
 ## Next Step
 
