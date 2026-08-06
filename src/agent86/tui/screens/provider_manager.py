@@ -151,6 +151,9 @@ class CatalogPickerModal(ModalScreen[str | None]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Free-text fallback (D-01) — also used when a filter matches nothing."""
+        # Consume here — otherwise this bubbles to the App's on_input_submitted and gets
+        # dispatched as a typed prompt line/turn (UAT gap 1, same leak as KeyEntryModal).
+        event.stop()
         raw = (event.value or "").strip()
         if not raw:
             self.dismiss(None)

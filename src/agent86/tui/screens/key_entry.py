@@ -43,6 +43,10 @@ class KeyEntryModal(ModalScreen[str | None]):
         self.query_one("#key-input", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # D-10: consume the event here. If it bubbles past this dismissed modal, the App's
+        # own on_input_submitted treats the raw key as a typed prompt line and echoes it to
+        # the transcript AND sends it to the model as a turn (UAT gap 1).
+        event.stop()
         value = (event.value or "").strip()
         self.dismiss(value or None)
 

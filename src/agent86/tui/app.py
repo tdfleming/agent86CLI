@@ -144,6 +144,10 @@ class Agent86App(App):
     # ---- input submission ------------------------------------------------ #
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Only the prompt Input dispatches lines. A modal's Input (key entry, catalog filter)
+        # must never reach _dispatch_line — see UAT gap 1; mirrors the on_input_changed guard.
+        if event.input.id != "prompt":
+            return
         # Approach B (02-02-SUMMARY.md): no permanent priority `enter` Binding is registered at
         # the App level, so Input.Submitted still fires normally when the palette is closed. An
         # open palette consumes this Enter itself, before the typed-line dispatch below.
