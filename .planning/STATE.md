@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T00:18:06.874Z"
+last_updated: "2026-08-06T00:36:41.222Z"
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 18
-  completed_plans: 17
+  completed_plans: 18
 ---
 
 # Project State
@@ -19,7 +19,7 @@ See: .planning/PROJECT.md (updated 2026-07-19)
 
 **Core value:** Run, configure, and steer the agent entirely from within an interactive terminal
 app — no hand-editing TOML, no restarts.
-**Current focus:** Phase 03 — secrets-model-provider-config
+**Current focus:** Phase 03 complete — next up: Phase 04 (MCP Config UI)
 
 ## Milestone
 
@@ -32,11 +32,35 @@ app — no hand-editing TOML, no restarts.
 |-------|--------|-------|----------|
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
-| 3 — Secrets + Model Config | ◐ | 8/9 | 89% |
+| 3 — Secrets + Model Config | ● | 9/9 | 100% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Plan 03-09 complete (full-app chain + live-catalog /model picker, Wave 3 — final
+  plan, Phase 3 now feature-complete 9/9): `agent86/tui/messages.py` adds `CatalogReady`.
+  `Agent86App` gains a per-session `_catalog_cache`, `_request_catalog`/`_fetch_catalog`
+  (`@work(thread=True)`, cache populated only in `on_catalog_ready` on the UI thread — RESEARCH
+  Open Question 3 resolved: the cache lives on the App, not `_Repl`/`Harness`), and the full
+  `/config model` chain: `ProviderManagerModal` → `KeyEntryModal` (only if no key) → catalog fetch
+  → `CatalogPickerModal` → `ConnectionTestModal` → on pass/override, `store_api_key` fires exactly
+  once (D-14), the model switch applies immediately via `_dispatch_line("/model <ref>")`, then
+  `SaveDiffModal` → `apply_edit` on confirm. `_dispatch_line` now routes any bare (argument-less)
+  `needs_choice` command typed directly — not just palette-picked — through `_run_or_chain`, since
+  the Wave-0 chain tests type `"/config model"` straight into the prompt and press Enter.
+  `model_choices(cfg, extra=...)` enriches the `/model` picker with the live catalog, closing
+  Phase 2's deferred D-12; `/model` stays switch-only (D-15). Removed the 3 remaining chain-wiring
+  `xfail` markers from `tests/tui/test_provider_manager.py` (filling in
+  `test_save_anyway_override`'s exact key-press choreography with network-safe mocks for
+  `catalog.fetch_catalog`/`connection_test.provider_for_ref`); added 3 catalog-cache tests, 3
+  `/model`-picker cache tests, and an escape/`SkipAction` regression test to `test_app.py`, plus 3
+  `model_choices(extra=...)` tests to `test_pickers.py`. Full suite green: **275 passed, 0
+  xfailed, 0 xpassed, 0 failed** (up from 262/2/1/0). `deferred-items.md` removed (its logged
+  failures were transient parallel-wave artifacts, already resolved). Manual Windows Terminal
+  verification (real keyring round-trip, real comment-preserving save, live OpenRouter/Groq
+  catalog schema check) per `03-VALIDATION.md` remains outstanding before the phase is declared
+  fully done end-to-end, but all automated success criteria are met.
 
 - 2026-08-05 — Plan 03-06 complete (key-entry + connection-test modals, parallel Wave 2):
   `src/agent86/tui/screens/key_entry.py` adds `KeyEntryModal(ModalScreen[str | None])` — masked
@@ -233,6 +257,9 @@ app — no hand-editing TOML, no restarts.
 
 ## Next Step
 
-Phase 3 in progress (4/9 plans: 03-01 Wave 0 scaffolds, 03-02 secrets seam, 03-03 config writer,
-03-04 catalog — all backend implementation waves complete) — next: plans 03-05..03-09 (the TUI
-modal waves: key entry/connection test, save diff, provider manager, full-app chain).
+Phase 3 (secrets-model-provider-config) is complete: 9/9 plans, full suite green (275 passed, 0
+xfailed, 0 failed). Manual Windows Terminal verification per `03-VALIDATION.md` §Manual-Only
+(real keyring round-trip, real config.toml comment preservation, live OpenRouter/Groq catalog
+schema check) is still outstanding but does not block automated progress. Next: Phase 4 (MCP
+Config UI) — add/remove/enable/test MCP servers from within the CLI, with connection validation
+(MCP-01).

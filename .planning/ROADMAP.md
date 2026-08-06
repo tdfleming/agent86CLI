@@ -84,7 +84,7 @@ live-tests providers/models, writing changes back to user config non-destructive
 - [x] 03-06-PLAN.md — KeyEntryModal (masked) + ConnectionTestModal (worker + 15s timeout + Save anyway) (wave 2)
 - [x] 03-07-PLAN.md — SaveDiffModal: scope radio + TOML diff preview + confirm/cancel (wave 2)
 - [x] 03-08-PLAN.md — ProviderManagerModal + type-to-filter CatalogPickerModal with free-text fallback (wave 2)
-- [ ] 03-09-PLAN.md — App wiring: /config model chain, session catalog cache, enriched /model picker (wave 3)
+- [x] 03-09-PLAN.md — App wiring: /config model chain, session catalog cache, enriched /model picker (wave 3)
 
 ### Phase 4: MCP Config UI
 **Goal:** An in-app MCP modal to list, add, remove, and enable/disable servers, validating a
