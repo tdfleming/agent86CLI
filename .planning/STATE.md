@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-07-22T01:32:23.196Z"
+last_updated: "2026-08-06T00:02:22.158Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 18
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -19,7 +19,7 @@ See: .planning/PROJECT.md (updated 2026-07-19)
 
 **Core value:** Run, configure, and steer the agent entirely from within an interactive terminal
 app — no hand-editing TOML, no restarts.
-**Current focus:** Phase 3 — Secrets + Model/Provider Config
+**Current focus:** Phase 03 — secrets-model-provider-config
 
 ## Milestone
 
@@ -32,11 +32,22 @@ app — no hand-editing TOML, no restarts.
 |-------|--------|-------|----------|
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
-| 3 — Secrets + Model Config | ○ | 0/? | 0% |
+| 3 — Secrets + Model Config | ◐ | 1/9 | 11% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-05 — Plan 03-01 complete (Wave 0 scaffolds, 1/9 plans in Phase 3): `keyring>=25.0` and
+  `tomlkit>=0.13` added as core-but-lazy dependencies (installed, confirmed absent from
+  `sys.modules` after `import agent86.cli`); 4 backend xfail-scaffolded unit-test modules
+  (`test_secrets`, `test_config_writer`, `test_catalog`, `test_providers_key_seam`) and 3 TUI
+  xfail-scaffolded Pilot modules (`test_provider_manager`, `test_connection_test`, `test_save_diff`)
+  written against the exact interfaces plans 03-02..03-09 must implement, plus 6 fixture files
+  (hand-commented TOML + 5 catalog JSON payloads). Work was committed in a prior session
+  (2814da7/aaa0649/875015e, 2026-07-21); this session verified every acceptance criterion still
+  holds and produced the SUMMARY.md that was never created. Full suite green: 198 passed,
+  42 xfailed, 3 xpassed, 0 failed.
 
 - 2026-07-20 — Quick task 260720-1rs complete: fixed Shift+Tab silently doing nothing in the TUI
   instead of cycling the approval mode. Root cause: Textual's `App` ships a default `shift+tab`
@@ -124,5 +135,6 @@ app — no hand-editing TOML, no restarts.
 
 ## Next Step
 
-Phase 2 complete (4/4 plans) — TUI-03 and TUI-04 delivered. Next: `/gsd:execute-phase 3` —
-Secrets + Model Config.
+Phase 3 in progress (1/9 plans, Wave 0 scaffolds complete) — next: plans 03-02..03-05 (secrets
+seam, config writer, catalog fetch — the implementation waves that make the Wave 0 scaffold
+tests go green).
