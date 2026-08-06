@@ -683,3 +683,178 @@ async def test_headers_are_written_as_individual_key_paths(tmp_path):
     changes = app._mcp_changes(draft)
     assert (["mcp", "servers", "alpha", "headers", "Authorization"], "Bearer ${A86_TEST_TOKEN}") in changes
     assert not any(path == ["mcp", "servers", "alpha", "headers"] for path, _ in changes)
+
+
+# ---- remove / enable / disable through the same diff+confirm flow (task 3, D-10/D-11/D-12) - #
+
+_ALPHA_TOML = (
+    '[mcp.servers.alpha]\ncommand = "npx"\nargs = ["-y", "srv"]\n\n'
+    '[mcp.servers.off]\ncommand = "uvx"\nargs = ["thing"]\nenabled = false\n'
+)
+
+
+async def _make_repl_with_mcp_servers(tmp_path, provider):
+    """A repl whose config already lists "alpha" (enabled, mounted) and "off" (disabled)."""
+    repl = _make_repl(tmp_path, provider)
+    servers = {
+        "alpha": MCPServerConfig(command="npx", args=["-y", "srv"]),
+        "off": MCPServerConfig(command="uvx", args=["thing"], enabled=False),
+    }
+    repl.cfg.mcp_servers = servers
+    fake = _FakeMCPManager()
+    fake.servers = dict(servers)
+    tools = [_FakeMCPTool("mcp__alpha__search", "search"), _FakeMCPTool("mcp__alpha__fetch", "fetch")]
+    fake._tools["alpha"] = tools
+    for tool in tools:
+        repl.harness.registry.register(tool)
+    repl.harness.mcp = fake
+    return repl, fake
+
+
+async def test_remove_opens_save_diff_with_delete_sentinel(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    target = tmp_path / "config.toml"
+    target.write_text(_ALPHA_TOML, encoding="utf-8")
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    repl, fake = await _make_repl_with_mcp_servers(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+        await pilot.press("d")
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
+        await pilot.pause()
+
+        body = app.screen.query_one("#save-diff-body", Static)
+        diff = str(body.render())
+    assert "[mcp.servers.alpha]" in diff
+    assert diff.strip().startswith("---") or "-[mcp.servers.alpha]" in diff or "-[mcp.servers.alpha]".lstrip() in diff
+
+
+async def test_confirmed_remove_unmounts_tools(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    target = tmp_path / "config.toml"
+    target.write_text(_ALPHA_TOML, encoding="utf-8")
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    repl, fake = await _make_repl_with_mcp_servers(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+        await pilot.press("d")
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
+        await _wait_until(lambda: bool(app.screen.query("#save-confirm")))
+        await pilot.pause()
+        await pilot.click("#save-confirm")
+        await pilot.pause()
+
+    names = repl.harness.registry.names()
+    assert "mcp__alpha__search" not in names
+    assert "mcp__alpha__fetch" not in names
+    assert fake.stop_calls == ["alpha"]
+
+
+async def test_cancelled_remove_changes_nothing(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    target = tmp_path / "config.toml"
+    target.write_text(_ALPHA_TOML, encoding="utf-8")
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+    before = target.read_text(encoding="utf-8")
+
+    repl, fake = await _make_repl_with_mcp_servers(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+        await pilot.press("d")
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+    assert target.read_text(encoding="utf-8") == before
+    names = repl.harness.registry.names()
+    assert "mcp__alpha__search" in names
+    assert "mcp__alpha__fetch" in names
+    assert fake.stop_calls == []
+
+
+async def test_disable_writes_enabled_false_and_unmounts(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    target = tmp_path / "config.toml"
+    target.write_text(_ALPHA_TOML, encoding="utf-8")
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    repl, fake = await _make_repl_with_mcp_servers(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+        await pilot.press("t")  # "alpha" is highlighted first and is enabled
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
+        await pilot.pause()
+
+        body = app.screen.query_one("#save-diff-body", Static)
+        diff = str(body.render())
+        assert "enabled = false" in diff
+
+        await _wait_until(lambda: bool(app.screen.query("#save-confirm")))
+        await pilot.click("#save-confirm")
+        await pilot.pause()
+
+    assert fake.stop_calls == ["alpha"]
+
+
+async def test_enable_runs_connection_test_first(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.mcp_test import MCPTestModal
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    target = tmp_path / "config.toml"
+    target.write_text(_ALPHA_TOML, encoding="utf-8")
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    repl, fake = await _make_repl_with_mcp_servers(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+        await pilot.press("down")  # highlight "off" (disabled)
+        await pilot.press("t")
+        await _wait_until(lambda: isinstance(app.screen, MCPTestModal))
+        assert not isinstance(app.screen, SaveDiffModal)
+
+
+async def test_remove_of_never_mounted_server_raises_nothing(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    target = tmp_path / "config.toml"
+    target.write_text(_ALPHA_TOML, encoding="utf-8")
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    repl, fake = await _make_repl_with_mcp_servers(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+        await pilot.press("down")  # highlight "off" — never mounted, no tools registered
+        await pilot.press("d")
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
+        await _wait_until(lambda: bool(app.screen.query("#save-confirm")))
+        await pilot.pause()
+        await pilot.click("#save-confirm")
+        await pilot.pause()
+
+    # no exception raised; "off" was never in the registry or the fake manager's tool map
+    assert fake.stop_calls == ["off"]
