@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from typing import Any
 
 from textual import work
 from textual.app import ComposeResult
@@ -28,7 +29,7 @@ from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label, LoadingIndicator, Static
 
-from agent86.cognitive.base import provider_for_ref
+from agent86.cognitive.base import UNRESOLVED, provider_for_ref
 from agent86.config import Config
 from agent86.types import CompletionRequest, Message, ModelRef, Role
 
@@ -50,10 +51,13 @@ class ConnectionTestModal(ModalScreen[TestOutcome]):
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, cfg: Config, ref: ModelRef, api_key: str | None) -> None:
+    def __init__(self, cfg: Config, ref: ModelRef, api_key: Any = UNRESOLVED) -> None:
         super().__init__()
         self._cfg = cfg
         self._ref = ref
+        # `UNRESOLVED` (the default) means "resolve from env then keyring" — see
+        # provider_for_ref. A concrete str is a key typed this pass that has not been stored
+        # anywhere yet (D-14).
         self._api_key = api_key
         self._error: str | None = None
 

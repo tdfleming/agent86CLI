@@ -312,6 +312,7 @@ class Agent86App(App):
     def _on_catalog_picked(self, ref: str | None) -> None:
         if ref is None:
             return
+        from agent86.cognitive.base import UNRESOLVED
         from agent86.types import ModelRef
 
         try:
@@ -320,8 +321,13 @@ class Agent86App(App):
             self.query_one("#transcript", RichLog).write(f"[red]error:[/red] {exc}")
             return
         self._pending_ref = ref
+        # UAT gap 4: `None` means "the user explicitly supplied an empty key" to
+        # provider_for_ref, which then SKIPS env/keyring resolution. When no key was typed
+        # this pass, hand over the UNRESOLVED sentinel so the already-stored keyring entry
+        # (D-07) is resolved instead of erroring with "No Anthropic API key found".
+        api_key = self._pending_key if self._pending_key is not None else UNRESOLVED
         self.push_screen(
-            ConnectionTestModal(self.repl.cfg, parsed, self._pending_key), self._on_test_done
+            ConnectionTestModal(self.repl.cfg, parsed, api_key), self._on_test_done
         )
 
     def _on_test_done(self, outcome: TestOutcome) -> None:
