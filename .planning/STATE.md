@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T00:36:41.222Z"
+last_updated: "2026-08-06T02:53:17.613Z"
 progress:
   total_phases: 5
-  completed_phases: 3
-  total_plans: 18
+  completed_phases: 2
+  total_plans: 22
   completed_plans: 18
 ---
 
@@ -19,7 +19,7 @@ See: .planning/PROJECT.md (updated 2026-07-19)
 
 **Core value:** Run, configure, and steer the agent entirely from within an interactive terminal
 app — no hand-editing TOML, no restarts.
-**Current focus:** Phase 03 complete — next up: Phase 04 (MCP Config UI)
+**Current focus:** Phase 03 — secrets-model-provider-config
 
 ## Milestone
 
@@ -37,6 +37,21 @@ app — no hand-editing TOML, no restarts.
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Plan 03-11 complete (UAT gap 2 closure, parallel gap-closure wave): closes the
+  second, independent secret-leak path found during UAT — a startup crash rendering a live
+  `sk-ant-...` key in the `locals` panels of four traceback frames. `agent86.cli`'s `typer.Typer`
+  now sets `pretty_exceptions_show_locals=False` (Rich never renders frame locals, on any code
+  path). `agent86.secrets.redact()` added — strips explicit secrets and key-shaped tokens
+  (`sk-`/`gsk_`/`xai-`/`AIza` prefixes) from any human-visible string. `cognitive/base.py`'s
+  `provider_for_ref` refactored: the dispatch chain moved verbatim into a private
+  `_build_provider()`, guarded by a wrapper that converts any non-`ProviderError` exception into
+  a `ProviderError` with a redacted message and a severed `__cause__` chain (`from None`) —
+  deliberate `ProviderError`s (missing key, missing SDK, unknown provider) pass through
+  unchanged. 10 new regression tests in `tests/unit/test_secret_traceback.py`; 2 confirmed to
+  fail against the pre-fix source via a `git stash` round-trip. Full suite green: 331 passed
+  (grown from 275/311 as sibling gap-closure plans 03-10..03-13 landed concurrently in the same
+  parallel wave). SEC-01/D-10 traceback leak closed.
 
 - 2026-08-06 — Plan 03-09 complete (full-app chain + live-catalog /model picker, Wave 3 — final
   plan, Phase 3 now feature-complete 9/9): `agent86/tui/messages.py` adds `CatalogReady`.
