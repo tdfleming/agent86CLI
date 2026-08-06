@@ -27,7 +27,7 @@ __all__ = [
     "startup_notes",
 ]
 
-ChoiceKind = Literal[None, "model", "mode", "config_model"]
+ChoiceKind = Literal[None, "model", "mode", "config_model", "config_mcp"]
 
 
 @dataclass
@@ -214,6 +214,17 @@ COMMANDS: list[CommandEntry] = [
             "[cyan]/config model[/cyan], or run agent86 without --plain.",
         ),
         needs_choice="config_model",
+    ),
+    CommandEntry(
+        name="/config mcp",
+        usage="/config mcp",
+        description="Manage MCP servers: add, test, enable/disable, remove",
+        handler=lambda repl, arg: CommandResult(
+            "handled",
+            "The MCP manager is a TUI surface — press / and pick "
+            "[cyan]/config mcp[/cyan], or run agent86 without --plain.",
+        ),
+        needs_choice="config_mcp",
     ),
     CommandEntry(
         name="/models",

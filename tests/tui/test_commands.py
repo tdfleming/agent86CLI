@@ -177,7 +177,36 @@ def test_help_lists_config_model(tmp_path):
 
 def test_palette_prefix_matches_both_config_entries(tmp_path):
     names = [c.name for c in COMMANDS if c.name.startswith("/config")]
-    assert names == ["/config", "/config model"]
+    assert names == ["/config", "/config model", "/config mcp"]
+
+
+def test_config_mcp_beats_config_in_dispatch(tmp_path):
+    match = find_command_for_line("/config mcp")
+    assert match is not None
+    entry, arg = match
+    assert entry.name == "/config mcp"
+    assert arg == ""
+
+
+def test_config_mcp_in_help_table(tmp_path):
+    from rich.console import Console
+
+    console = Console(record=True, width=120)
+    console.print(_help_table())
+    text = console.export_text()
+    assert "/config mcp" in text
+
+
+def test_config_bare_still_dispatches_to_config(tmp_path):
+    match = find_command_for_line("/config")
+    assert match is not None
+    assert match[0].name == "/config"
+
+
+def test_config_mcp_plain_handler_returns_tui_note(tmp_path):
+    repl, _ = _repl(tmp_path)
+    result = handle_command(repl, "/config mcp")
+    assert "TUI surface" in result.render
 
 
 def test_models_table_shows_key_source_not_key(tmp_path, monkeypatch):

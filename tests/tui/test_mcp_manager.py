@@ -301,17 +301,17 @@ async def test_form_prefilled_for_edit():
 # ---- /config mcp command registration and full-app chain (D-21, plan 04-08) ---------------- #
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-08", strict=False)
 async def test_config_mcp_command_is_in_registry():
     from agent86.tui.commands import find_command, find_command_for_line
 
     entry = find_command("/config mcp")
     assert entry is not None
     assert entry.needs_choice == "config_mcp"
-    assert find_command_for_line("/config mcp") is entry
+    match = find_command_for_line("/config mcp")
+    assert match is not None
+    assert match[0] is entry
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-08", strict=False)
 async def test_config_mcp_opens_manager_modal_in_full_app(tmp_path):
     from agent86.tui.screens.mcp_manager import MCPManagerModal
 
