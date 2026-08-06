@@ -40,6 +40,15 @@ class ToolRegistry:
             raise ValueError(f"Tool '{tool.name}' is already registered.")
         self._tools[tool.name] = tool
 
+    def unregister(self, name: str) -> bool:
+        """Remove one tool by name; True if it was present (D-14).
+
+        Needed so a removed or disabled MCP server's tools stop being callable *immediately*,
+        without rebuilding the whole registry — leaving them mounted would let the model invoke
+        something the user just deleted.
+        """
+        return self._tools.pop(name, None) is not None
+
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 

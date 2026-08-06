@@ -114,7 +114,6 @@ def test_open_transport_selects_client_per_transport():
 # --- Wave 0 scaffolds: ToolRegistry.unregister + per-server MCPManager lifecycle (MCP-01) ----- #
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-03", strict=False)
 def test_registry_unregister_removes_a_tool():
     from agent86.tools.registry import ToolRegistry
 
@@ -126,7 +125,6 @@ def test_registry_unregister_removes_a_tool():
     assert registry.get(tool.name) is None
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-03", strict=False)
 def test_registry_unregister_unknown_returns_false():
     from agent86.tools.registry import ToolRegistry
 
