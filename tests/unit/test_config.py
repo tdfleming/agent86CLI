@@ -89,7 +89,6 @@ def test_mcp_server_enabled_round_trips_false():
     assert MCPServerConfig(command="npx", enabled=False).enabled is False
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_build_mcp_filters_disabled_servers(monkeypatch):
     import agent86.tools.mcp_client as mcp_client
     from agent86.tools.mcp_client import build_mcp
@@ -107,7 +106,6 @@ def test_build_mcp_filters_disabled_servers(monkeypatch):
     assert set(manager.servers) == {"on"}
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_build_mcp_returns_none_when_all_disabled(monkeypatch):
     import agent86.tools.mcp_client as mcp_client
     from agent86.tools.mcp_client import build_mcp

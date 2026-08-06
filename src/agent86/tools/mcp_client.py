@@ -351,12 +351,20 @@ def _content_to_text(result: Any) -> str:
 
 
 def build_mcp(config: Config) -> MCPManager | None:
-    """Start MCP servers from config, or return None if disabled / none configured."""
+    """Start MCP servers from config, or return None if disabled / none configured.
+
+    Per-server ``enabled = false`` (D-09) is filtered here rather than inside ``MCPManager``, so
+    ``MCPManager.servers`` only ever holds servers that are supposed to be running — bulk
+    ``start()`` has no separate check to forget (RESEARCH Pitfall 5).
+    """
     if not config.mcp.enabled or not config.mcp_servers:
         return None
-    manager = MCPManager(config.mcp_servers)
+    enabled = {name: cfg for name, cfg in config.mcp_servers.items() if cfg.enabled}
+    if not enabled:
+        return None
+    manager = MCPManager(enabled)
     manager.start()
     return manager
 
 
-__all__ = ["MCPManager", "MCPTool", "build_mcp"]
+__all__ = ["MCPManager", "MCPTool", "build_mcp", "_resolve_server_secrets", "unresolved_var_refs"]
