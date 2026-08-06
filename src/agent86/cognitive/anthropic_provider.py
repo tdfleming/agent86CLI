@@ -25,6 +25,26 @@ from agent86.types import (
 
 _DEFAULT_MAX_TOKENS = 4096
 
+#: Must match the floor declared in pyproject.toml's `anthropic` extra. Versions below 0.28
+#: pass `proxies=` to httpx.Client, which httpx removed in 0.28 — the failure surfaces as an
+#: opaque TypeError from inside httpx rather than anything actionable (UAT gap 3).
+_MIN_ANTHROPIC_VERSION: tuple[int, ...] = (0, 40)
+
+
+def _version_tuple(raw: str) -> tuple[int, ...]:
+    """Leading numeric components of a version string; stops at the first non-numeric part."""
+    parts: list[int] = []
+    for chunk in raw.split("."):
+        digits = ""
+        for ch in chunk:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
 
 class AnthropicProvider(ModelProvider):
     name = "anthropic"
@@ -40,6 +60,22 @@ class AnthropicProvider(ModelProvider):
                 "The 'anthropic' package is not installed. Install it with:\n"
                 '    pip install "agent86[anthropic]"'
             ) from exc
+
+        installed = getattr(anthropic, "__version__", None)
+        if installed:
+            found = _version_tuple(installed)
+            # An unparseable version is not a reason to refuse to run.
+            if found and found < _MIN_ANTHROPIC_VERSION:
+                minimum = ".".join(str(n) for n in _MIN_ANTHROPIC_VERSION)
+                raise ProviderError(
+                    f"The installed 'anthropic' package is {installed}, which is too old for "
+                    f"agent86 (needs >= {minimum}). Versions below 0.28 pass a 'proxies=' "
+                    "argument that httpx 0.28+ removed, which fails with an opaque TypeError. "
+                    "Upgrade it with:\n"
+                    '    pip install -U "anthropic>=0.40"\n'
+                    "If the old version is held by another package sharing this environment "
+                    "(e.g. 'anthropic-tools'), install agent86 into its own virtualenv."
+                )
 
         key_env = config.api_key_env or "ANTHROPIC_API_KEY"
         if api_key is UNRESOLVED:
