@@ -80,7 +80,6 @@ def _stdio_cfg() -> MCPServerConfig:
 
 
 @pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_per_server_start_lists_real_tools():
     manager = MCPManager({})
     try:
@@ -92,7 +91,6 @@ def test_per_server_start_lists_real_tools():
 
 
 @pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_per_server_call_tool_round_trip():
     manager = MCPManager({})
     try:
@@ -104,7 +102,6 @@ def test_per_server_call_tool_round_trip():
 
 
 @pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_independent_teardown_leaves_other_server_intact():
     """The highest-value test in the phase (D-23): stopping one server must not tear down
     another server's session via a cross-task cancel scope."""
@@ -133,7 +130,6 @@ def test_independent_teardown_leaves_other_server_intact():
 
 
 @pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_close_after_partial_stop_is_clean():
     manager = MCPManager({})
     try:
@@ -146,7 +142,6 @@ def test_close_after_partial_stop_is_clean():
 
 
 @pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_start_server_failure_does_not_break_manager():
     manager = MCPManager({})
     try:

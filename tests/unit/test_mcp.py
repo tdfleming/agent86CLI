@@ -141,7 +141,6 @@ class FakeManager:
         return "result text"
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_manager_start_server_registers_tools_for_lookup(monkeypatch):
     import agent86.tools.mcp_client as mcp_client
     from contextlib import asynccontextmanager
@@ -185,7 +184,6 @@ def test_manager_start_server_registers_tools_for_lookup(monkeypatch):
     assert {t.name for t in tools} == {t.name for t in manager.tools_for("srv")}
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_manager_stop_server_drops_its_tools(monkeypatch):
     import agent86.tools.mcp_client as mcp_client
     from contextlib import asynccontextmanager
@@ -230,7 +228,6 @@ def test_manager_stop_server_drops_its_tools(monkeypatch):
     assert "srv" not in manager._sessions
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-04", strict=False)
 def test_manager_start_server_without_mcp_package_raises_with_note(monkeypatch):
     import builtins
 
@@ -248,3 +245,4 @@ def test_manager_start_server_without_mcp_package_raises_with_note(monkeypatch):
     with pytest.raises(RuntimeError):
         manager.start_server("srv", cfg)
     assert manager.note is not None and 'pip install "agent86[mcp]"' in manager.note
+
