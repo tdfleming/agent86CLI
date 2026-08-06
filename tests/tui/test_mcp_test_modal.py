@@ -1,24 +1,18 @@
-"""Wave 0 scaffolds for MCP-01: `MCPTestModal` Pilot tests (D-18/D-19/D-20).
+"""`MCPTestModal` Pilot tests (D-18/D-19/D-20).
 
 Implemented by plan 04-07. Mirrors `tests/tui/test_connection_test.py`: a `_PickerHost` pushes
 the modal, a fake manager stands in for the real `MCPManager` so no subprocess is ever spawned,
 and the modal's dismissal value is the assertion surface.
-
-Imports of the not-yet-implemented module are deferred inside test bodies so collection
-succeeds; the module-level xfail marker records the pending status.
 """
 
 from __future__ import annotations
 
 import threading
 
-import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
 from agent86.config import MCPServerConfig
-
-pytestmark = pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-07", strict=False)
 
 
 class _PickerHost(App):
@@ -88,7 +82,7 @@ async def test_mcp_test_modal_lists_tool_names_on_success():
         await pilot.pause()
         for _ in range(30):
             try:
-                rendered = str(host.screen.query_one("#mcp-test-tools", Static).renderable)
+                rendered = str(host.screen.query_one("#mcp-test-tools", Static).render())
             except Exception:
                 rendered = ""
             if "mcp__a__add" in rendered:
