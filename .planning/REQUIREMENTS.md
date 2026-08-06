@@ -68,9 +68,9 @@ Deferred — acknowledged but not in this milestone's roadmap.
 | TUI-05 | Phase 1 | Complete |
 | TUI-03 | Phase 2 | Complete |
 | TUI-04 | Phase 2 | Complete |
-| SEC-01 | Phase 3 | In Progress (Wave 0 scaffolds done, plan 03-01/9) |
-| MODEL-01 | Phase 3 | In Progress (Wave 0 scaffolds done, plan 03-01/9) |
-| MODEL-02 | Phase 3 | In Progress (Wave 0 scaffolds done, plan 03-01/9) |
+| SEC-01 | Phase 3 | Complete |
+| MODEL-01 | Phase 3 | Complete |
+| MODEL-02 | Phase 3 | Complete |
 | MCP-01 | Phase 4 | Pending |
 | TUI-06 | Phase 5 | Pending |
 
