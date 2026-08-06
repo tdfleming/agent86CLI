@@ -8,6 +8,7 @@ where that plugs in is marked with ``# PHASE 2`` below.
 
 from __future__ import annotations
 
+import os
 import sys
 
 import typer
@@ -179,6 +180,13 @@ config_app = typer.Typer(help="Inspect configuration.")
 app.add_typer(config_app, name="config")
 
 
+@config_app.callback(invoke_without_command=True)
+def config_default(ctx: typer.Context) -> None:
+    """With no subcommand: show providers, key source, and OS keyring status."""
+    if ctx.invoked_subcommand is None:
+        _list_models(load_config())
+
+
 @config_app.command("path")
 def config_path_cmd() -> None:
     """Show where configuration is read from."""
@@ -214,13 +222,37 @@ def models(ctx: typer.Context) -> None:
 
 
 def _list_models(cfg: Config) -> None:
+    from agent86.secrets import has_stored_key, keyring_available
+
+    def _key_source(name: str, prov) -> str:
+        """Where this provider's key comes from — never the key itself (D-10)."""
+        if not prov.api_key_env:
+            return "[dim]n/a[/dim]"  # keyless local endpoint
+        if os.getenv(prov.api_key_env):
+            return "[green]env[/green]"
+        if has_stored_key(name):
+            return "[green]keyring[/green]"
+        return "[yellow]none[/yellow]"
+
     table = Table(show_header=True, header_style="bold", title="Providers")
     table.add_column("Provider")
     table.add_column("Base URL")
     table.add_column("API key env")
+    table.add_column("Key")
     for name, prov in cfg.providers.items():
-        table.add_row(name, prov.base_url or "[dim]-[/dim]", prov.api_key_env or "[dim]-[/dim]")
+        table.add_row(
+            name,
+            prov.base_url or "[dim]-[/dim]",
+            prov.api_key_env or "[dim]-[/dim]",
+            _key_source(name, prov),
+        )
     console.print(table)
+    console.print(
+        "OS keyring: [green]available[/green]"
+        if keyring_available()
+        else "OS keyring: [yellow]unavailable[/yellow] "
+        "(keys resolve from environment variables only)"
+    )
 
     roles = Table(show_header=True, header_style="bold", title="Model roles")
     roles.add_column("Role")
