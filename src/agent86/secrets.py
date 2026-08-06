@@ -16,8 +16,33 @@ reachable from ``agent86.cli`` breaks the cold-start guarantee for ``run`` and `
 from __future__ import annotations
 
 import os
+import re
 
 SERVICE_NAME = "agent86"
+
+_REDACTED = "***redacted***"
+
+#: Token shapes that are almost certainly a credential. Deliberately conservative:
+#: a false positive only makes an error message less precise, a false negative leaks.
+_KEY_SHAPES = re.compile(
+    r"\b(?:sk-[A-Za-z0-9._\-]{16,}"
+    r"|gsk_[A-Za-z0-9]{20,}"
+    r"|xai-[A-Za-z0-9]{20,}"
+    r"|AIza[A-Za-z0-9_\-]{20,})\b"
+)
+
+
+def redact(text: str, *secrets: str | None) -> str:
+    """Return `text` with every known secret and key-shaped token replaced.
+
+    SEC-01 / D-10: used on any string that may be shown to a human (error messages,
+    transcript lines, logs). Never raises; a `None`/empty secret is ignored.
+    """
+    out = text
+    for secret in secrets:
+        if secret and len(secret) >= 8:
+            out = out.replace(secret, _REDACTED)
+    return _KEY_SHAPES.sub(_REDACTED, out)
 
 
 class SecretStoreError(RuntimeError):
@@ -103,6 +128,7 @@ def clear_api_key(provider_name: str) -> bool:
 __all__ = [
     "SERVICE_NAME",
     "SecretStoreError",
+    "redact",
     "resolve_api_key",
     "keyring_available",
     "has_stored_key",

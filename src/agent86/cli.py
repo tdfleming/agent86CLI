@@ -47,6 +47,10 @@ app = typer.Typer(
     "and let them use tools and skills.",
     add_completion=False,
     no_args_is_help=False,
+    # SEC-01 / D-10: Rich renders frame locals by default, which printed a full
+    # sk-ant-... key in four traceback frames during UAT. A secret must never be
+    # renderable, including on the crash path.
+    pretty_exceptions_show_locals=False,
 )
 
 
