@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T05:38:19.946Z"
+last_updated: "2026-08-06T05:52:09.460Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 30
-  completed_plans: 25
+  completed_plans: 27
 ---
 
 # Project State
@@ -33,7 +33,7 @@ app — no hand-editing TOML, no restarts.
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
 | 3 — Secrets + Model Config | ● | 13/13 | 100% |
-| 4 — MCP Config UI | ● | 3/8 | 38% |
+| 4 — MCP Config UI | ● | 4/8 | 50% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
@@ -65,6 +65,26 @@ app — no hand-editing TOML, no restarts.
   `xfail` from the 4 Wave 0 scaffolds owned by this plan across `test_config.py`/`test_mcp.py`;
   the 4 `build_mcp`/`start_server`/`stop_server` scaffolds owned by plan 04-04 remain xfail-marked
   and untouched. Full suite green: 363 passed, 40 xfailed, 2 xpassed, 0 failed.
+
+- 2026-08-06 — Plan 04-05 complete (MCP manager list + form modals, parallel Wave 2):
+  `agent86/tui/screens/mcp_manager.py` created — `mcp_server_rows(cfg)` (pure, D-08: never spawns
+  a subprocess or opens a transport; endpoint rendering byte-identical to `agent86 mcp list`),
+  `parse_server_json` (accepts both the bare and `{"mcpServers"/"servers": {...}}` README JSON
+  shapes, D-02; wrapped name wins over `name_hint`), `build_manual_config` (shlex-splits a
+  command line into command+args, D-03; only honours an explicit transport when `url` is set,
+  D-06), `parse_kv_list` (env/headers parsing, `${VAR}` passthrough for D-17). `MCPManagerModal`
+  lists every server plus two peer "add" options (D-01) and dispatches edit/remove/toggle via
+  Enter/`d`/`t`. `MCPServerFormModal` serves add-json/add-manual/edit from one form (D-07),
+  re-validating on every keystroke and rendering the config validator's own message verbatim
+  inline while disabling Continue (D-05), and blocking a name collision (D-04). Removed the Wave 0
+  module-level `xfail` from `tests/tui/test_mcp_manager.py`; only the two 04-08-owned full-app
+  chain tests remain explicitly `xfail`-marked. Fixed a genuine scaffold bug along the way —
+  `Static.renderable` doesn't exist on the installed Textual 8.2.8 (`.render()` does, matching
+  `test_save_diff.py`'s existing pattern). `pytest tests/tui/test_mcp_manager.py -q`: 17 passed,
+  2 xfailed. `pytest tests/tui/ -q`: 109 passed, 8 xfailed, 0 failed. A pre-existing,
+  test-order-dependent `CatalogPickerModal`/`#catalog-filter` flake (unrelated to this plan's
+  files, first seen during 04-02) still reproduces in a full-suite run; logged in
+  `deferred-items.md`, not fixed here (scope boundary).
 
 - 2026-08-06 — Quick task 260805-xbw complete: `Harness._observe` (`orchestration/loop.py`)
   no longer collapses a failed tool result to the bare string `"error"`. `python_exec`/
