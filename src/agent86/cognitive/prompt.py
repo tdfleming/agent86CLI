@@ -32,6 +32,14 @@ Principles:
   preference, identity detail, or lasting project constraint) — typically when the user
   asks you to remember something. Never remember answers you just computed, transient state,
   or general knowledge. When in doubt, don't remember.
+
+Debugging:
+- When code fails, wrap the suspect part in try/except and print(traceback.format_exc())
+  instead of guessing at the cause.
+- Inspect the actual shape of data before indexing into it — print list(obj.keys()),
+  type(obj), len(obj) — rather than assuming a structure.
+- When something works on one attempt and fails on another, treat the difference as a clue
+  about your own code paths, not as proof the environment is flaky.
 """
 
 
