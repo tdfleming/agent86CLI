@@ -37,7 +37,7 @@ Requirements for the v0.6 interactive milestone. Each maps to exactly one roadma
 
 ### MCP Configuration
 
-- [ ] **MCP-01**: The user can list, add, remove, and enable/disable MCP servers from within the
+- [x] **MCP-01**: The user can list, add, remove, and enable/disable MCP servers from within the
       app, with a connection test that validates the server and enumerates its tools before saving
 
 ## v2 Requirements

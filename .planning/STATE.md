@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T05:27:42.544Z"
+last_updated: "2026-08-06T05:33:46.307Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 30
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -37,6 +37,17 @@ app — no hand-editing TOML, no restarts.
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Plan 04-03 complete (MCP schema/registry seams, parallel Wave 1): `MCPServerConfig`
+  gains `enabled: bool = True` (D-09), TOML round-trippable via the existing `[mcp.servers.NAME]`
+  normalize path, with `_resolve_transport` unchanged. `agent86 mcp list` gained an `Enabled`
+  column (`Name | Transport | Enabled | Endpoint`) — no new Typer subcommand. `ToolRegistry` gains
+  `unregister(name) -> bool` (D-14), popping a tool by name so a removed/disabled MCP server's
+  tools stop being callable immediately; `register`/`default_registry`'s bulk-mount duplicate-
+  swallow left byte-identical (explicit collision surfacing deferred to plan 04-06, D-24). Removed
+  `xfail` from the 4 Wave 0 scaffolds owned by this plan across `test_config.py`/`test_mcp.py`;
+  the 4 `build_mcp`/`start_server`/`stop_server` scaffolds owned by plan 04-04 remain xfail-marked
+  and untouched. Full suite green: 363 passed, 40 xfailed, 2 xpassed, 0 failed.
 
 - 2026-08-06 — Quick task 260805-xbw complete: `Harness._observe` (`orchestration/loop.py`)
   no longer collapses a failed tool result to the bare string `"error"`. `python_exec`/
