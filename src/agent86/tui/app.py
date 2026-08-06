@@ -17,7 +17,13 @@ from textual.widgets import Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
 from agent86.config import Config
-from agent86.tui.commands import COMMANDS, find_command, handle_command, startup_notes
+from agent86.tui.commands import (
+    COMMANDS,
+    find_command,
+    find_command_for_line,
+    handle_command,
+    startup_notes,
+)
 from agent86.tui.messages import (
     ApprovalRequest,
     CatalogReady,
@@ -27,8 +33,16 @@ from agent86.tui.messages import (
     TurnError,
 )
 from agent86.tui.screens.approval import ApprovalModal
+from agent86.tui.screens.connection_test import ConnectionTestModal, TestOutcome
+from agent86.tui.screens.key_entry import KeyEntryModal
 from agent86.tui.screens.mode_picker import ModePickerModal
 from agent86.tui.screens.model_picker import ModelPickerModal, model_choices
+from agent86.tui.screens.provider_manager import (
+    CatalogPickerModal,
+    ProviderManagerModal,
+    provider_rows,
+)
+from agent86.tui.screens.save_diff import SaveDiffModal
 from agent86.tui.turn_bridge import run_turn_worker
 from agent86.tui.widgets.status_footer import StatusFooter
 
@@ -59,6 +73,20 @@ class Agent86App(App):
     }
     #status {
         dock: bottom;
+    }
+    #provider-manager-dialog, #catalog-picker-dialog, #key-entry-dialog,
+    #connection-test-dialog, #save-diff-dialog {
+        width: 80%;
+        max-height: 80%;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #catalog-list, #provider-list {
+        max-height: 15;
+    }
+    #save-diff-scroll {
+        max-height: 20;
     }
     """
 
@@ -138,6 +166,15 @@ class Agent86App(App):
         log = self.query_one("#transcript", RichLog)
         log.write(f"[bold]> {line}[/bold]")
 
+        # A bare needs_choice command (no argument) typed directly — not just palette-selected —
+        # opens the same picker/chain as picking it from the palette (mirrors _select_palette).
+        match = find_command_for_line(line)
+        if match is not None:
+            entry, arg = match
+            if entry.needs_choice and not arg:
+                self._run_or_chain(entry)
+                return
+
         result = handle_command(self.repl, line)
         if result.action == "exit":
             self.exit()
@@ -207,6 +244,8 @@ class Agent86App(App):
                 prompt.focus()
                 return
             self.push_screen(ModelPickerModal(choices), self._on_model_picked)
+        elif entry.needs_choice == "config_model":
+            self._open_provider_manager()
         else:
             self._dispatch_line(entry.name)
 
@@ -217,6 +256,102 @@ class Agent86App(App):
     def _on_model_picked(self, value: str | None) -> None:
         if value is not None:
             self._dispatch_line(f"/model {value}")
+
+    # ---- /config model chain ------------------------------------------------ #
+
+    def _open_provider_manager(self) -> None:
+        self._pending_row = None
+        self._pending_key = None
+        self._pending_ref = None
+        self.push_screen(ProviderManagerModal(provider_rows(self.repl.cfg)), self._on_provider_row)
+
+    def _on_provider_row(self, row) -> None:  # noqa: ANN001 - ProviderRow | None
+        if row is None:
+            return
+        self._pending_row = row
+        if row.keyless or row.has_key:
+            self._request_catalog(row.name, self._resolved_key(row), "manager")
+            return
+        # D-05: a provider with no key is not a dead end — chain straight into key entry.
+        from agent86.secrets import keyring_available
+
+        self.push_screen(KeyEntryModal(row.name, keyring_available()), self._on_key_entered)
+
+    def _resolved_key(self, row) -> str | None:  # noqa: ANN001
+        from agent86.secrets import resolve_api_key
+
+        return resolve_api_key(row.name, row.api_key_env)
+
+    def _on_key_entered(self, key: str | None) -> None:
+        if not key:
+            return
+        # D-14: held in memory only; written to the keyring after the test passes.
+        self._pending_key = key
+        self._request_catalog(self._pending_row.name, key, "manager")
+
+    def _on_catalog_picked(self, ref: str | None) -> None:
+        if ref is None:
+            return
+        from agent86.types import ModelRef
+
+        try:
+            parsed = ModelRef.parse(ref)
+        except ValueError as exc:
+            self.query_one("#transcript", RichLog).write(f"[red]error:[/red] {exc}")
+            return
+        self._pending_ref = ref
+        self.push_screen(
+            ConnectionTestModal(self.repl.cfg, parsed, self._pending_key), self._on_test_done
+        )
+
+    def _on_test_done(self, outcome: TestOutcome) -> None:
+        log = self.query_one("#transcript", RichLog)
+        if not outcome.ok and not outcome.override:
+            log.write(f"[red]connection test failed:[/red] {outcome.error}")
+            return
+        if not outcome.ok:
+            log.write(f"[yellow]saving anyway despite:[/yellow] {outcome.error}")
+        # D-14: the key becomes persistent only now.
+        if self._pending_key and self._pending_row is not None:
+            from agent86.secrets import SecretStoreError, store_api_key
+
+            try:
+                store_api_key(self._pending_row.name, self._pending_key)
+                log.write(f"[dim]key stored in the OS keyring for {self._pending_row.name}[/dim]")
+            except SecretStoreError as exc:
+                log.write(f"[red]could not store the key:[/red] {exc}")
+            finally:
+                self._pending_key = None
+        # D-18 / success criterion 4: the switch applies to the next turn immediately.
+        if outcome.ok:
+            self._dispatch_line(f"/model {self._pending_ref}")
+        self.push_screen(SaveDiffModal(self._persist_changes()), self._on_save_confirmed)
+
+    def _persist_changes(self) -> list[tuple[list[str], object]]:
+        """What a save would write. Never includes a secret — only the env var NAME (D-06)."""
+        changes: list[tuple[list[str], object]] = [(["model", "default"], self._pending_ref)]
+        row = self._pending_row
+        if row is not None and not row.keyless and not row.api_key_env:
+            changes.append(
+                (["providers", row.name, "api_key_env"], f"{row.name.upper()}_API_KEY")
+            )
+        if row is not None and row.base_url:
+            changes.append((["providers", row.name, "base_url"], row.base_url))
+        return changes
+
+    def _on_save_confirmed(self, edit) -> None:  # noqa: ANN001 - ConfigEdit | None
+        log = self.query_one("#transcript", RichLog)
+        if edit is None:
+            log.write("[dim]not saved — the model switch applies to this session only[/dim]")
+            return
+        from agent86.config_writer import ConfigWriteError, apply_edit
+
+        try:
+            self.repl.cfg = apply_edit(edit)
+        except ConfigWriteError as exc:
+            log.write(f"[red]could not save:[/red] {exc}")
+            return
+        log.write(f"[dim]saved to {edit.path}[/dim]")
 
     # ---- turn worker ------------------------------------------------------ #
 
@@ -271,6 +406,12 @@ class Agent86App(App):
                 f"[yellow]catalog unavailable:[/yellow] {message.error} "
                 "[dim](enter a model name directly)[/dim]"
             )
+        if message.purpose == "model_picker":
+            self._open_model_picker(message.entries)
+            return
+        self.push_screen(
+            CatalogPickerModal(message.provider, message.entries), self._on_catalog_picked
+        )
 
     def on_turn_delta(self, message: TurnDelta) -> None:
         self._stream_buf += message.text

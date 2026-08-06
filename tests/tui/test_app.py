@@ -180,6 +180,12 @@ async def test_catalog_cache_fetches_once_per_provider(monkeypatch, tmp_path):
         await pilot.pause()
         app._request_catalog("openai", "k", "manager")
         await _wait_until(lambda: len(received) == 1)
+        await pilot.pause()
+        # First fetch's CatalogReady chains into a CatalogPickerModal (Task 2 wiring) — dismiss
+        # it before the second request so pushing a fresh screen doesn't race its mount.
+        if len(app.screen_stack) > 1:
+            app.pop_screen()
+            await pilot.pause()
         app._request_catalog("openai", "k", "manager")
         await _wait_until(lambda: len(received) == 2)
     assert calls["n"] == 1
@@ -211,6 +217,27 @@ async def test_catalog_failure_yields_empty_entries_with_error(monkeypatch, tmp_
     message = received[0]
     assert message.entries == []
     assert "nope" in message.error
+
+
+async def test_escape_dismisses_catalog_picker_not_palette(monkeypatch, tmp_path):
+    """Escape while a CatalogPickerModal is on top pops it, not the (hidden) palette.
+
+    Regression for the same footgun 02-02/02-04 already fixed for `up`/`down`/`shift+tab`:
+    `action_palette_dismiss` is a priority binding that must raise `SkipAction` when the
+    palette itself is hidden, so Escape falls through to the modal's own `action_cancel`.
+    """
+    from agent86.tui.screens.provider_manager import CatalogPickerModal
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(CatalogPickerModal("openai", [("gpt-4o", "gpt-4o")]))
+        await pilot.pause()
+        assert isinstance(app.screen, CatalogPickerModal)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, CatalogPickerModal)
 
 
 async def test_shift_tab_cycles_approval_mode(tmp_path):

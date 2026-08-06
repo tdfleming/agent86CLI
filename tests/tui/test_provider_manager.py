@@ -8,12 +8,12 @@ Implemented by plans 03-08 / 03-09. Follows the `_PickerHost` shape from
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 
-import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Input
+from textual.widgets import Input, OptionList
 
 from agent86.config import ProviderConfig, load_config
 from agent86.orchestration.loop import Harness
@@ -21,6 +21,16 @@ from agent86.tui.app import Agent86App
 from agent86.types import ApprovalMode
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
+
+
+async def _wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) -> None:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(interval)
+    raise AssertionError("condition not met within timeout")
 
 
 class _PickerHost(App):
@@ -219,7 +229,6 @@ async def test_ollama_model_with_colon_is_prefixed():
     assert ModelRef.parse(host.result).model == "llama3.1:8b"
 
 
-@pytest.mark.xfail(reason="chain wiring lands in plan 03-09", strict=False)
 async def test_no_key_provider_chains_to_key_entry(monkeypatch, tmp_path):
     from agent86.tui.screens.key_entry import KeyEntryModal
 
@@ -241,11 +250,27 @@ async def test_no_key_provider_chains_to_key_entry(monkeypatch, tmp_path):
         assert isinstance(app.screen, KeyEntryModal)
 
 
-@pytest.mark.xfail(reason="chain wiring lands in plan 03-09", strict=False)
 async def test_save_anyway_override(monkeypatch, tmp_path):
+    import agent86.cognitive.catalog as catalog
+    import agent86.tui.screens.connection_test as connection_test
+    from agent86.tui.screens.connection_test import ConnectionTestModal
+    from agent86.tui.screens.provider_manager import CatalogPickerModal
     from agent86.tui.screens.save_diff import SaveDiffModal
 
+    for env in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
     _fake_keyring(monkeypatch)
+
+    # No real network calls: fake the catalog fetch and make the connection test fail fast.
+    monkeypatch.setattr(
+        catalog, "fetch_catalog", lambda provider, pconf, api_key: [("claude-3-opus", "opus")]
+    )
+
+    def _boom(ref, cfg, api_key=None):
+        raise RuntimeError("simulated connection failure")
+
+    monkeypatch.setattr(connection_test, "provider_for_ref", _boom)
+
     repl = _make_repl(tmp_path, make_text_provider("hello world"))
     app = Agent86App(repl)
     async with app.run_test() as pilot:
@@ -254,14 +279,34 @@ async def test_save_anyway_override(monkeypatch, tmp_path):
         prompt.value = "/config model"
         await pilot.press("enter")
         await pilot.pause()
-        # navigate the full chain: pick provider -> key entry -> failing connection test ->
-        # "Save anyway" (exact key bindings owned by 03-08/03-09)
+        # pick the highlighted (first, no-key) provider row -> KeyEntryModal
         await pilot.press("enter")
         await pilot.pause()
+
+        # type a throwaway key and submit -> catalog fetch (faked) -> CatalogPickerModal
+        for ch in "sk-test":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, CatalogPickerModal))
+
+        # pick the (faked) catalog entry -> ConnectionTestModal
+        option_list = app.screen.query_one("#catalog-list", OptionList)
+        option_list.highlighted = 0
+        option_list.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, ConnectionTestModal))
+
+        # the (faked) connection fails; "Save anyway" is focused — press it
+        await _wait_until(
+            lambda: app.screen.query_one("#test-buttons").display, timeout=5.0
+        )
+        await pilot.pause()
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
         assert isinstance(app.screen, SaveDiffModal)
 
 
-@pytest.mark.xfail(reason="chain wiring lands in plan 03-09", strict=False)
 async def test_switch_is_immediate_persist_is_separate(monkeypatch, tmp_path):
     import shutil
     from pathlib import Path
