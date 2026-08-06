@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T00:02:22.158Z"
+last_updated: "2026-08-06T00:08:53.109Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 18
-  completed_plans: 10
+  completed_plans: 13
 ---
 
 # Project State
@@ -32,11 +32,51 @@ app — no hand-editing TOML, no restarts.
 |-------|--------|-------|----------|
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
-| 3 — Secrets + Model Config | ◐ | 1/9 | 11% |
+| 3 — Secrets + Model Config | ◐ | 4/9 | 44% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Plan 03-02 complete (secrets seam, parallel Wave 1): `agent86/secrets.py` created
+  with `resolve_api_key`/`keyring_available`/`has_stored_key`/`store_api_key`/`clear_api_key` —
+  env var wins, falls back to OS keyring, never raises (silent degrade when keyring absent/broken),
+  keyring imported lazily inside every function body. `provider_for_ref` in `cognitive/base.py`
+  now resolves the key once via `resolve_api_key(ref.provider, pconf.api_key_env)` — keyed on the
+  config section name so a custom `[providers.myvllm]` block gets its own keyring slot — and
+  injects it into every provider construction path via an `UNRESOLVED` sentinel (direct
+  construction, as existing tests do, still self-resolves). Both `os.getenv` seams in
+  `anthropic_provider.py`/`openai_provider.py` removed; `llamacpp_provider.py` forwards the key.
+  Original `ProviderError` wording preserved verbatim with only an appended clause. Deleted the
+  Wave 0 xfail markers from `tests/unit/test_secrets.py` (7 tests) and
+  `tests/unit/test_providers_key_seam.py` (6 tests); all now pass. Full suite green: 229 passed,
+  16 xfailed, 1 xpassed (unrelated), 0 failed. SEC-01 requirement complete.
+
+- 2026-08-06 — Plan 03-04 complete (catalog fetch + normalization, parallel Wave 1):
+  `agent86/cognitive/catalog.py` adds `fetch_catalog`/`fetch_openai_compatible`/`fetch_anthropic`/
+  `fetch_ollama`/`CatalogUnavailable`, normalizing all five distinct provider models-endpoint
+  response shapes (OpenAI, Groq, OpenRouter, Anthropic, Ollama) into a common `(ref, label)` list
+  (MODEL-01, D-01/D-02: the live endpoint is the only source of truth, nothing hardcoded).
+  Anthropic uses `x-api-key` + `anthropic-version: 2023-06-01`, never `Authorization: Bearer`
+  (RESEARCH Pitfall 4). Any fetch failure, or a provider with no listing endpoint (llama.cpp),
+  raises `CatalogUnavailable` so the caller falls back to free-text `provider:model` entry — never
+  a dead end. Deleted the Wave 0 xfail marker from `tests/unit/test_catalog.py`; all 9 tests pass
+  for real. Live-verified the OpenRouter schema against `GET https://openrouter.ai/api/v1/models`
+  (matches the fixture exactly); Groq's schema stays unverified (no API key available) and is
+  recorded as an open item for a future manual pass. Full suite green: 229 passed, 16 xfailed,
+  1 xpassed, 0 failed.
+
+- 2026-08-06 — Plan 03-03 complete (config write-back, parallel Wave 1): `agent86/config_writer.py`
+  adds `plan_edit`/`apply_edit` — a two-step tomlkit round-trip write-back (D-17) that preserves
+  every comment/blank line in a hand-edited `config.toml`, targets user scope by default with
+  project scope selectable via `scope_path`, and produces a `difflib.unified_diff` preview before
+  anything is written. Any leaf key in `{api_key, apikey, key, token, secret, password}` raises
+  `ValueError` before text is generated, so no plaintext secret can reach disk through this module
+  (SEC-01). Writes are atomic (`tempfile.mkstemp` + `os.replace`), so a crash mid-write cannot
+  truncate an existing config; malformed existing TOML raises `ConfigWriteError`. `tomlkit` stays
+  lazily imported (guarded by `tests/tui/test_lazy_import.py`, still 2 passing). Deleted the Wave 0
+  xfail marker from `tests/unit/test_config_writer.py`; all 6 original + 3 new hardening tests pass.
+  Full suite green: 229 passed, 16 xfailed, 1 xpassed, 0 failed.
 
 - 2026-08-05 — Plan 03-01 complete (Wave 0 scaffolds, 1/9 plans in Phase 3): `keyring>=25.0` and
   `tomlkit>=0.13` added as core-but-lazy dependencies (installed, confirmed absent from
@@ -135,6 +175,6 @@ app — no hand-editing TOML, no restarts.
 
 ## Next Step
 
-Phase 3 in progress (1/9 plans, Wave 0 scaffolds complete) — next: plans 03-02..03-05 (secrets
-seam, config writer, catalog fetch — the implementation waves that make the Wave 0 scaffold
-tests go green).
+Phase 3 in progress (4/9 plans: 03-01 Wave 0 scaffolds, 03-02 secrets seam, 03-03 config writer,
+03-04 catalog — all backend implementation waves complete) — next: plans 03-05..03-09 (the TUI
+modal waves: key entry/connection test, save diff, provider manager, full-app chain).

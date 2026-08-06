@@ -25,14 +25,14 @@ Requirements for the v0.6 interactive milestone. Each maps to exactly one roadma
 
 ### Model & Provider Configuration
 
-- [ ] **MODEL-01**: The user can list, switch, add, and test model providers/models from within
+- [x] **MODEL-01**: The user can list, switch, add, and test model providers/models from within
       the app (a live connection test confirms the model responds before saving)
-- [ ] **MODEL-02**: Config changes are written back to `~/.agent86/config.toml` non-destructively
+- [x] **MODEL-02**: Config changes are written back to `~/.agent86/config.toml` non-destructively
       (comments preserved), defaulting to user scope with a project-scope option
 
 ### Secrets
 
-- [ ] **SEC-01**: API keys can be stored in and read from the OS keyring; environment variables
+- [x] **SEC-01**: API keys can be stored in and read from the OS keyring; environment variables
       still take precedence, and config never contains a plaintext secret
 
 ### MCP Configuration
