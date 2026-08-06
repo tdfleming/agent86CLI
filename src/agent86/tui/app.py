@@ -35,6 +35,13 @@ from agent86.tui.messages import (
 from agent86.tui.screens.approval import ApprovalModal
 from agent86.tui.screens.connection_test import ConnectionTestModal, TestOutcome
 from agent86.tui.screens.key_entry import KeyEntryModal
+from agent86.tui.screens.mcp_manager import (
+    MCPManagerModal,
+    MCPServerDraft,
+    MCPServerFormModal,
+    mcp_server_rows,
+)
+from agent86.tui.screens.mcp_test import MCPTestModal, MCPTestOutcome
 from agent86.tui.screens.mode_picker import ModePickerModal
 from agent86.tui.screens.model_picker import ModelPickerModal, model_choices
 from agent86.tui.screens.provider_manager import (
@@ -75,18 +82,22 @@ class Agent86App(App):
         dock: bottom;
     }
     #provider-manager-dialog, #catalog-picker-dialog, #key-entry-dialog,
-    #connection-test-dialog, #save-diff-dialog {
+    #connection-test-dialog, #save-diff-dialog, #mcp-manager-dialog,
+    #mcp-form-dialog, #mcp-test-dialog {
         width: 80%;
         max-height: 80%;
         border: round $accent;
         background: $surface;
         padding: 1 2;
     }
-    #catalog-list, #provider-list {
+    #catalog-list, #provider-list, #mcp-server-list {
         max-height: 15;
     }
-    #save-diff-scroll {
+    #save-diff-scroll, #mcp-test-tools-scroll {
         max-height: 20;
+    }
+    #mcp-json {
+        height: 10;
     }
     """
 
@@ -102,6 +113,13 @@ class Agent86App(App):
         self._pending_row = None  # ProviderRow being configured
         self._pending_key: str | None = None  # entered key, in memory only until the test passes
         self._pending_ref: str | None = None  # chosen provider:model ref
+        # /config mcp chain state — reset by _open_mcp_manager on every entry.
+        self._mcp_draft: MCPServerDraft | None = None
+        self._mcp_overrides: dict[str, str] = {}   # ${VAR} name -> value typed this pass
+        self._mcp_pending_vars: list[str] = []     # names still to prompt for
+        self._mcp_started: str | None = None       # server left running by a passing test
+        self._mcp_action: str | None = None        # "add" | "edit" | "remove" | "toggle"
+        self._mcp_unmount: str | None = None       # name pending remove/disable confirmation
 
     # ---- composition ---------------------------------------------------- #
 
@@ -257,6 +275,8 @@ class Agent86App(App):
             self._open_model_picker(cached)
         elif entry.needs_choice == "config_model":
             self._open_provider_manager()
+        elif entry.needs_choice == "config_mcp":
+            self._open_mcp_manager()
         else:
             self._dispatch_line(entry.name)
 
@@ -378,6 +398,217 @@ class Agent86App(App):
             log.write(f"[red]could not save:[/red] {exc}")
             return
         log.write(f"[dim]saved to {edit.path}[/dim]")
+
+    # ---- /config mcp chain -------------------------------------------------- #
+
+    def _open_mcp_manager(self) -> None:
+        self._mcp_draft = None
+        self._mcp_overrides = {}
+        self._mcp_pending_vars = []
+        self._mcp_started = None
+        self._mcp_action = None
+        self.push_screen(MCPManagerModal(mcp_server_rows(self.repl.cfg)), self._on_mcp_action)
+
+    def _on_mcp_action(self, action) -> None:  # noqa: ANN001 - MCPManagerAction | None
+        if action is None:
+            return
+        names = set(self.repl.cfg.mcp_servers)
+        if action.kind in ("add_json", "add_manual"):
+            self._mcp_action = "add"
+            mode = "json" if action.kind == "add_json" else "manual"
+            self.push_screen(MCPServerFormModal(mode=mode, existing_names=names), self._on_mcp_form)
+            return
+        srv = self.repl.cfg.mcp_servers.get(action.name or "")
+        if srv is None:
+            return
+        if action.kind == "edit":
+            self._mcp_action = "edit"
+            draft = MCPServerDraft(name=action.name, cfg=srv, original_name=action.name)
+            mode = "manual" if srv.command else "manual"   # edit always uses the field form
+            self.push_screen(
+                MCPServerFormModal(mode=mode, existing_names=names, draft=draft),
+                self._on_mcp_form,
+            )
+            return
+        # remove / toggle
+        self._on_mcp_destructive(action.kind, action.name, srv)
+
+    def _on_mcp_form(self, draft) -> None:  # noqa: ANN001 - MCPServerDraft | None
+        if draft is None:
+            return
+        self._mcp_draft = draft
+        self._prompt_next_var()
+
+    def _prompt_next_var(self) -> None:
+        """D-18: resolve every unresolved ${VAR} through the ONE masked entry modal, then test."""
+        from agent86.secrets import keyring_available
+        from agent86.tools.mcp_client import unresolved_var_refs
+
+        assert self._mcp_draft is not None
+        missing = unresolved_var_refs(self._mcp_draft.cfg, self._mcp_overrides)
+        if missing:
+            self.push_screen(KeyEntryModal(missing[0], keyring_available()), self._on_var_entered)
+            return
+        self._start_mcp_test()
+
+    def _on_var_entered(self, value: str | None) -> None:
+        if not value or self._mcp_draft is None:
+            # Cancelling a required secret aborts the whole add — connecting with an empty
+            # credential would produce a misleading auth failure.
+            self.query_one("#transcript", RichLog).write("[dim]mcp: cancelled[/dim]")
+            self._mcp_draft = None
+            return
+        from agent86.tools.mcp_client import unresolved_var_refs
+
+        missing = unresolved_var_refs(self._mcp_draft.cfg, self._mcp_overrides)
+        if missing:
+            self._mcp_overrides[missing[0]] = value
+        self._prompt_next_var()
+
+    def _start_mcp_test(self) -> None:
+        assert self._mcp_draft is not None
+        manager = self.repl.harness.ensure_mcp()
+        self.push_screen(
+            MCPTestModal(
+                manager, self._mcp_draft.name, self._mcp_draft.cfg, dict(self._mcp_overrides)
+            ),
+            self._on_mcp_test_done,
+        )
+
+    def _on_mcp_test_done(self, outcome: MCPTestOutcome) -> None:
+        log = self.query_one("#transcript", RichLog)
+        draft = self._mcp_draft
+        if draft is None:
+            return
+        if outcome.ok:
+            self._mcp_started = draft.name       # the test left it mounted (D-13)
+            log.write(f"[dim]mcp: {draft.name} connected, {len(outcome.tools)} tools[/dim]")
+        elif outcome.override:
+            log.write(f"[yellow]saving anyway despite:[/yellow] {outcome.error}")
+        else:
+            log.write(f"[red]mcp connection test failed:[/red] {outcome.error}")
+            self._mcp_draft = None
+            return
+        # D-14 precedent: a typed secret becomes persistent only once the test has passed
+        # (or the user explicitly overrode). Keyed by ${VAR} NAME, not provider name.
+        if self._mcp_overrides:
+            from agent86.secrets import SecretStoreError, store_api_key
+
+            for var_name, value in self._mcp_overrides.items():
+                try:
+                    store_api_key(var_name, value)
+                    log.write(f"[dim]stored ${{{var_name}}} in the OS keyring[/dim]")
+                except SecretStoreError as exc:
+                    log.write(f"[red]could not store ${{{var_name}}}:[/red] {exc}")
+            self._mcp_overrides = {}
+        self.push_screen(SaveDiffModal(self._mcp_changes(draft)), self._on_mcp_save_confirmed)
+
+    def _mcp_changes(self, draft) -> list[tuple[list[str], object]]:  # noqa: ANN001
+        """The TOML this add/edit would write. Secrets stay as ${VAR} references (D-17).
+
+        Every header and env value is written as its OWN key path — writing the whole `headers`
+        dict under one leaf key would slip straight past config_writer's leaf-key secret guard,
+        which is exactly the SEC-01 hole this phase closes.
+        """
+        base = ["mcp", "servers", draft.name]
+        cfg = draft.cfg
+        changes: list[tuple[list[str], object]] = []
+        if cfg.command:
+            changes.append(([*base, "command"], cfg.command))
+            changes.append(([*base, "args"], list(cfg.args)))
+        if cfg.url:
+            changes.append(([*base, "url"], cfg.url))
+            changes.append(([*base, "transport"], cfg.transport))
+        for key, value in cfg.env.items():
+            changes.append(([*base, "env", key], value))
+        for key, value in cfg.headers.items():
+            changes.append(([*base, "headers", key], value))
+        changes.append(([*base, "enabled"], cfg.enabled))
+        if draft.original_name and draft.original_name != draft.name:
+            from agent86.config_writer import DELETE
+
+            changes.append((["mcp", "servers", draft.original_name], DELETE))
+        return changes
+
+    def _on_mcp_save_confirmed(self, edit) -> None:  # noqa: ANN001 - ConfigEdit | None
+        log = self.query_one("#transcript", RichLog)
+        draft, self._mcp_draft = self._mcp_draft, None
+        started, self._mcp_started = self._mcp_started, None
+        if edit is None:
+            log.write("[dim]not saved[/dim]")
+            # D-13: a cancelled add must not leave the just-started server running all session.
+            if started and self.repl.harness.mcp is not None:
+                self.repl.harness.mcp.stop_server(started)
+            return
+        from agent86.config_writer import ConfigWriteError, apply_edit
+
+        try:
+            self.repl.cfg = apply_edit(edit)
+        except ConfigWriteError as exc:
+            log.write(f"[red]could not save:[/red] {exc}")
+            return
+        log.write(f"[dim]saved to {edit.path}[/dim]")
+        if draft is None:
+            return
+        if draft.original_name:
+            self.repl.harness.remove_mcp_server(draft.original_name)
+        if started != draft.name:
+            # D-16: the config write succeeded; the live mount did not. Report both, never roll back.
+            log.write(
+                f"[yellow]saved, but {draft.name} is not running:[/yellow] "
+                "it will be available next launch"
+            )
+            return
+        mounted, collisions = self.repl.harness.add_mcp_server(draft.name, draft.cfg)
+        line = f"[dim]mcp: {draft.name} mounted, {len(mounted)} tools live[/dim]"
+        if collisions:
+            line += f" [yellow](name collisions, not mounted: {', '.join(collisions)})[/yellow]"
+        log.write(line)
+
+    def _on_mcp_destructive(self, kind: str, name: str, srv) -> None:  # noqa: ANN001
+        """Remove (D-10/D-11) and enable/disable (D-09/D-12) — both via the normal diff flow.
+
+        There is deliberately no extra confirmation dialog and no silent fast-path toggle: the
+        diff preview already shows the exact block being removed or the exact one-line change,
+        and requires an explicit confirm. Phase 3's guarantee is that the user always knows which
+        file changed; the first write that skips the diff would break it.
+        """
+        from agent86.config_writer import DELETE
+
+        if kind == "toggle" and not srv.enabled:
+            # Re-enabling is an add: test the server before mounting it, reusing the whole
+            # form-free part of the add chain.
+            self._mcp_action = "add"
+            self._mcp_draft = MCPServerDraft(name=name, cfg=srv.model_copy(update={"enabled": True}))
+            self._prompt_next_var()
+            return
+        self._mcp_action = kind
+        self._mcp_unmount = name
+        if kind == "remove":
+            changes = [(["mcp", "servers", name], DELETE)]
+        else:
+            changes = [(["mcp", "servers", name, "enabled"], False)]
+        self.push_screen(SaveDiffModal(changes), self._on_mcp_unmount_confirmed)
+
+    def _on_mcp_unmount_confirmed(self, edit) -> None:  # noqa: ANN001 - ConfigEdit | None
+        log = self.query_one("#transcript", RichLog)
+        name, self._mcp_unmount = self._mcp_unmount, None
+        if edit is None or name is None:
+            log.write("[dim]not saved[/dim]")
+            return
+        from agent86.config_writer import ConfigWriteError, apply_edit
+
+        try:
+            self.repl.cfg = apply_edit(edit)
+        except ConfigWriteError as exc:
+            log.write(f"[red]could not save:[/red] {exc}")
+            return
+        log.write(f"[dim]saved to {edit.path}[/dim]")
+        # D-14: unmount immediately — leaving a removed server's tools callable would let the
+        # model invoke something the user just deleted.
+        self.repl.harness.remove_mcp_server(name)
+        verb = "removed" if self._mcp_action == "remove" else "disabled"
+        log.write(f"[dim]mcp: {name} {verb}; its tools are no longer available[/dim]")
 
     # ---- turn worker ------------------------------------------------------ #
 

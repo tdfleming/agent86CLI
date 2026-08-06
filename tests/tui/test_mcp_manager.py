@@ -17,7 +17,7 @@ import asyncio
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button, Input, OptionList, Static
+from textual.widgets import Button, Input, OptionList, RichLog, Static, TextArea
 
 from agent86.config import Config, MCPServerConfig, load_config
 from agent86.orchestration.loop import Harness
@@ -324,3 +324,362 @@ async def test_config_mcp_opens_manager_modal_in_full_app(tmp_path):
         await pilot.press("enter")
         await _wait_until(lambda: isinstance(app.screen_stack[-1], MCPManagerModal))
         assert isinstance(app.screen_stack[-1], MCPManagerModal)
+
+
+# ---- full-app /config mcp add/edit/remove/toggle chain (plan 04-08) ------------------------ #
+
+
+class _FakeMCPTool:
+    def __init__(self, name: str, description: str = "") -> None:
+        self.name = name
+        self.description = description
+
+
+class _FakeMCPManager:
+    """Stands in for `MCPManager` on `harness.mcp` — never spawns a real transport.
+
+    Mirrors `tests/tui/test_mcp_test_modal.py`'s `_FakeManager`, extended with `tools_for` and
+    a `servers` dict so `Harness.add_mcp_server`/`remove_mcp_server` work against it unchanged.
+    """
+
+    def __init__(self, *, fail: str | None = None) -> None:
+        self.servers: dict[str, MCPServerConfig] = {}
+        self.note: str | None = None
+        self._fail = fail
+        self.start_calls: list[dict] = []
+        self.stop_calls: list[str] = []
+        self._tools: dict[str, list[_FakeMCPTool]] = {}
+
+    def start_server(self, name, cfg, timeout=30.0, overrides=None):
+        self.start_calls.append({"name": name, "cfg": cfg, "overrides": overrides})
+        if self._fail:
+            raise RuntimeError(self._fail)
+        tools = [
+            _FakeMCPTool(f"mcp__{name}__search", "search"),
+            _FakeMCPTool(f"mcp__{name}__fetch", "fetch"),
+        ]
+        self._tools[name] = tools
+        return tools
+
+    def stop_server(self, name, timeout=10.0):
+        self.stop_calls.append(name)
+        self._tools.pop(name, None)
+
+    def tools_for(self, name):
+        return list(self._tools.get(name, []))
+
+
+def _fill_json_form(screen, name: str, json_body: str) -> None:
+    screen.query_one("#mcp-name", Input).value = name
+    screen.query_one("#mcp-json", TextArea).text = json_body
+    screen._revalidate()
+
+
+async def _wait_for_mcp_test_ready(app, pilot, tries: int = 50) -> None:
+    """Poll via `pilot.pause` (not a bare `asyncio.sleep` loop) so Textual's own mount/refresh
+    machinery gets a chance to settle before we query button children — mirrors the proven
+    pattern in `tests/tui/test_mcp_test_modal.py`; a tight asyncio-only poll can observe
+    `#mcp-test-buttons.display is True` before its Button children finish mounting.
+    """
+    for _ in range(tries):
+        try:
+            buttons = app.screen.query_one("#mcp-test-buttons")
+            if buttons.display and list(buttons.children):
+                return
+        except Exception:
+            pass
+        await pilot.pause(0.05)
+    raise AssertionError("mcp test buttons never became ready")
+
+
+async def _open_mcp_manager(app, pilot) -> None:
+    from agent86.tui.screens.mcp_manager import MCPManagerModal
+
+    prompt = app.query_one("#prompt", Input)
+    prompt.value = "/config mcp"
+    await pilot.press("enter")
+    await _wait_until(lambda: isinstance(app.screen, MCPManagerModal))
+
+
+async def test_add_json_chain_reaches_save_diff(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.mcp_manager import MCPServerFormModal
+    from agent86.tui.screens.mcp_test import MCPTestModal
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", tmp_path / "config.toml")
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.mcp = _FakeMCPManager()
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+
+        option_list = app.screen.query_one("#mcp-server-list", OptionList)
+        option_list.highlighted = 0  # no configured servers -> add_json is the first option
+        option_list.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, MCPServerFormModal))
+
+        _fill_json_form(
+            app.screen, "alpha", '{"command": "npx", "args": ["-y", "alpha-server"]}'
+        )
+        await pilot.pause()
+        await pilot.click("#mcp-form-continue")
+        await _wait_until(lambda: isinstance(app.screen, MCPTestModal))
+        await _wait_for_mcp_test_ready(app, pilot)
+        await pilot.pause()
+        await pilot.click("#mcp-test-continue")
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
+        await _wait_until(lambda: bool(app.screen.query("#save-confirm")))
+        await pilot.pause()
+
+        body = app.screen.query_one("#save-diff-body", Static)
+        assert "[mcp.servers." in str(body.render())
+
+
+async def test_unresolved_var_chains_into_key_entry(tmp_path, monkeypatch):
+    from agent86.tui.screens.key_entry import KeyEntryModal
+    from agent86.tui.screens.mcp_manager import MCPServerFormModal
+
+    monkeypatch.delenv("A86_TEST_TOKEN", raising=False)
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    fake = _FakeMCPManager()
+    repl.harness.mcp = fake
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+
+        option_list = app.screen.query_one("#mcp-server-list", OptionList)
+        option_list.highlighted = 0
+        option_list.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, MCPServerFormModal))
+
+        _fill_json_form(
+            app.screen,
+            "alpha",
+            '{"url": "https://x/mcp", '
+            '"headers": {"Authorization": "Bearer ${A86_TEST_TOKEN}"}}',
+        )
+        await pilot.pause()
+        await pilot.click("#mcp-form-continue")
+        await _wait_until(lambda: isinstance(app.screen, KeyEntryModal))
+
+        await pilot.click("#key-input")
+        for ch in "typed-value":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await _wait_until(lambda: fake.start_calls)
+
+    assert fake.start_calls[0]["overrides"] == {"A86_TEST_TOKEN": "typed-value"}
+
+
+async def test_cancelling_key_entry_aborts_the_add(tmp_path, monkeypatch):
+    from agent86.tui.screens.key_entry import KeyEntryModal
+    from agent86.tui.screens.mcp_manager import MCPServerFormModal
+
+    monkeypatch.delenv("A86_TEST_TOKEN", raising=False)
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    fake = _FakeMCPManager()
+    repl.harness.mcp = fake
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+
+        option_list = app.screen.query_one("#mcp-server-list", OptionList)
+        option_list.highlighted = 0
+        option_list.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, MCPServerFormModal))
+
+        _fill_json_form(
+            app.screen,
+            "alpha",
+            '{"url": "https://x/mcp", '
+            '"headers": {"Authorization": "Bearer ${A86_TEST_TOKEN}"}}',
+        )
+        await pilot.pause()
+        await pilot.click("#mcp-form-continue")
+        await _wait_until(lambda: isinstance(app.screen, KeyEntryModal))
+        await pilot.press("escape")
+        await pilot.pause()
+
+    assert fake.start_calls == []
+
+
+async def test_failed_test_without_override_never_opens_save_diff(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.mcp_manager import MCPServerFormModal
+    from agent86.tui.screens.mcp_test import MCPTestModal
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", tmp_path / "config.toml")
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.mcp = _FakeMCPManager(fail="boom")
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+
+        option_list = app.screen.query_one("#mcp-server-list", OptionList)
+        option_list.highlighted = 0
+        option_list.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, MCPServerFormModal))
+
+        _fill_json_form(
+            app.screen, "alpha", '{"command": "npx", "args": ["-y", "alpha-server"]}'
+        )
+        await pilot.pause()
+        await pilot.click("#mcp-form-continue")
+        await _wait_until(lambda: isinstance(app.screen, MCPTestModal))
+        await _wait_for_mcp_test_ready(app, pilot)
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, SaveDiffModal)
+
+
+async def test_cancelling_save_diff_stops_the_started_server(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.mcp_manager import MCPServerFormModal
+    from agent86.tui.screens.mcp_test import MCPTestModal
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", tmp_path / "config.toml")
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    fake = _FakeMCPManager()
+    repl.harness.mcp = fake
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+
+        option_list = app.screen.query_one("#mcp-server-list", OptionList)
+        option_list.highlighted = 0
+        option_list.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, MCPServerFormModal))
+
+        _fill_json_form(
+            app.screen, "alpha", '{"command": "npx", "args": ["-y", "alpha-server"]}'
+        )
+        await pilot.pause()
+        await pilot.click("#mcp-form-continue")
+        await _wait_until(lambda: isinstance(app.screen, MCPTestModal))
+        await _wait_for_mcp_test_ready(app, pilot)
+        await pilot.pause()
+        await pilot.click("#mcp-test-continue")
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
+        await pilot.press("escape")
+        await pilot.pause()
+
+    assert fake.stop_calls == ["alpha"]
+
+
+async def test_confirmed_save_mounts_tools_live(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.mcp_manager import MCPServerFormModal
+    from agent86.tui.screens.mcp_test import MCPTestModal
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", tmp_path / "config.toml")
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.mcp = _FakeMCPManager()
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+
+        option_list = app.screen.query_one("#mcp-server-list", OptionList)
+        option_list.highlighted = 0
+        option_list.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, MCPServerFormModal))
+
+        _fill_json_form(
+            app.screen, "alpha", '{"command": "npx", "args": ["-y", "alpha-server"]}'
+        )
+        await pilot.pause()
+        await pilot.click("#mcp-form-continue")
+        await _wait_until(lambda: isinstance(app.screen, MCPTestModal))
+        await _wait_for_mcp_test_ready(app, pilot)
+        await pilot.pause()
+        await pilot.click("#mcp-test-continue")
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
+        await _wait_until(lambda: bool(app.screen.query("#save-confirm")))
+        await pilot.pause()
+        await pilot.click("#save-confirm")
+        await pilot.pause()
+
+    names = repl.harness.registry.names()
+    assert "mcp__alpha__search" in names
+    assert "mcp__alpha__fetch" in names
+
+
+async def test_mount_failure_after_successful_save_reports_both(tmp_path, monkeypatch):
+    """The `override` path (D-13): the test failed but was saved anyway, so nothing is mounted."""
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.mcp_manager import MCPServerFormModal
+    from agent86.tui.screens.mcp_test import MCPTestModal
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", tmp_path / "config.toml")
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.mcp = _FakeMCPManager(fail="boom")
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        await _open_mcp_manager(app, pilot)
+
+        option_list = app.screen.query_one("#mcp-server-list", OptionList)
+        option_list.highlighted = 0
+        option_list.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await _wait_until(lambda: isinstance(app.screen, MCPServerFormModal))
+
+        _fill_json_form(
+            app.screen, "alpha", '{"command": "npx", "args": ["-y", "alpha-server"]}'
+        )
+        await pilot.pause()
+        await pilot.click("#mcp-form-continue")
+        await _wait_until(lambda: isinstance(app.screen, MCPTestModal))
+        await _wait_for_mcp_test_ready(app, pilot)
+        await pilot.pause()
+        await pilot.click("#mcp-save-anyway")
+        await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
+        await _wait_until(lambda: bool(app.screen.query("#save-confirm")))
+        await pilot.pause()
+        await pilot.click("#save-confirm")
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", RichLog)
+        lines = "\n".join(str(line) for line in transcript.lines)
+    assert "available next launch" in lines
+
+
+async def test_headers_are_written_as_individual_key_paths(tmp_path):
+    from agent86.config import MCPServerConfig
+    from agent86.tui.screens.mcp_manager import MCPServerDraft
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    draft = MCPServerDraft(
+        name="alpha",
+        cfg=MCPServerConfig(
+            url="https://x/mcp", headers={"Authorization": "Bearer ${A86_TEST_TOKEN}"}
+        ),
+    )
+    changes = app._mcp_changes(draft)
+    assert (["mcp", "servers", "alpha", "headers", "Authorization"], "Bearer ${A86_TEST_TOKEN}") in changes
+    assert not any(path == ["mcp", "servers", "alpha", "headers"] for path, _ in changes)
