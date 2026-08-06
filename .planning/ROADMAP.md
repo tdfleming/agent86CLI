@@ -107,7 +107,7 @@ server's connection and listing its tools before saving.
 **Plans:** 8 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — Wave 0 test scaffolds: secrets/config_writer/config/mcp units, real-stdio D-23 teardown guard, TUI Pilot modules (wave 0)
+- [x] 04-01-PLAN.md — Wave 0 test scaffolds: secrets/config_writer/config/mcp units, real-stdio D-23 teardown guard, TUI Pilot modules (wave 0)
 - [ ] 04-02-PLAN.md — secrets.py ${VAR} resolver + config_writer DELETE sentinel & SEC-01 authorization guard (wave 1)
 - [ ] 04-03-PLAN.md — MCPServerConfig.enabled + ToolRegistry.unregister + `agent86 mcp list` Enabled column (wave 1)
 - [ ] 04-04-PLAN.md — MCPManager task-per-server lifecycle (D-23), connect-time ${VAR} expansion, build_mcp enabled filter (wave 2)

@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T04:04:49Z"
+last_updated: "2026-08-06T05:27:42.544Z"
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 22
-  completed_plans: 22
+  total_plans: 30
+  completed_plans: 23
 ---
 
 # Project State
@@ -19,7 +19,7 @@ See: .planning/PROJECT.md (updated 2026-07-19)
 
 **Core value:** Run, configure, and steer the agent entirely from within an interactive terminal
 app — no hand-editing TOML, no restarts.
-**Current focus:** Phase 03 — secrets-model-provider-config
+**Current focus:** Phase 04 — mcp-config-ui
 
 ## Milestone
 
