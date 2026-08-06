@@ -151,6 +151,74 @@ async def test_catalog_empty_falls_back_to_free_text():
     assert host.result == "llamacpp:my-local-model"
 
 
+async def test_catalog_filter_is_case_insensitive():
+    from textual.widgets import OptionList
+
+    from agent86.tui.screens.provider_manager import CatalogPickerModal
+
+    entries = [("gpt-4o", "gpt-4o"), ("gpt-4o-mini", "gpt-4o-mini"), ("o3", "o3")]
+    host = _PickerHost(CatalogPickerModal("openai", entries))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        filter_input = host.screen.query_one("#catalog-filter", Input)
+        filter_input.focus()
+        await pilot.pause()
+        for ch in "MINI":
+            await pilot.press(ch)
+        await pilot.pause()
+        option_list = host.screen.query_one("#catalog-list", OptionList)
+        assert option_list.option_count == 1
+
+
+async def test_catalog_filter_no_match_submits_as_free_text():
+    from agent86.tui.screens.provider_manager import CatalogPickerModal
+
+    entries = [("gpt-4o", "gpt-4o"), ("gpt-4o-mini", "gpt-4o-mini"), ("o3", "o3")]
+    host = _PickerHost(CatalogPickerModal("openai", entries))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        filter_input = host.screen.query_one("#catalog-filter", Input)
+        filter_input.focus()
+        await pilot.pause()
+        for ch in "zzz":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+    assert host.result == "openai:zzz"
+
+
+async def test_catalog_escape_returns_none():
+    from agent86.tui.screens.provider_manager import CatalogPickerModal
+
+    entries = [("gpt-4o", "gpt-4o")]
+    host = _PickerHost(CatalogPickerModal("openai", entries))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+    assert host.result is None
+
+
+async def test_ollama_model_with_colon_is_prefixed():
+    from textual.widgets import OptionList
+
+    from agent86.tui.screens.provider_manager import CatalogPickerModal
+    from agent86.types import ModelRef
+
+    entries = [("llama3.1:8b", "llama3.1:8b")]
+    host = _PickerHost(CatalogPickerModal("ollama", entries))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        option_list = host.screen.query_one("#catalog-list", OptionList)
+        option_list.highlighted = 0
+        option_list.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+    assert host.result == "ollama:llama3.1:8b"
+    assert ModelRef.parse(host.result).model == "llama3.1:8b"
+
+
 @pytest.mark.xfail(reason="chain wiring lands in plan 03-09", strict=False)
 async def test_no_key_provider_chains_to_key_entry(monkeypatch, tmp_path):
     from agent86.tui.screens.key_entry import KeyEntryModal

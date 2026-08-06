@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from textual.app import ComposeResult
 from textual.containers import Container
 from textual.screen import ModalScreen
-from textual.widgets import Label, OptionList
+from textual.widgets import Input, Label, OptionList
 from textual.widgets.option_list import Option
 
 from agent86.config import Config
@@ -96,4 +96,87 @@ class ProviderManagerModal(ModalScreen[ProviderRow | None]):
         self.dismiss(None)
 
 
-__all__ = ["ProviderRow", "provider_rows", "ProviderManagerModal"]
+class CatalogPickerModal(ModalScreen[str | None]):
+    """Pick a model from a live catalog, narrowing by typing (D-03).
+
+    The filter Input doubles as the D-01 free-text fallback: when the catalog is empty (llama.cpp
+    exposes no listing, or the fetch failed), submitting the input is taken as the model name.
+    Dismisses with a full ``provider:model`` ref, or None.
+    """
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, provider: str, entries: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self._provider = provider
+        self._entries = entries
+
+    def compose(self) -> ComposeResult:
+        placeholder = (
+            "type to filter…"
+            if self._entries
+            else f"no catalog — type a model name for {self._provider} and press enter"
+        )
+        with Container(id="catalog-picker-dialog"):
+            yield Label(f"Models — {self._provider}")
+            yield Input(id="catalog-filter", placeholder=placeholder)
+            yield OptionList(*self._options(self._entries), id="catalog-list")
+
+    def on_mount(self) -> None:
+        self.query_one("#catalog-filter", Input).focus()
+
+    @staticmethod
+    def _options(entries: list[tuple[str, str]]) -> list[Option]:
+        return [Option(label if label != ref else ref, id=ref) for ref, label in entries]
+
+    def _filtered(self, text: str) -> list[tuple[str, str]]:
+        needle = text.strip().lower()
+        if not needle:
+            return self._entries
+        return [
+            (ref, label)
+            for ref, label in self._entries
+            if needle in ref.lower() or needle in label.lower()
+        ]
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "catalog-filter":
+            return
+        option_list = self.query_one("#catalog-list", OptionList)
+        option_list.clear_options()
+        matches = self._filtered(event.value)
+        option_list.add_options(self._options(matches))
+        if matches:
+            option_list.highlighted = 0
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Free-text fallback (D-01) — also used when a filter matches nothing."""
+        raw = (event.value or "").strip()
+        if not raw:
+            self.dismiss(None)
+            return
+        matches = self._filtered(raw)
+        if len(matches) == 1:
+            self.dismiss(self._catalog_ref(matches[0][0]))
+            return
+        self.dismiss(self._freetext_ref(raw))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_id:
+            self.dismiss(self._catalog_ref(event.option_id))
+
+    def _catalog_ref(self, model: str) -> str:
+        return f"{self._provider}:{model}"
+
+    def _freetext_ref(self, raw: str) -> str:
+        return (
+            raw
+            if ":" in raw and raw.split(":", 1)[0] in {self._provider}
+            else f"{self._provider}:{raw}"
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+__all__ = ["ProviderRow", "provider_rows", "ProviderManagerModal", "CatalogPickerModal"]
