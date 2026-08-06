@@ -314,9 +314,19 @@ class Harness:
 
     def _observe(self, result: ToolResult, tool_name: str, sid: str) -> str:
         """Return the observation text, wrapping suspicious tool output as untrusted."""
-        if not result.ok:
-            return result.error or "error"
         content = result.content
+        if not result.ok:
+            # A failed result may carry its detail in `content` rather than `error`:
+            # python_exec / run_command report a non-zero exit with ok=False, error=None
+            # and the full "exit code / stdout / stderr" payload (the traceback) in content.
+            # Returning a bare "error" here blinded the model to its own bugs. Keep BOTH
+            # when both exist so an approval denial keeps its reason alongside any output.
+            error = (result.error or "").strip()
+            body = (content or "").strip()
+            if error and body:
+                content = f"{error}\n{body}"
+            else:
+                content = error or body or "error"
         if self.config.guardrails.scan_observations:
             report = self.ingress.inspect(content)
             if any(f.category == "injection" for f in report.findings):
