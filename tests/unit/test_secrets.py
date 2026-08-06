@@ -11,8 +11,6 @@ import types
 
 import pytest
 
-pytestmark = pytest.mark.xfail(reason="Wave 0 scaffold — implemented in plan 03-02", strict=False)
-
 
 def _fake_keyring(monkeypatch, *, store=None, raises=None, backend_module="keyring.backends.SecretService"):
     store = store if store is not None else {}
