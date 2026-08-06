@@ -179,7 +179,6 @@ _MCP_SERVERS_TOML = (
 )
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
 def test_delete_removes_a_server_table(tmp_path, monkeypatch):
     from agent86.config_writer import DELETE
 
@@ -201,7 +200,6 @@ def test_delete_removes_a_server_table(tmp_path, monkeypatch):
     )
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
 def test_delete_of_missing_path_is_noop(tmp_path, monkeypatch):
     from agent86.config_writer import DELETE
 
@@ -217,7 +215,6 @@ def test_delete_of_missing_path_is_noop(tmp_path, monkeypatch):
     assert edit.is_noop is True
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
 def test_delete_and_set_in_one_edit(tmp_path, monkeypatch):
     from agent86.config_writer import DELETE
 
@@ -238,7 +235,6 @@ def test_delete_and_set_in_one_edit(tmp_path, monkeypatch):
     assert "enabled = false" in edit.after_text
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
 def test_forbidden_var_ref_literal_authorization_rejected(tmp_path, monkeypatch):
     import agent86.config_writer as config_writer
 
@@ -253,7 +249,6 @@ def test_forbidden_var_ref_literal_authorization_rejected(tmp_path, monkeypatch)
         )
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
 def test_forbidden_var_ref_reference_accepted(tmp_path, monkeypatch):
     import agent86.config_writer as config_writer
 
@@ -268,7 +263,6 @@ def test_forbidden_var_ref_reference_accepted(tmp_path, monkeypatch):
     assert "Bearer ${GITHUB_TOKEN}" in edit.after_text
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
 def test_forbidden_var_ref_literal_token_rejected(tmp_path, monkeypatch):
     import agent86.config_writer as config_writer
 
@@ -288,7 +282,6 @@ def test_forbidden_var_ref_literal_token_rejected(tmp_path, monkeypatch):
     assert "${GITHUB_TOKEN}" in edit.after_text
 
 
-@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-02", strict=False)
 def test_forbidden_var_ref_partial_reference_still_rejected(tmp_path, monkeypatch):
     import agent86.config_writer as config_writer
 
