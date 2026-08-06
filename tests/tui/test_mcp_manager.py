@@ -26,10 +26,6 @@ from agent86.types import ApprovalMode
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
 
-pytestmark = pytest.mark.xfail(
-    reason="Wave 0 scaffold — plans 04-05/04-07/04-08", strict=False
-)
-
 
 async def _wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) -> None:
     loop = asyncio.get_event_loop()
@@ -263,9 +259,10 @@ async def test_form_shows_validator_error_inline_and_disables_continue():
         await pilot.press(*"{bad")
         await pilot.pause()
         error = host.screen.query_one("#mcp-form-error", Static)
-        assert str(error.renderable).strip() != ""
+        assert str(error.render()).strip() != ""
         assert host.screen.query_one("#mcp-form-continue", Button).disabled is True
-        assert "{bad" in json_input.text if hasattr(json_input, "text") else json_input.value
+        typed_text = json_input.text if hasattr(json_input, "text") else json_input.value
+        assert "{bad" in typed_text
 
 
 async def test_form_name_collision_blocks():
@@ -281,7 +278,7 @@ async def test_form_name_collision_blocks():
         await pilot.press(*"alpha")
         await pilot.pause()
         error = host.screen.query_one("#mcp-form-error", Static)
-        assert "already" in str(error.renderable).lower()
+        assert "already" in str(error.render()).lower()
         assert host.screen.query_one("#mcp-form-continue", Button).disabled is True
 
 
@@ -304,6 +301,7 @@ async def test_form_prefilled_for_edit():
 # ---- /config mcp command registration and full-app chain (D-21, plan 04-08) ---------------- #
 
 
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-08", strict=False)
 async def test_config_mcp_command_is_in_registry():
     from agent86.tui.commands import find_command, find_command_for_line
 
@@ -313,6 +311,7 @@ async def test_config_mcp_command_is_in_registry():
     assert find_command_for_line("/config mcp") is entry
 
 
+@pytest.mark.xfail(reason="Wave 0 scaffold — plan 04-08", strict=False)
 async def test_config_mcp_opens_manager_modal_in_full_app(tmp_path):
     from agent86.tui.screens.mcp_manager import MCPManagerModal
 
