@@ -116,3 +116,65 @@ async def test_cancel_returns_none(tmp_path, monkeypatch):
         await pilot.pause()
     assert host.result is None
     assert target.read_text() == before
+
+
+async def test_preview_then_apply_preserves_all_comments(tmp_path, monkeypatch):
+    from agent86.config_writer import apply_edit
+    from agent86.tui.screens.save_diff import SaveDiffModal
+    from textual.widgets import Static
+
+    target = _patch_user_scope(monkeypatch, tmp_path)
+
+    host = _PickerHost(
+        SaveDiffModal(
+            [
+                (["providers", "groq", "api_key_env"], "GROQ_API_KEY"),
+                (["providers", "groq", "base_url"], "https://api.groq.com/openai/v1"),
+            ]
+        )
+    )
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        body = host.screen.query_one("#save-diff-body", Static)
+        previewed_text = str(body.render())
+        await pilot.click("#save-confirm")
+        await pilot.pause()
+
+    edit = host.result
+    assert previewed_text == edit.diff
+    apply_edit(edit)
+    written = target.read_text()
+    assert written == edit.after_text
+    for comment in (
+        "# hand-written comment: my personal agent86 config",
+        "# do not lose me",
+        "# inline comment on the default model",
+        "# a comment between sections",
+    ):
+        assert comment in written
+    assert 'api_key_env = "GROQ_API_KEY"' in written
+
+
+async def test_malformed_existing_config_disables_save(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+    from agent86.tui.screens.save_diff import SaveDiffModal
+    from textual.widgets import Button, Static
+
+    target = tmp_path / "config.toml"
+    target.write_text("[model\nbroken", encoding="utf-8")
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+    before = target.read_text()
+
+    host = _PickerHost(
+        SaveDiffModal([(["model", "default"], "groq:llama-3.3-70b-versatile")])
+    )
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        confirm = host.screen.query_one("#save-confirm", Button)
+        assert confirm.disabled is True
+        body = host.screen.query_one("#save-diff-body", Static)
+        assert "Malformed config at" in str(body.render())
+        await pilot.press("escape")
+        await pilot.pause()
+    assert host.result is None
+    assert target.read_text() == before
