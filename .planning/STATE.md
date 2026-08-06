@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T00:08:53.109Z"
+last_updated: "2026-08-06T00:16:31.574Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 18
-  completed_plans: 13
+  completed_plans: 15
 ---
 
 # Project State
@@ -32,11 +32,25 @@ app — no hand-editing TOML, no restarts.
 |-------|--------|-------|----------|
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
-| 3 — Secrets + Model Config | ◐ | 4/9 | 44% |
+| 3 — Secrets + Model Config | ◐ | 6/9 | 67% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Plan 03-07 complete (save-diff modal, parallel Wave 2): `agent86/tui/screens/
+  save_diff.py` adds `SaveDiffModal(ModalScreen[ConfigEdit | None])` — the D-16/D-17 trust-building
+  step. On mount and on every scope change it calls `config_writer.plan_edit(scope, changes)`
+  (pure, no disk I/O) and renders the unified diff plus target path; `#scope-user` is pre-selected,
+  `#scope-project` is one arrow key away and recomputes the diff. `#save-confirm` dismisses with
+  the live `ConfigEdit`; `#save-cancel`/Escape dismiss with `None`; a `ConfigWriteError`/`ValueError`
+  (malformed existing file, forbidden secret key) renders the error text and disables
+  `#save-confirm` instead of crashing. The modal never calls `apply_edit` itself — the caller
+  applies the returned `ConfigEdit` on confirm. Deleted the Wave 0 xfail marker from
+  `tests/tui/test_save_diff.py`; added 2 integration tests proving the previewed diff is
+  byte-identical to what gets written and that all four hand-written comments in
+  `tests/fixtures/config_with_comments.toml` survive a real preview-then-apply round trip.
+  `pytest tests/tui/test_save_diff.py -q` — 6 passed, 0 xfailed. MODEL-02 requirement complete.
 
 - 2026-08-06 — Plan 03-02 complete (secrets seam, parallel Wave 1): `agent86/secrets.py` created
   with `resolve_api_key`/`keyring_available`/`has_stored_key`/`store_api_key`/`clear_api_key` —
