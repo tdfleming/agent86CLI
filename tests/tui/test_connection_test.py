@@ -15,8 +15,6 @@ from textual.app import App, ComposeResult
 from agent86.config import load_config
 from agent86.types import Completion, CompletionRequest, Usage
 
-pytestmark = pytest.mark.xfail(reason="Wave 0 scaffold — implemented in plan 03-06", strict=False)
-
 
 class _PickerHost(App):
     """Minimal host app: pushes a given modal screen on mount, records the dismissed value."""
@@ -53,6 +51,68 @@ class _FakeProvider:
         return Completion(
             text=self._reply_text, usage=Usage(input_tokens=1, output_tokens=1), model=self._model
         )
+
+
+# ---- KeyEntryModal ----
+
+
+async def test_key_entry_returns_typed_value():
+    from agent86.tui.screens.key_entry import KeyEntryModal
+
+    host = _PickerHost(KeyEntryModal("groq", True))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.click("#key-input")
+        await pilot.press(*"sk-abc123")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert host.result == "sk-abc123"
+
+
+async def test_key_entry_escape_returns_none():
+    from agent86.tui.screens.key_entry import KeyEntryModal
+
+    host = _PickerHost(KeyEntryModal("groq", True))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert host.result is None
+
+
+async def test_key_entry_empty_submit_returns_none():
+    from agent86.tui.screens.key_entry import KeyEntryModal
+
+    host = _PickerHost(KeyEntryModal("groq", True))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.click("#key-input")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert host.result is None
+
+
+async def test_key_entry_input_is_masked():
+    from textual.widgets import Input
+
+    from agent86.tui.screens.key_entry import KeyEntryModal
+
+    host = _PickerHost(KeyEntryModal("groq", True))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert host.screen.query_one("#key-input", Input).password is True
+
+
+async def test_key_entry_reports_keyring_unavailable():
+    from textual.widgets import Label
+
+    from agent86.tui.screens.key_entry import KeyEntryModal
+
+    host = _PickerHost(KeyEntryModal("groq", False))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        status = host.screen.query_one("#key-store-status", Label)
+        assert "unavailable" in str(status.content)
 
 
 async def test_success_dismisses_ok(monkeypatch):
