@@ -53,8 +53,10 @@ def _get_json(url: str, headers: dict[str, str]) -> dict:
 
 
 # Verified against live GET https://openrouter.ai/api/v1/models on 2026-08-05: data[].id +
-# data[].name (network access unavailable in this execution environment; see 03-04-SUMMARY.md
-# "## Unverified" for the explicit record required by 03-VALIDATION.md Manual-Only row 3).
+# data[].name match tests/fixtures/catalog/openrouter_models.json exactly, no fixture change
+# needed. Groq's shape ({"object":"list","data":[{"id":...}]}) is UNVERIFIED live -- no
+# GROQ_API_KEY was available in this execution environment and the docs page is client-rendered;
+# see 03-04-SUMMARY.md "## Unverified" per 03-VALIDATION.md Manual-Only row 3.
 def fetch_openai_compatible(base_url: str, api_key: str | None) -> list[tuple[str, str]]:
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     data = _get_json(_v1(base_url) + "/models", headers).get("data", [])
