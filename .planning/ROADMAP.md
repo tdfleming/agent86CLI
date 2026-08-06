@@ -7,7 +7,7 @@
 |---|-------|------|--------------|------------------|
 | 1 | TUI Skeleton + Live Status | 5/5 | Complete   | 2026-07-20 |
 | 2 | Command Palette + Menus | 4/4 | Complete   | 2026-07-20 |
-| 3 | Secrets + Model Config | 6/9 | In Progress|  |
+| 3 | Secrets + Model Config | 8/9 | In Progress|  |
 | 4 | MCP Config UI | Add/remove/enable/test MCP servers from within the app | MCP-01 | 3 |
 | 5 | Packaging & Hardening | Lazy-import packaging, graceful degradation, docs, release | TUI-06 | 4 |
 
@@ -75,13 +75,13 @@ live-tests providers/models, writing changes back to user config non-destructive
    project-scope option is offered.
 4. Switching the active model from the modal takes effect for the next turn.
 
-**Plans:** 6/9 plans executed
+**Plans:** 8/9 plans executed
 - [x] 03-01-PLAN.md — Wave-0 test scaffolds, fixtures, keyring/tomlkit deps + lazy-import guard (wave 0)
 - [x] 03-02-PLAN.md — secrets.py resolve_api_key + provider key seam moved into provider_for_ref (wave 1)
 - [x] 03-03-PLAN.md — config_writer.py: tomlkit round-trip, scope selection, diff, atomic write (wave 1)
 - [x] 03-04-PLAN.md — cognitive/catalog.py: live models-endpoint fetch + per-provider normalization (wave 1)
 - [x] 03-05-PLAN.md — `/config model` command entry, multi-word dispatch, keyring status in /config (wave 2)
-- [ ] 03-06-PLAN.md — KeyEntryModal (masked) + ConnectionTestModal (worker + 15s timeout + Save anyway) (wave 2)
+- [x] 03-06-PLAN.md — KeyEntryModal (masked) + ConnectionTestModal (worker + 15s timeout + Save anyway) (wave 2)
 - [x] 03-07-PLAN.md — SaveDiffModal: scope radio + TOML diff preview + confirm/cancel (wave 2)
 - [x] 03-08-PLAN.md — ProviderManagerModal + type-to-filter CatalogPickerModal with free-text fallback (wave 2)
 - [ ] 03-09-PLAN.md — App wiring: /config model chain, session catalog cache, enriched /model picker (wave 3)

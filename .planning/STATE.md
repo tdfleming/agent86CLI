@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T00:16:56.050Z"
+last_updated: "2026-08-06T00:18:06.874Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 18
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -32,11 +32,41 @@ app — no hand-editing TOML, no restarts.
 |-------|--------|-------|----------|
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
-| 3 — Secrets + Model Config | ◐ | 6/9 | 67% |
+| 3 — Secrets + Model Config | ◐ | 8/9 | 89% |
 | 4 — MCP Config UI | ○ | 0/? | 0% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-05 — Plan 03-06 complete (key-entry + connection-test modals, parallel Wave 2):
+  `src/agent86/tui/screens/key_entry.py` adds `KeyEntryModal(ModalScreen[str | None])` — masked
+  (`password=True`) key capture, explicit dismiss on submit/empty/escape, distinct
+  "OS keyring unavailable" messaging (SEC-01, D-08/D-09/D-10). `src/agent86/tui/screens/
+  connection_test.py` adds `ConnectionTestModal(ModalScreen[TestOutcome])` — a worker-thread
+  (`@work(thread=True)`) real 1-token completion test via `provider_for_ref(ref, cfg, api_key=...)`,
+  a hard 15s timeout that auto-resolves without waiting on a button, and a "Save anyway" override
+  on real provider errors; the tested key is never written to the keyring by this module (MODEL-01,
+  D-11..D-14). Deleted the shared Wave 0 xfail marker from `tests/tui/test_connection_test.py` and
+  added 5 new `KeyEntryModal` tests; all 10 tests in the file pass. Full suite green: 262 passed,
+  2 xfailed (unrelated), 1 xpassed (unrelated), 0 failed. Note: due to a parallel-executor commit
+  race, `connection_test.py` landed inside plan 03-08's commit (`689f0da`) rather than its own —
+  content verified correct and complete; see 03-06-SUMMARY.md for detail.
+
+- 2026-08-06 — Plan 03-08 complete (provider manager + catalog picker, parallel Wave 2):
+  `agent86/tui/screens/provider_manager.py` adds `ProviderRow`/`provider_rows(cfg)`/
+  `ProviderManagerModal`/`CatalogPickerModal`. `provider_rows` lists every configured provider
+  in config order with an accurate, secret-free key status (`key ok`/`no key`/`local, no key
+  needed`), sourced from `resolve_api_key` so it matches exactly what a real turn would resolve
+  (D-05/D-09/D-10). `ProviderManagerModal` (OptionList) dismisses with the selected `ProviderRow`
+  or `None` on Escape. `CatalogPickerModal` narrows a catalog by typing (case-insensitive
+  substring on ref/label, mirroring Phase 2's `_sync_palette` filter-and-reset-highlighted
+  pattern, D-03) and its filter Input doubles as the D-01 free-text fallback when the catalog is
+  empty or nothing matches — never a dead end. A `_catalog_ref`/`_freetext_ref` split avoids
+  double-prefixing Ollama model names that already contain a colon (e.g. `llama3.1:8b`). Wave 0
+  module-level xfail removed; per-function xfail kept on exactly the 3 tests plan 03-09 owns
+  (full-app chain wiring). Full suite green: 262 passed, 2 xfailed, 1 xpassed (harmless early
+  pass of a 03-09-owned test), 0 failed. MODEL-01 requirement's provider-list/catalog-picker
+  surfaces complete.
 
 - 2026-08-06 — Plan 03-05 complete (command-surface + keyring visibility, parallel Wave 2):
   `/config model` registered in `tui/commands.py`'s `COMMANDS` registry with
