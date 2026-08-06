@@ -132,7 +132,8 @@ class MCPManager:
         assert self._loop is not None
         if name in self._tasks:
             self.stop_server(name)
-        fut = asyncio.run_coroutine_threadsafe(self._launch(name, cfg), self._loop)
+        resolved = _resolve_server_secrets(cfg, overrides)
+        fut = asyncio.run_coroutine_threadsafe(self._launch(name, resolved), self._loop)
         try:
             tools = fut.result(timeout=timeout)
         except Exception:
@@ -267,8 +268,51 @@ async def _streamable_http(url: str, headers: dict[str, str]) -> Any:
             yield streams
 
 
+def _resolve_server_secrets(
+    cfg: MCPServerConfig, overrides: dict[str, str] | None = None
+) -> MCPServerConfig:
+    """Return a COPY of ``cfg`` with every ``${VAR}`` resolved (D-17/D-25).
+
+    Applied to ``args``, ``env`` values, ``url``, and ``headers`` values — resolved fresh at
+    connect time, never cached back into config. ``command`` is deliberately NOT expanded: letting
+    an env var or keyring entry decide which executable is spawned is a foot-gun with no use case
+    in this phase's scope.
+
+    Raises :class:`agent86.secrets.MissingSecretRef` for the first unresolved name; the caller
+    turns that into a masked key prompt (D-18) rather than connecting with an empty credential.
+    """
+    from agent86.secrets import expand_var_refs
+
+    return cfg.model_copy(
+        update={
+            "args": [expand_var_refs(a, overrides) for a in cfg.args],
+            "env": {k: expand_var_refs(v, overrides) for k, v in cfg.env.items()},
+            "url": expand_var_refs(cfg.url, overrides) if cfg.url else cfg.url,
+            "headers": {k: expand_var_refs(v, overrides) for k, v in cfg.headers.items()},
+        }
+    )
+
+
+def unresolved_var_refs(cfg: MCPServerConfig, overrides: dict[str, str] | None = None) -> list[str]:
+    """Every ${VAR} name in args/env/url/headers that neither an override, the environment, nor
+    the OS keyring can supply — in stable sorted order, so the caller prompts predictably."""
+    from agent86.secrets import find_var_refs, resolve_api_key
+
+    overrides = overrides or {}
+    texts = [*cfg.args, *cfg.env.values(), cfg.url or "", *cfg.headers.values()]
+    missing = [
+        name
+        for name in sorted(find_var_refs(*texts))
+        if name not in overrides and resolve_api_key(name, name) is None
+    ]
+    return missing
+
+
 def _open_transport(cfg: MCPServerConfig) -> Any:
     """Return the async transport context manager for a server's configured transport.
+
+    ``cfg`` is expected to already be ``${VAR}``-resolved (see ``_resolve_server_secrets``) —
+    this function does no expansion of its own.
 
     Imports are lazy and per-transport so a server that only uses stdio never pulls in the
     HTTP transports (and vice versa). The caller enters the returned context on the MCP loop.

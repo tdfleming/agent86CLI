@@ -246,3 +246,63 @@ def test_manager_start_server_without_mcp_package_raises_with_note(monkeypatch):
         manager.start_server("srv", cfg)
     assert manager.note is not None and 'pip install "agent86[mcp]"' in manager.note
 
+
+# --- ${VAR} resolution at the transport boundary (D-17/D-25, plan 04-04) --------------------- #
+
+
+def test_resolve_server_secrets_expands_env_and_headers(monkeypatch):
+    from agent86.tools.mcp_client import _resolve_server_secrets
+
+    monkeypatch.setenv("A86_T", "sekret")
+    cfg = MCPServerConfig(
+        command="npx",
+        env={"TOKEN": "${A86_T}"},
+        headers={"Authorization": "Bearer ${A86_T}"},
+    )
+    resolved = _resolve_server_secrets(cfg)
+    assert resolved.env == {"TOKEN": "sekret"}
+    assert resolved.headers == {"Authorization": "Bearer sekret"}
+    # original cfg is untouched
+    assert cfg.env == {"TOKEN": "${A86_T}"}
+    assert cfg.headers == {"Authorization": "Bearer ${A86_T}"}
+
+
+def test_resolve_server_secrets_never_expands_command(monkeypatch):
+    from agent86.tools.mcp_client import _resolve_server_secrets
+
+    monkeypatch.setenv("A86_T", "sekret")
+    cfg = MCPServerConfig(command="${A86_T}")
+    resolved = _resolve_server_secrets(cfg)
+    assert resolved.command == "${A86_T}"
+
+
+def test_resolve_server_secrets_overrides_win(monkeypatch):
+    from agent86.tools.mcp_client import _resolve_server_secrets
+
+    monkeypatch.setenv("A86_T", "from-env")
+    cfg = MCPServerConfig(command="npx", env={"TOKEN": "${A86_T}"})
+    resolved = _resolve_server_secrets(cfg, overrides={"A86_T": "typed"})
+    assert resolved.env == {"TOKEN": "typed"}
+
+
+def test_resolve_server_secrets_missing_raises(monkeypatch):
+    from agent86.secrets import MissingSecretRef
+    from agent86.tools.mcp_client import _resolve_server_secrets
+
+    monkeypatch.delenv("A86_MISSING", raising=False)
+    cfg = MCPServerConfig(command="npx", env={"TOKEN": "${A86_MISSING}"})
+    with pytest.raises(MissingSecretRef):
+        _resolve_server_secrets(cfg)
+
+
+def test_unresolved_var_refs_lists_only_missing_names(monkeypatch):
+    from agent86.tools.mcp_client import unresolved_var_refs
+
+    monkeypatch.setenv("A86_HAVE", "yes")
+    monkeypatch.delenv("A86_MISSING", raising=False)
+    cfg = MCPServerConfig(
+        command="npx",
+        env={"A": "${A86_HAVE}"},
+        headers={"Authorization": "Bearer ${A86_MISSING}"},
+    )
+    assert unresolved_var_refs(cfg) == ["A86_MISSING"]
