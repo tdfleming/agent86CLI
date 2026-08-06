@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T02:53:17.613Z"
+last_updated: "2026-08-06T02:58:42.040Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 22
-  completed_plans: 18
+  completed_plans: 21
 ---
 
 # Project State
@@ -52,6 +52,25 @@ app — no hand-editing TOML, no restarts.
   fail against the pre-fix source via a `git stash` round-trip. Full suite green: 331 passed
   (grown from 275/311 as sibling gap-closure plans 03-10..03-13 landed concurrently in the same
   parallel wave). SEC-01/D-10 traceback leak closed.
+
+- 2026-08-06 — Plan 03-12 complete (UAT gap 5 closure, blocker, parallel gap-closure wave):
+  `agent86.cognitive.capabilities` adds a single per-model capability seam
+  (`supports_sampling_params`/`apply_sampling_params`/`mark_sampling_unsupported`/
+  `is_sampling_rejection`) recording that Anthropic removed `temperature`/`top_p`/`top_k` on
+  Claude Opus 5, Opus 4.8, Opus 4.7, Sonnet 5 and Fable 5 — sending any of them 400s, with no
+  replacement value, so they must be omitted entirely. `AnthropicProvider.stream` now gates
+  through this seam (the gate is on the model, never on the value, since
+  `CompletionRequest.temperature` defaults to `0.0`) and self-corrects: a real rejection from a
+  model not yet in the hardcoded list is learned via `mark_sampling_unsupported` and retried
+  once before any text is emitted. `complete()` stays inherited from `ModelProvider`, so the
+  connection-test path used by `/config model` is fixed by the same change.
+  `OpenAIProvider.stream` routed through the identical seam — byte-identical behaviour for
+  OpenAI/Groq/OpenRouter today (no OpenAI-family model is affected), correct omission for free
+  if a gateway proxies an Anthropic model through an OpenAI-compatible endpoint. 43 new tests
+  (`test_capabilities.py` + `test_sampling_params.py`); existing `test_openai_provider.py` left
+  byte-unmodified. Full suite green: 331 passed, 0 failed. ROADMAP success criterion 4
+  ("switching the active model takes effect for the next turn") now holds in practice for the
+  default `anthropic:claude-opus-5` selection. MODEL-01 gap closed.
 
 - 2026-08-06 — Plan 03-09 complete (full-app chain + live-catalog /model picker, Wave 3 — final
   plan, Phase 3 now feature-complete 9/9): `agent86/tui/messages.py` adds `CatalogReady`.
@@ -272,9 +291,12 @@ app — no hand-editing TOML, no restarts.
 
 ## Next Step
 
-Phase 3 (secrets-model-provider-config) is complete: 9/9 plans, full suite green (275 passed, 0
-xfailed, 0 failed). Manual Windows Terminal verification per `03-VALIDATION.md` §Manual-Only
-(real keyring round-trip, real config.toml comment preservation, live OpenRouter/Groq catalog
-schema check) is still outstanding but does not block automated progress. Next: Phase 4 (MCP
-Config UI) — add/remove/enable/test MCP servers from within the CLI, with connection validation
-(MCP-01).
+Phase 3 (secrets-model-provider-config) gap-closure wave in progress: plans 03-10, 03-11, 03-12
+complete; 03-13 (UAT blocker) still running in a parallel executor as of this update. Plan 03-12
+closed UAT gap 5 (Anthropic sampling-params 400 on the default `anthropic:claude-opus-5`
+selection) — full suite green at 331 passed, 0 failed after this plan. Manual Windows Terminal
+verification per `03-VALIDATION.md` §Manual-Only (real keyring round-trip, real config.toml
+comment preservation, live OpenRouter/Groq catalog schema check, and a real `hello` turn against
+`anthropic:claude-opus-5`) is still outstanding but does not block automated progress. Next:
+confirm 03-13 lands, then Phase 4 (MCP Config UI) — add/remove/enable/test MCP servers from
+within the CLI, with connection validation (MCP-01).
