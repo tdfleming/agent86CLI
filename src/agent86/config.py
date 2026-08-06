@@ -11,6 +11,9 @@ Resolution order (later overrides earlier):
 Secrets (API keys) are never stored here — config only names the *env var* that
 holds each provider's key (``api_key_env``); the key itself is read at provider
 construction time.
+
+Writing config back (comment-preserving) lives in agent86.config_writer; this module stays
+read-only.
 """
 
 from __future__ import annotations

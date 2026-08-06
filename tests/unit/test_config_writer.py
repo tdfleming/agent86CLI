@@ -112,3 +112,59 @@ def test_creates_missing_file_and_parents(tmp_path, monkeypatch):
     )
     config_writer.apply_edit(edit)
     assert target.exists()
+
+
+def test_multiple_changes_in_one_edit(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    shutil.copy(FIXTURE, target)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    edit = config_writer.plan_edit(
+        "user",
+        [
+            (["providers", "groq", "api_key_env"], "GROQ_API_KEY"),
+            (["providers", "groq", "base_url"], "https://api.groq.com/openai/v1"),
+            (["model", "default"], "groq:llama-3.3-70b-versatile"),
+        ],
+    )
+
+    assert 'api_key_env = "GROQ_API_KEY"' in edit.after_text
+    assert 'base_url = "https://api.groq.com/openai/v1"' in edit.after_text
+    assert 'default = "groq:llama-3.3-70b-versatile"' in edit.after_text
+    assert edit.after_text.count("[providers.groq]") == 1
+    assert "# inline comment on the default model" in edit.after_text
+    assert '"anthropic:claude-opus-4-8"' not in edit.after_text
+
+
+def test_apply_edit_reloads_config(tmp_path, monkeypatch):
+    import agent86.config as config
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    shutil.copy(FIXTURE, target)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+    monkeypatch.setattr(config, "USER_CONFIG_PATH", target)
+
+    edit = config_writer.plan_edit(
+        "user", [(["model", "default"], "groq:llama-3.3-70b-versatile")]
+    )
+    result = config_writer.apply_edit(edit)
+
+    assert result.model.default == "groq:llama-3.3-70b-versatile"
+
+
+def test_atomic_write_leaves_no_temp_files(tmp_path, monkeypatch):
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    shutil.copy(FIXTURE, target)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+
+    edit = config_writer.plan_edit(
+        "user", [(["providers", "groq", "api_key_env"], "GROQ_API_KEY")]
+    )
+    config_writer.apply_edit(edit)
+
+    assert list(tmp_path.glob(".config-*")) == []
