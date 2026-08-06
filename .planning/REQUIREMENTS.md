@@ -71,7 +71,7 @@ Deferred — acknowledged but not in this milestone's roadmap.
 | SEC-01 | Phase 3 | Complete |
 | MODEL-01 | Phase 3 | Complete |
 | MODEL-02 | Phase 3 | Complete |
-| MCP-01 | Phase 4 | In Progress |
+| MCP-01 | Phase 4 | Complete |
 | TUI-06 | Phase 5 | Pending |
 
 **Coverage:**

@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T06:02:11.397Z"
+last_updated: "2026-08-06T06:56:20.973Z"
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 30
-  completed_plans: 29
+  completed_plans: 30
 ---
 
 # Project State
@@ -19,7 +19,7 @@ See: .planning/PROJECT.md (updated 2026-07-19)
 
 **Core value:** Run, configure, and steer the agent entirely from within an interactive terminal
 app — no hand-editing TOML, no restarts.
-**Current focus:** Phase 04 — mcp-config-ui
+**Current focus:** Phase 05 — packaging-hardening (Phase 04 complete)
 
 ## Milestone
 
@@ -33,10 +33,37 @@ app — no hand-editing TOML, no restarts.
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
 | 3 — Secrets + Model Config | ● | 13/13 | 100% |
-| 4 — MCP Config UI | ● | 6/8 | 75% |
+| 4 — MCP Config UI | ● | 8/8 | 100% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Plan 04-08 complete (`/config mcp` full-app chain, Wave 4 — final plan, Phase 4
+  now feature-complete 8/8, MCP-01 and the SEC-01 `headers.Authorization` write-path both closed):
+  `/config mcp` registered in `tui/commands.py`'s `COMMANDS` registry with `needs_choice=
+  "config_mcp"` (palette/`/help`/multi-word dispatch, zero per-surface wiring, mirrors
+  `/config model`). `Agent86App` gains the full add/edit chain — `MCPManagerModal` →
+  `MCPServerFormModal` → every unresolved `${VAR}` resolved one at a time through the existing
+  masked `KeyEntryModal` (never a second masked field) → `MCPTestModal` on
+  `Harness.ensure_mcp()`'s live manager → `SaveDiffModal` (headers/env written as individual TOML
+  key paths, not whole dicts, so config_writer's forbidden-leaf-key guard actually inspects
+  `headers.Authorization`) → `apply_edit` → `Harness.add_mcp_server` mounting the tested server's
+  tools live. A cancelled add stops the server the test already started (D-13); a config write
+  that succeeds while the live mount fails reports both without rolling back (D-16). Remove and
+  enable/disable reuse the identical diff-and-confirm gate — no silent write, no extra "are you
+  sure" dialog — and re-enabling a disabled server re-runs the connection test before mounting.
+  Removed both plan-04-08-owned `xfail` markers from `tests/tui/test_mcp_manager.py`; added a
+  `_FakeMCPManager` and full-app Pilot tests for the add chain, `${VAR}` key-entry chaining, both
+  cancel paths, live mount, the override/mount-failure-reports-both path, per-key header/env TOML
+  paths, and remove/disable/enable-with-test/no-op-remove. One test-only deviation: headless
+  Pilot tests against the real `Agent86App` needed `run_test(size=(100, 50))` (default 80x24
+  clips the MCP form below its Continue button) and a `pilot.pause`-based settle helper instead of
+  a bare `asyncio.sleep` poll (buttons' `display` flag could flip `True` moments before their
+  `Button` children finished mounting under `call_from_thread`) — 25+ consecutive runs green
+  after the fix. Full suite green: 438 passed, 0 xfailed, 0 failed (the pre-existing, documented
+  `CatalogPickerModal`/`#catalog-filter` flake from `deferred-items.md` appeared once per its two
+  known forms across two full runs and cleared on immediate rerun both times — unrelated to this
+  plan's files).
 
 - 2026-08-06 — Plan 04-07 complete (MCP pre-save connection test modal, parallel Wave 3):
   `src/agent86/tui/screens/mcp_test.py` adds `MCPTestOutcome`/`MCPTestModal` — the MCP twin of
@@ -452,5 +479,10 @@ version guard + fail-soft startup) — full suite green at 341 passed, 0 failed.
 Terminal verification per `03-VALIDATION.md` §Manual-Only (real keyring round-trip, real
 config.toml comment preservation, live OpenRouter/Groq catalog schema check, and a real `hello`
 turn against `anthropic:claude-opus-5`) remains outstanding but does not block automated
-progress. Next: Phase 4 (MCP Config UI) — add/remove/enable/test MCP servers from within the
-CLI, with connection validation (MCP-01).
+progress.
+
+Phase 4 (MCP Config UI) is now feature-complete: 8/8 plans done, MCP-01 and the SEC-01
+`headers.Authorization` write-path gap both closed. Full suite green at 438 passed, 0 xfailed,
+0 failed. Manual Windows Terminal verification of the full `/config mcp` flow against a real MCP
+server remains outstanding but does not block automated progress. Next: Phase 5 (Packaging &
+Hardening) — TUI-06 formal packaging/hardening.
