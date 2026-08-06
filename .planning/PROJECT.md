@@ -36,6 +36,13 @@ TOML or restarting.
 - ✓ Persistent bottom status line at the prompt (model, ctx%, tokens, cost) — existing
 - ✓ HITL approval gate with Shift+Tab mode cycle — existing
 - ✓ Long-term memory, skills, guardrails, sandbox, flight-recorder trace — existing
+- ✓ **MODEL-01**: Add / switch / test model providers and models from within the CLI
+  (`/config model` manager, key-entry + connection-test modals, live provider catalogs) — Phase 3
+- ✓ **MODEL-02**: Config changes written back to `~/.agent86/config.toml` non-destructively
+  (`config_writer.py` on tomlkit, with a save-diff confirmation modal) — Phase 3
+- ✓ **SEC-01**: API keys stored in the OS keyring, env vars still take precedence; keys never
+  reach the transcript or a traceback (`secrets.py` + `redact()`, fail-soft provider
+  construction) — Phase 3
 
 ### Active
 
@@ -43,9 +50,6 @@ TOML or restarting.
 
 - [ ] **TUI-06**: Plain loop and `run --json` keep working; keyring/Textual absence degrades
       gracefully (fallback landed in Phase 1; formal packaging/hardening in Phase 5)
-- [ ] **MODEL-01**: Add / switch / test model providers and models from within the CLI
-- [ ] **MODEL-02**: Config changes written back to `~/.agent86/config.toml` non-destructively
-- [ ] **SEC-01**: API keys stored in the OS keyring (env vars still take precedence)
 - [ ] **MCP-01**: Add / remove / enable / test MCP servers from within the CLI, with connection
       validation
 
@@ -89,8 +93,11 @@ TOML or restarting.
 |----------|-----------|---------|
 | Full-screen **Textual** TUI (vs prompt_toolkit Application or incremental Rich) | Most Claude-Code-like; live footer during processing falls out of the async event loop | ✓ Good (Phase 1) |
 | Reuse threaded turn bridge: `run_worker(thread=True)` + `post_message`; Event-based approval (not `push_screen_wait`) | Approval + streaming already solved in `_run_turn_rich`; avoids under-documented async-worker API | ✓ Good (Phase 1) |
-| Secrets in **OS keyring** (vs env-only or encrypted file) | Safe default, no hand-rolled crypto, env still wins for CI | — Pending |
-| Config writes default to **user** scope (`~/.agent86`), project toggle offered | Applies across projects; repo-specific settings opt-in | — Pending |
+| Secrets in **OS keyring** (vs env-only or encrypted file) | Safe default, no hand-rolled crypto, env still wins for CI | ✓ Good (Phase 3) |
+| Config writes default to **user** scope (`~/.agent86`), project toggle offered | Applies across projects; repo-specific settings opt-in | ✓ Good (Phase 3) |
+| `UNRESOLVED` sentinel for "key not yet looked up" (vs `None`) | `None` conflates "absent" with "unresolved", which silently defeated keyring retest | ✓ Good (Phase 3) |
+| Per-family **capabilities seam** gates sampling params, with self-correcting retry | Providers reject params per model family; one declarative table beats scattered conditionals | ✓ Good (Phase 3) |
+| Redact-and-sever on provider construction failure (`raise … from None`, no frame locals) | A traceback through key-handling code is a second, independent secret-leak path | ✓ Good (Phase 3) |
 | New deps **lazy-imported**; Textual a core-but-lazy dep | Preserve fast cold-start for `run`/`--plain` | — Pending |
 | Reuse existing threaded turn bridge; post Textual messages | Approval + streaming already solved; don't re-derive | — Pending |
 | Single declarative `COMMANDS` registry backs dispatch, `/help`, and the palette | One source of truth — help and palette can't drift from real commands | ✓ Good (Phase 2) |
@@ -115,4 +122,5 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-20 after Phase 2 (Command Palette + Menus)*
+*Last updated: 2026-08-06 after Phase 3 (Secrets, Model & Provider Config) — SEC-01, MODEL-01,
+MODEL-02 validated; MCP-01 and TUI-06 remain active.*
