@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from typing import Any
 
-from agent86.cognitive.base import ModelProvider, ProviderError
+from agent86.cognitive.base import UNRESOLVED, ModelProvider, ProviderError
 from agent86.cognitive.pricing import priced_usage
 from agent86.config import ProviderConfig
 from agent86.types import (
@@ -26,7 +25,7 @@ class AnthropicProvider(ModelProvider):
     name = "anthropic"
     supports_native_tools = True
 
-    def __init__(self, model: str, config: ProviderConfig):
+    def __init__(self, model: str, config: ProviderConfig, api_key: Any = UNRESOLVED):
         self.model = model
         self._config = config
         try:
@@ -38,10 +37,14 @@ class AnthropicProvider(ModelProvider):
             ) from exc
 
         key_env = config.api_key_env or "ANTHROPIC_API_KEY"
-        api_key = os.getenv(key_env)
+        if api_key is UNRESOLVED:
+            from agent86.secrets import resolve_api_key
+
+            api_key = resolve_api_key("anthropic", key_env)
         if not api_key:
             raise ProviderError(
-                f"No Anthropic API key found. Set the {key_env} environment variable."
+                f"No Anthropic API key found. Set the {key_env} environment variable "
+                "or store a key in the OS keyring via /config model."
             )
         kwargs: dict[str, Any] = {"api_key": api_key}
         if config.base_url:

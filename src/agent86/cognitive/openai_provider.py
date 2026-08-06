@@ -9,13 +9,12 @@ are accumulated by index into whole :class:`ToolCall` objects.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
 
-from agent86.cognitive.base import ModelProvider, ProviderError
+from agent86.cognitive.base import UNRESOLVED, ModelProvider, ProviderError
 from agent86.cognitive.pricing import priced_usage
 from agent86.config import ProviderConfig
 from agent86.types import (
@@ -35,16 +34,29 @@ class OpenAIProvider(ModelProvider):
     name = "openai"
     supports_native_tools = True
 
-    def __init__(self, model: str, config: ProviderConfig, require_key: bool = True):
+    def __init__(
+        self,
+        model: str,
+        config: ProviderConfig,
+        require_key: bool = True,
+        api_key: Any = UNRESOLVED,
+    ):
         self.model = model
         base = (config.base_url or _DEFAULT_BASE_URL).rstrip("/")
         # Tolerate a base_url given with or without the /v1 suffix.
         self._url = base + ("" if base.endswith("/v1") else "/v1") + "/chat/completions"
 
-        self._api_key = os.getenv(config.api_key_env) if config.api_key_env else None
+        if api_key is UNRESOLVED:
+            from agent86.secrets import resolve_api_key
+
+            api_key = resolve_api_key(self.name, config.api_key_env)
+        self._api_key = api_key or None
         if require_key and not self._api_key:
             env = config.api_key_env or "OPENAI_API_KEY"
-            raise ProviderError(f"No API key found. Set the {env} environment variable.")
+            raise ProviderError(
+                f"No API key found. Set the {env} environment variable "
+                "or store a key in the OS keyring via /config model."
+            )
 
     # ------------------------------------------------------------------ #
     # Conversion

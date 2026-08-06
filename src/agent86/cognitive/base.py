@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
+from typing import Any
 
 from agent86.config import Config, ProviderConfig
 from agent86.types import (
@@ -19,6 +20,12 @@ from agent86.types import (
     Message,
     ModelRef,
 )
+
+#: Sentinel for "the caller did not supply a key; resolve it yourself from env/keyring".
+#: ``provider_for_ref`` passes a concrete ``str | None`` because only it knows the config
+#: section name (``ref.provider``) that D-07 keys the keyring on; direct construction (tests,
+#: ad-hoc use) falls back to self-resolution so existing call sites keep working.
+UNRESOLVED: Any = object()
 
 
 class ProviderError(RuntimeError):
@@ -65,14 +72,24 @@ class ModelProvider(ABC):
 # Factory
 # --------------------------------------------------------------------------- #
 
-def provider_for_ref(ref: ModelRef, config: Config) -> ModelProvider:
-    """Construct the provider that serves ``ref`` (e.g. ``anthropic:claude-opus-4-8``)."""
+def provider_for_ref(ref: ModelRef, config: Config, api_key: Any = UNRESOLVED) -> ModelProvider:
+    """Construct the provider that serves ``ref`` (e.g. ``anthropic:claude-opus-4-8``).
+
+    ``api_key`` may be supplied explicitly (the TUI connection test passes a key that is being
+    validated but is not yet stored anywhere — D-14); otherwise it is resolved env-first then
+    from the OS keyring, keyed on ``ref.provider`` (the config section name, D-07).
+    """
     pconf: ProviderConfig = config.providers.get(ref.provider, ProviderConfig())
+
+    if api_key is UNRESOLVED:
+        from agent86.secrets import resolve_api_key
+
+        api_key = resolve_api_key(ref.provider, pconf.api_key_env)
 
     if ref.provider == "anthropic":
         from agent86.cognitive.anthropic_provider import AnthropicProvider
 
-        return AnthropicProvider(model=ref.model, config=pconf)
+        return AnthropicProvider(model=ref.model, config=pconf, api_key=api_key)
 
     if ref.provider == "ollama":
         from agent86.cognitive.ollama_provider import OllamaProvider
@@ -82,12 +99,12 @@ def provider_for_ref(ref: ModelRef, config: Config) -> ModelProvider:
     if ref.provider in ("openai", "openai-compatible"):
         from agent86.cognitive.openai_provider import OpenAIProvider
 
-        return OpenAIProvider(model=ref.model, config=pconf)
+        return OpenAIProvider(model=ref.model, config=pconf, api_key=api_key)
 
     if ref.provider == "llamacpp":
         from agent86.cognitive.llamacpp_provider import LlamaCppProvider
 
-        return LlamaCppProvider(model=ref.model, config=pconf)
+        return LlamaCppProvider(model=ref.model, config=pconf, api_key=api_key)
 
     # Fallback: any custom provider with a base_url is treated as OpenAI-compatible.
     # This makes OpenRouter, Groq, Together, Fireworks, Azure, vLLM, LM Studio, etc.
@@ -99,7 +116,7 @@ def provider_for_ref(ref: ModelRef, config: Config) -> ModelProvider:
         # Require a key only when the config names an env var for one (hosted APIs);
         # a base_url with no api_key_env is treated as a keyless local endpoint.
         return OpenAIProvider(
-            model=ref.model, config=pconf, require_key=bool(pconf.api_key_env)
+            model=ref.model, config=pconf, require_key=bool(pconf.api_key_env), api_key=api_key
         )
 
     raise ProviderError(
@@ -117,6 +134,7 @@ def provider_for_model(model: str, config: Config) -> ModelProvider:
 __all__ = [
     "ModelProvider",
     "ProviderError",
+    "UNRESOLVED",
     "provider_for_ref",
     "provider_for_model",
 ]
