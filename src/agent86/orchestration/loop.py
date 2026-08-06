@@ -20,7 +20,7 @@ from pathlib import Path
 
 from agent86.cognitive.base import ModelProvider
 from agent86.cognitive.prompt import build_system_prompt
-from agent86.config import Config
+from agent86.config import Config, MCPServerConfig
 from agent86.guardrails.egress import EgressGuardrail
 from agent86.guardrails.ingress import IngressGuardrail, wrap_untrusted
 from agent86.guardrails.policy import ApprovalGate, ApprovalPrompt
@@ -157,6 +157,44 @@ class Harness:
         if self.mcp is None:
             self.mcp = MCPManager({})
         return self.mcp
+
+    def add_mcp_server(self, name: str, cfg: MCPServerConfig) -> tuple[list[str], list[str]]:
+        """Mount an already-connected server's tools into the live registry (D-13).
+
+        Called AFTER the connection test has already connected this server via the manager's own
+        connect method — this method never opens a transport, it only wires the resulting tools
+        in. Returns ``(mounted, collisions)``: a tool whose name is already taken is reported
+        rather than silently dropped (D-24), because in an explicit, watched add the user can act
+        on the collision — unlike bulk startup, whose registration path stays lenient.
+
+        D-15: nothing is injected into the conversation; ``_build_request`` reads
+        ``self.registry.specs()`` fresh on the next turn, so the change is picked up there.
+        """
+        manager = self.ensure_mcp()
+        mounted: list[str] = []
+        collisions: list[str] = []
+        for tool in manager.tools_for(name):
+            try:
+                self.registry.register(tool)
+                mounted.append(tool.name)
+            except ValueError:
+                collisions.append(tool.name)
+        manager.servers[name] = cfg
+        return mounted, collisions
+
+    def remove_mcp_server(self, name: str) -> None:
+        """Unmount a server's tools and close its session immediately (D-14).
+
+        Symmetric with ``add_mcp_server``: leaving a removed server's tools callable would let
+        the model invoke something the user just deleted. Safe to call for a name that was never
+        mounted.
+        """
+        if self.mcp is None:
+            return
+        for tool in self.mcp.tools_for(name):
+            self.registry.unregister(tool.name)
+        self.mcp.stop_server(name)
+        self.mcp.servers.pop(name, None)
 
     # ---- sessions ------------------------------------------------------ #
 
