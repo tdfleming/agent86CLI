@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-06T05:52:09.460Z"
+last_updated: "2026-08-06T05:59:04.666Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 30
-  completed_plans: 27
+  completed_plans: 28
 ---
 
 # Project State
@@ -33,10 +33,24 @@ app — no hand-editing TOML, no restarts.
 | 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
 | 3 — Secrets + Model Config | ● | 13/13 | 100% |
-| 4 — MCP Config UI | ● | 4/8 | 50% |
+| 4 — MCP Config UI | ● | 6/8 | 75% |
 | 5 — Packaging & Hardening | ○ | 0/? | 0% |
 
 ## Recent Activity
+
+- 2026-08-06 — Plan 04-07 complete (MCP pre-save connection test modal, parallel Wave 3):
+  `src/agent86/tui/screens/mcp_test.py` adds `MCPTestOutcome`/`MCPTestModal` — the MCP twin of
+  `connection_test.py` (D-20): a 30s worker-thread test (raised from 15s because a first-run
+  stdio server may `npx`-download its package) that starts a server for real on the caller's
+  *live* `MCPManager` via `start_server(name, cfg, timeout=30.0, overrides=...)`, enumerates its
+  tools, and requires an explicit Continue before the flow reaches the diff (D-19) rather than
+  auto-dismissing on success. A real failure shows the verbatim (redacted, SEC-01) error and
+  offers a labelled "Save anyway" override (D-13); timeout/cancel/escape all resolve explicitly
+  and never hang. Removed the Wave 0 module-level `xfail` from `tests/tui/test_mcp_test_modal.py`
+  — all 6 tests pass unmarked. Fixed a pre-existing scaffold bug flagged in the plan's own
+  context: `Static.renderable` doesn't exist on the installed Textual 8.2.8 (`.render()` does,
+  matching `test_save_diff.py`'s pattern). Full suite green: 418 passed, 2 xfailed (04-08-owned,
+  untouched), 0 failed.
 
 - 2026-08-06 — Plan 04-04 complete (task-per-server MCPManager lifecycle, parallel Wave 2 —
   the single load-bearing piece of engineering in this phase, D-23): `MCPManager` rewritten

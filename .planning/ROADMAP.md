@@ -8,7 +8,7 @@
 | 1 | TUI Skeleton + Live Status | 5/5 | Complete   | 2026-07-20 |
 | 2 | Command Palette + Menus | 4/4 | Complete   | 2026-07-20 |
 | 3 | Secrets + Model Config | 13/13 | Complete   | 2026-08-06 |
-| 4 | MCP Config UI | 5/8 | In Progress|  |
+| 4 | MCP Config UI | 6/8 | In Progress|  |
 | 5 | Packaging & Hardening | Lazy-import packaging, graceful degradation, docs, release | TUI-06 | 4 |
 
 ---
@@ -104,7 +104,7 @@ server's connection and listing its tools before saving.
    tools before the entry is written to config.
 3. Removing or disabling a server updates config non-destructively and reflects in the app.
 
-**Plans:** 5/8 plans executed
+**Plans:** 6/8 plans executed
 
 Plans:
 - [x] 04-01-PLAN.md — Wave 0 test scaffolds: secrets/config_writer/config/mcp units, real-stdio D-23 teardown guard, TUI Pilot modules (wave 0)
@@ -113,7 +113,7 @@ Plans:
 - [x] 04-04-PLAN.md — MCPManager task-per-server lifecycle (D-23), connect-time ${VAR} expansion, build_mcp enabled filter (wave 2)
 - [x] 04-05-PLAN.md — tui/screens/mcp_manager.py: server list modal + shared add/edit form with inline validation (wave 2)
 - [ ] 04-06-PLAN.md — Harness.ensure_mcp / add_mcp_server / remove_mcp_server live mount-unmount seam (wave 3)
-- [ ] 04-07-PLAN.md — tui/screens/mcp_test.py: 30s worker-thread connection test with tool enumeration (wave 3)
+- [x] 04-07-PLAN.md — tui/screens/mcp_test.py: 30s worker-thread connection test with tool enumeration (wave 3)
 - [ ] 04-08-PLAN.md — `/config mcp` registry entry + full app.py chain (form → key → test → diff → save → live mount) (wave 4)
 
 ### Phase 5: Packaging & Hardening
