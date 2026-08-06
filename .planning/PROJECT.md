@@ -43,6 +43,9 @@ TOML or restarting.
 - ✓ **SEC-01**: API keys stored in the OS keyring, env vars still take precedence; keys never
   reach the transcript or a traceback (`secrets.py` + `redact()`, fail-soft provider
   construction) — Phase 3
+- ✓ **MCP-01**: List / add / remove / enable / disable MCP servers from within the app via
+  `/config mcp`, with a pre-save connection test that starts the server for real and enumerates
+  its tools; servers mount and unmount live in the running session (no restart) — Phase 4
 
 ### Active
 
@@ -50,9 +53,6 @@ TOML or restarting.
 
 - [ ] **TUI-06**: Plain loop and `run --json` keep working; keyring/Textual absence degrades
       gracefully (fallback landed in Phase 1; formal packaging/hardening in Phase 5)
-- [ ] **MCP-01**: Add / remove / enable / test MCP servers from within the CLI, with connection
-      validation
-
 ### Out of Scope
 
 - Retaining the legacy `rich_loop` long-term — replaced by TUI + plain loop (two loops, not three)
@@ -122,5 +122,5 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-06 after Phase 3 (Secrets, Model & Provider Config) — SEC-01, MODEL-01,
-MODEL-02 validated; MCP-01 and TUI-06 remain active.*
+*Last updated: 2026-08-06 after Phase 4 (MCP Config UI) — MCP-01 validated; TUI-06 remains
+active for Phase 5 (Packaging & Hardening).*
