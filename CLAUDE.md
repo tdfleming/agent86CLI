@@ -1,4 +1,3 @@
-<!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
 **agent86 — Interactive Milestone (v0.6)**
@@ -24,9 +23,8 @@ TOML or restarting.
   prompt_toolkit (retained for plain loop), Rich, Typer, Pydantic v2.
 - **Platform**: Primary dev/test on Windows 11 (console quirks already handled via UTF-8
   reconfigure in `cli.py`); must also work on macOS/Linux.
-<!-- GSD:project-end -->
 
-<!-- GSD:stack-start source:STACK.md -->
+<!-- GSD:stack-start -->
 ## Technology Stack
 
 | Layer | Choice | Notes |
@@ -44,7 +42,7 @@ TOML or restarting.
 
 Install for dev: `uv pip install -e ".[dev]"`
 
-<!-- GSD:conventions-start source:CONVENTIONS.md -->
+<!-- GSD:conventions-start -->
 ## Conventions
 
 ### Code patterns
@@ -67,9 +65,8 @@ Install for dev: `uv pip install -e ".[dev]"`
 - Modules: `snake_case` (`loop.py`, `state.py`, `prompt.py`)
 - Classes: `PascalCase` (`ModelProvider`, `Tool`, `AgentState`)
 - Functions: `snake_case` (`load_config`, `run_repl`)
-<!-- GSD:conventions-end -->
 
-<!-- GSD:architecture-start source:ARCHITECTURE.md -->
+<!-- GSD:architecture-start -->
 ## Architecture
 
 The authoritative contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**. Key facts:
@@ -143,7 +140,7 @@ agent86 run "hello"              # one-shot run (scripting/CI contract)
 3. Register via `ToolRegistry` in `tools/registry.py`
 4. Add unit test — construct `ToolContext` with `tmp_path`, call `execute`, assert result
 
-<!-- GSD:workflow-start source:GSD defaults -->
+<!-- GSD:workflow-start -->
 ## GSD Workflow Enforcement
 
 Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
@@ -154,14 +151,12 @@ Use these entry points:
 - `/gsd:execute-phase` for planned phase work
 
 Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
-<!-- GSD:workflow-end -->
 
 <!-- GSD:profile-start -->
 ## Developer Profile
 
 > Profile not yet configured. Run `/gsd:profile-user` to generate your developer profile.
 > This section is managed by `generate-claude-profile` -- do not edit manually.
-<!-- GSD:profile-end -->
 
 ## SAGE — Persistent Memory
 
