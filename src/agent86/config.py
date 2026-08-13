@@ -52,6 +52,17 @@ class ModelConfig(BaseModel):
     context_window: dict[str, int] = Field(default_factory=dict)
 
 
+#: httpx's `read` timeout is the maximum gap between received chunks, NOT a total-request
+#: deadline — so a long but *progressing* generation is never penalised, while a stalled socket
+#: fails. Sized for time-to-first-token: prompt evaluation on slow local hardware can run for
+#: minutes before the first chunk arrives. 300s is ~4.4x the longest legitimate request observed
+#: (1m8s) and bounds a wedged server to 5 minutes instead of the 20+ minutes actually seen.
+_DEFAULT_READ_TIMEOUT_S = 300.0
+#: A TCP connect that has not completed in 10s is a down endpoint, not a slow one.
+#: Matches cognitive/catalog.py's _TIMEOUT_S.
+_DEFAULT_CONNECT_TIMEOUT_S = 10.0
+
+
 class ProviderConfig(BaseModel):
     api_key_env: str | None = None
     base_url: str | None = None
@@ -59,6 +70,11 @@ class ProviderConfig(BaseModel):
     # window that a tool observation (e.g. web_fetch) can fill, leaving no room to generate —
     # so responses get cut off mid-sentence. None uses Ollama's default.
     num_ctx: int | None = None
+    # Streaming HTTP limits, per provider. read_timeout_s is the maximum gap BETWEEN streamed
+    # chunks (httpx semantics), not the total generation time — raise it for slow local hardware
+    # with long prompt-eval times; a genuinely wedged server still fails instead of hanging.
+    connect_timeout_s: float = _DEFAULT_CONNECT_TIMEOUT_S
+    read_timeout_s: float = _DEFAULT_READ_TIMEOUT_S
 
 
 def _default_user_agent() -> str:
