@@ -471,6 +471,7 @@ app — no hand-editing TOML, no restarts.
 | 260805-xbw | Surface failed tool tracebacks to the model — fix _observe + debugging-discipline prompt | 2026-08-06 | a092502 | | [260805-xbw-surface-failed-tool-tracebacks-to-the-mo](./quick/260805-xbw-surface-failed-tool-tracebacks-to-the-mo/) |
 | 260813-adr | Make /model catalog picker insert the active provider prefix | 2026-08-13 | 2a63ada | | [260813-adr-make-model-catalog-picker-insert-the-act](./quick/260813-adr-make-model-catalog-picker-insert-the-act/) |
 | 260813-atc | Catalog-validated provider fallback for /model bare-ref typing | 2026-08-13 | 300c215 | Verified | [260813-atc-catalog-validated-provider-fallback-for-](./quick/260813-atc-catalog-validated-provider-fallback-for-/) |
+| 260813-jfk | Configurable HTTP timeouts for streaming — bound the two unbounded httpx.stream reads | 2026-08-13 | c600987 | | [260813-jfk-configurable-http-timeouts-for-streaming](./quick/260813-jfk-configurable-http-timeouts-for-streaming/) |
 
 - 2026-08-13 — Quick task 260813-adr complete: fixed the TUI `/model` catalog picker dispatching a
   broken ref for every provider (reported via the Ollama entry `nemotron-3.5-lightning:latest`
@@ -510,6 +511,38 @@ app — no hand-editing TOML, no restarts.
   rather than hanging it. RED proof confirmed against the pre-Task-2 source. Full suite green:
   454 passed, 6 skipped, 1 known pre-existing unrelated failure
   (`test_build_embedder_falls_back_without_torch`).
+
+- 2026-08-13 — Quick task 260813-jfk complete: fixed the real 20+ minute hang diagnosed via
+  py-spy at `ollama_provider.py:108` — `httpx.stream(..., timeout=None)` at both
+  `ollama_provider.py:101` and `openai_provider.py:142` meant "no timeout at all," so a server
+  that accepted a connection and then stopped sending (Ollama's keep-alive expiring mid-teardown
+  without closing the socket) blocked the turn worker's `recv()` forever. `ProviderConfig` gains
+  per-provider `connect_timeout_s` (10.0, matches `catalog.py`'s existing constant) and
+  `read_timeout_s` (300.0, sized for time-to-first-token on slow local hardware — ~4.4x the
+  incident's own preceding legitimate request). New `cognitive/http_timeouts.py` owns the
+  `ProviderConfig -> httpx.Timeout` conversion (always split — connect/read/write/pool, never a
+  scalar or a total-request deadline, since httpx's `read` is the max GAP between chunks, not the
+  total generation time) and the `httpx.TimeoutException -> ProviderError` message, shared by both
+  providers so they cannot drift. Both call sites now pass a config-derived `httpx.Timeout`; a new
+  `except httpx.TimeoutException` clause was appended after each provider's existing
+  `except httpx.ConnectError` (disjoint sibling exception types, so the pinned Ollama
+  "Cannot reach Ollama..." wording stays byte-unchanged). Found and fixed along the way:
+  `LlamaCppProvider`'s default-base-url substitution was reconstructing a bare `ProviderConfig`
+  that silently dropped every field except `base_url`/`api_key_env` — now
+  `config.model_copy(update={"base_url": ...})`, preserving the caller's timeout fields (and any
+  future ones). Anthropic (D-3, SDK's own ~600s default already bounds it) and
+  `tools/mcp_client.py` (D-4, already bounded by httpx's 5s default) deliberately unchanged, with
+  comments recording why. Proved the core guarantee against a REAL loopback HTTP/1.0 socket (not a
+  fake, which would be circular): a stalled stream raises `ProviderError` in well under its
+  configured budget for both Ollama NDJSON and OpenAI SSE, and — the key semantic, parametrized
+  over both wire formats — a slow-but-progressing stream whose TOTAL duration (~1.5s) exceeds the
+  read timeout (0.6s) still succeeds with full untruncated text, via an explicit
+  `elapsed > read_timeout_s` assertion. Every provider call ran through a hard
+  `ThreadPoolExecutor` + `future.result(timeout=...)` budget so a regression would fail the suite
+  rather than hang it; no `pytest-timeout`/`py-spy` dependency added. Full suite green: 479 passed
+  (up from 454), 6 skipped, 1 known pre-existing unrelated failure
+  (`test_build_embedder_falls_back_without_torch`). Ruff introduces zero new errors (verified via
+  a `git worktree` diff against the pre-task baseline).
 
 ## Next Step
 
