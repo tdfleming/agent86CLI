@@ -52,6 +52,22 @@ def prefix_catalog_refs(
     return out
 
 
+def catalog_has_ref(ref: str, entries: list[tuple[str, str]] | None) -> bool:
+    """Does the provider's catalog vouch for `ref` verbatim?
+
+    `fetch_catalog` (`cognitive/catalog.py`) returns BARE model ids by documented contract, so the
+    comparison is against the `ref` half of each `(ref, label)` pair only — never the label, which
+    may be a provider-supplied display name (OpenRouter's `data[].name`). Exact, case-sensitive
+    match: this is the guard that keeps a typo from being masked as a provider-side "model not
+    found" at request time (the user's locked decision), so no normalization, no fuzzy matching,
+    no `startswith`.
+
+    A `None`/empty `entries` (cold or failed catalog) returns False so the caller falls through to
+    the strict error.
+    """
+    return any(entry_ref == ref for entry_ref, _label in entries or [])
+
+
 def model_choices(cfg, extra: list[tuple[str, str]] | None = None) -> list[tuple[str, str]]:
     """Return (label, value) pairs sourced from the three config role slots, deduped by ref.
 
@@ -108,4 +124,4 @@ class ModelPickerModal(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-__all__ = ["ModelPickerModal", "model_choices", "prefix_catalog_refs"]
+__all__ = ["ModelPickerModal", "catalog_has_ref", "model_choices", "prefix_catalog_refs"]
