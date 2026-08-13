@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: unknown
-last_updated: "2026-08-13T11:28:30.452Z"
+last_updated: "2026-08-13T11:47:12.400Z"
 progress:
   total_phases: 5
   completed_phases: 4
@@ -464,13 +464,13 @@ app — no hand-editing TOML, no restarts.
 
 ### Quick Tasks Completed
 
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260720-1jw | Fix TUI /models rendering bug — wrap tables in a Group | 2026-07-20 | 47da657 | [260720-1jw-fix-tui-models-rendering-bug-wrap-tables](./quick/260720-1jw-fix-tui-models-rendering-bug-wrap-tables/) |
-| 260720-1rs | Fix TUI shift+tab not cycling approval mode — priority binding | 2026-07-20 | 2050765 | [260720-1rs-fix-tui-shift-tab-not-cycling-approval-m](./quick/260720-1rs-fix-tui-shift-tab-not-cycling-approval-m/) |
-| 260805-xbw | Surface failed tool tracebacks to the model — fix _observe + debugging-discipline prompt | 2026-08-06 | a092502 | [260805-xbw-surface-failed-tool-tracebacks-to-the-mo](./quick/260805-xbw-surface-failed-tool-tracebacks-to-the-mo/) |
-| 260813-adr | Make /model catalog picker insert the active provider prefix | 2026-08-13 | 2a63ada | [260813-adr-make-model-catalog-picker-insert-the-act](./quick/260813-adr-make-model-catalog-picker-insert-the-act/) |
-| 260813-atc | Catalog-validated provider fallback for /model bare-ref typing | 2026-08-13 | 300c215 | [260813-atc-catalog-validated-provider-fallback-for-](./quick/260813-atc-catalog-validated-provider-fallback-for-/) |
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260720-1jw | Fix TUI /models rendering bug — wrap tables in a Group | 2026-07-20 | 47da657 | | [260720-1jw-fix-tui-models-rendering-bug-wrap-tables](./quick/260720-1jw-fix-tui-models-rendering-bug-wrap-tables/) |
+| 260720-1rs | Fix TUI shift+tab not cycling approval mode — priority binding | 2026-07-20 | 2050765 | | [260720-1rs-fix-tui-shift-tab-not-cycling-approval-m](./quick/260720-1rs-fix-tui-shift-tab-not-cycling-approval-m/) |
+| 260805-xbw | Surface failed tool tracebacks to the model — fix _observe + debugging-discipline prompt | 2026-08-06 | a092502 | | [260805-xbw-surface-failed-tool-tracebacks-to-the-mo](./quick/260805-xbw-surface-failed-tool-tracebacks-to-the-mo/) |
+| 260813-adr | Make /model catalog picker insert the active provider prefix | 2026-08-13 | 2a63ada | | [260813-adr-make-model-catalog-picker-insert-the-act](./quick/260813-adr-make-model-catalog-picker-insert-the-act/) |
+| 260813-atc | Catalog-validated provider fallback for /model bare-ref typing | 2026-08-13 | 300c215 | Verified | [260813-atc-catalog-validated-provider-fallback-for-](./quick/260813-atc-catalog-validated-provider-fallback-for-/) |
 
 - 2026-08-13 — Quick task 260813-adr complete: fixed the TUI `/model` catalog picker dispatching a
   broken ref for every provider (reported via the Ollama entry `nemotron-3.5-lightning:latest`
