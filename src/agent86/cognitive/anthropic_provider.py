@@ -90,6 +90,12 @@ class AnthropicProvider(ModelProvider):
         kwargs: dict[str, Any] = {"api_key": api_key}
         if config.base_url:
             kwargs["base_url"] = config.base_url
+        # D-3: deliberately NOT wiring read_timeout_s/connect_timeout_s here. The SDK applies
+        # its own ~600s default, so this path cannot hang unbounded (the bug class this quick
+        # task closes doesn't exist for Anthropic). The SDK's timeout= is a total-request
+        # budget with its own retry layer, a different meaning than our "max inter-chunk gap" —
+        # passing our value would silently change semantics and could kill a legitimate long
+        # generation, the exact failure our split timeout exists to prevent. No behaviour change.
         self._client = anthropic.Anthropic(**kwargs)
 
     # ------------------------------------------------------------------ #

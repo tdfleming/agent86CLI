@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from agent86.cognitive.base import ModelProvider, ProviderError
+from agent86.cognitive.http_timeouts import stream_timeout, timeout_error
 from agent86.config import ProviderConfig
 from agent86.types import (
     Completion,
@@ -36,6 +37,7 @@ class OllamaProvider(ModelProvider):
         self.model = model
         self._base_url = (config.base_url or _DEFAULT_BASE_URL).rstrip("/")
         self._num_ctx = config.num_ctx
+        self._timeout = stream_timeout(config)
 
     # ------------------------------------------------------------------ #
     # Conversion helpers
@@ -98,7 +100,7 @@ class OllamaProvider(ModelProvider):
 
         try:
             with httpx.stream(
-                "POST", f"{self._base_url}/api/chat", json=payload, timeout=None
+                "POST", f"{self._base_url}/api/chat", json=payload, timeout=self._timeout
             ) as resp:
                 if resp.status_code != 200:
                     resp.read()
@@ -133,6 +135,14 @@ class OllamaProvider(ModelProvider):
             raise ProviderError(
                 f"Cannot reach Ollama at {self._base_url}. Is it running? "
                 "Start it with 'ollama serve'."
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise timeout_error(
+                exc,
+                endpoint=f"{self._base_url}/api/chat",
+                timeout=self._timeout,
+                section="ollama",
+                connect_hint="Is it running? Start it with 'ollama serve'.",
             ) from exc
 
         completion = Completion(

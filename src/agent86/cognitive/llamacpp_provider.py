@@ -20,7 +20,10 @@ class LlamaCppProvider(OpenAIProvider):
 
     def __init__(self, model: str, config: ProviderConfig, api_key: Any = UNRESOLVED):
         if not config.base_url:
-            config = ProviderConfig(base_url=_DEFAULT_LOCAL_BASE, api_key_env=config.api_key_env)
+            # model_copy preserves every other field on the caller's config (notably
+            # read_timeout_s/connect_timeout_s) instead of dropping them by reconstructing a
+            # bare ProviderConfig with only base_url/api_key_env carried over.
+            config = config.model_copy(update={"base_url": _DEFAULT_LOCAL_BASE})
         super().__init__(model=model, config=config, require_key=False, api_key=api_key)
 
 

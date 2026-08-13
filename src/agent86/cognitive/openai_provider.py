@@ -16,6 +16,7 @@ import httpx
 
 from agent86.cognitive.base import UNRESOLVED, ModelProvider, ProviderError
 from agent86.cognitive.capabilities import apply_sampling_params
+from agent86.cognitive.http_timeouts import stream_timeout, timeout_error
 from agent86.cognitive.pricing import priced_usage
 from agent86.config import ProviderConfig
 from agent86.types import (
@@ -46,6 +47,7 @@ class OpenAIProvider(ModelProvider):
         base = (config.base_url or _DEFAULT_BASE_URL).rstrip("/")
         # Tolerate a base_url given with or without the /v1 suffix.
         self._url = base + ("" if base.endswith("/v1") else "/v1") + "/chat/completions"
+        self._timeout = stream_timeout(config)
 
         if api_key is UNRESOLVED:
             from agent86.secrets import resolve_api_key
@@ -139,7 +141,7 @@ class OpenAIProvider(ModelProvider):
 
         try:
             with httpx.stream(
-                "POST", self._url, json=payload, headers=headers, timeout=None
+                "POST", self._url, json=payload, headers=headers, timeout=self._timeout
             ) as resp:
                 if resp.status_code != 200:
                     resp.read()
@@ -168,6 +170,13 @@ class OpenAIProvider(ModelProvider):
                             finish_reason = choice["finish_reason"]
         except httpx.ConnectError as exc:
             raise ProviderError(f"Cannot reach {self._url}: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise timeout_error(
+                exc,
+                endpoint=self._url,
+                timeout=self._timeout,
+                section=None,
+            ) from exc
 
         yield CompletionDelta(
             done=True,
