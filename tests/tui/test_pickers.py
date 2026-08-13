@@ -12,7 +12,12 @@ from textual.app import App, ComposeResult
 
 from agent86.config import load_config
 from agent86.tui.screens.mode_picker import ModePickerModal
-from agent86.tui.screens.model_picker import ModelPickerModal, model_choices, prefix_catalog_refs
+from agent86.tui.screens.model_picker import (
+    ModelPickerModal,
+    catalog_has_ref,
+    model_choices,
+    prefix_catalog_refs,
+)
 from agent86.types import ModelRef
 
 
@@ -153,6 +158,51 @@ def test_prefix_catalog_refs_does_not_double_prefix():
     assert out[0] == ("ollama:llama3.1:8b", "ollama:llama3.1:8b")
     # A distinct provider-supplied display name is left untouched; only the ref is prefixed.
     assert out[1] == ("ollama:gpt-4o", "GPT-4o")
+
+
+def test_catalog_has_ref_exact_match():
+    entries = [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+    assert catalog_has_ref("nemotron-3.5-lightning:latest", entries) is True
+
+
+def test_catalog_has_ref_typo_miss():
+    entries = [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+    assert catalog_has_ref("nemotron-3.5-lightnin:latest", entries) is False
+
+
+def test_catalog_has_ref_foreign_provider_miss():
+    ollama_entries = [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+    assert catalog_has_ref("gpt-4o", ollama_entries) is False
+
+
+def test_catalog_has_ref_rejects_already_prefixed_ref():
+    """Catalog refs are BARE; an already-prefixed string must never match, so a valid ref can
+    never trip the fallback."""
+    assert catalog_has_ref("ollama:llama3.1", [("llama3.1", "llama3.1")]) is False
+
+
+def test_catalog_has_ref_none_or_empty_entries():
+    assert catalog_has_ref("x", None) is False
+    assert catalog_has_ref("x", []) is False
+
+
+def test_catalog_has_ref_exact_and_case_sensitive_label_not_consulted():
+    # Label half is a real provider-supplied display name that happens to equal the ref
+    # case-insensitively; only the ref half is consulted, and matching is case-sensitive.
+    entries = [("gpt-4o", "GPT-4O")]
+    assert catalog_has_ref("gpt-4o", entries) is True
+    assert catalog_has_ref("GPT-4O", entries) is False
+
+
+def test_catalog_has_ref_prefix_and_parse_round_trip():
+    """End-to-end pin: a bare colon-bearing Ollama id the catalog vouches for, once prefixed via
+    prefix_catalog_refs, parses to provider ollama / model nemotron-3.5-lightning:latest."""
+    entries = [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+    assert catalog_has_ref("nemotron-3.5-lightning:latest", entries) is True
+    full = prefix_catalog_refs("ollama", entries)[0][0]
+    ref = ModelRef.parse(full)
+    assert ref.provider == "ollama"
+    assert ref.model == "nemotron-3.5-lightning:latest"
 
 
 def test_model_choices_does_not_double_prefix_role_slots():
