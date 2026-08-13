@@ -470,6 +470,7 @@ app — no hand-editing TOML, no restarts.
 | 260720-1rs | Fix TUI shift+tab not cycling approval mode — priority binding | 2026-07-20 | 2050765 | [260720-1rs-fix-tui-shift-tab-not-cycling-approval-m](./quick/260720-1rs-fix-tui-shift-tab-not-cycling-approval-m/) |
 | 260805-xbw | Surface failed tool tracebacks to the model — fix _observe + debugging-discipline prompt | 2026-08-06 | a092502 | [260805-xbw-surface-failed-tool-tracebacks-to-the-mo](./quick/260805-xbw-surface-failed-tool-tracebacks-to-the-mo/) |
 | 260813-adr | Make /model catalog picker insert the active provider prefix | 2026-08-13 | 2a63ada | [260813-adr-make-model-catalog-picker-insert-the-act](./quick/260813-adr-make-model-catalog-picker-insert-the-act/) |
+| 260813-atc | Catalog-validated provider fallback for /model bare-ref typing | 2026-08-13 | 300c215 | [260813-atc-catalog-validated-provider-fallback-for-](./quick/260813-atc-catalog-validated-provider-fallback-for-/) |
 
 - 2026-08-13 — Quick task 260813-adr complete: fixed the TUI `/model` catalog picker dispatching a
   broken ref for every provider (reported via the Ollama entry `nemotron-3.5-lightning:latest`
@@ -483,6 +484,32 @@ app — no hand-editing TOML, no restarts.
   paths. `cognitive/catalog.py` left unmodified. 6 new regression tests (5 pure + 1 end-to-end
   Pilot), confirmed RED against the pre-fix source before finalizing. Full suite green: 436 passed,
   6 skipped, 1 known pre-existing unrelated failure (`test_build_embedder_falls_back_without_torch`).
+
+- 2026-08-13 — Quick task 260813-atc complete: closed the companion *typed* `/model <bare-ref>`
+  path that 260813-adr's picker fix didn't cover — `/model nemotron-3.5-lightning:latest` still
+  errored with "Unknown provider 'nemotron-3.5-lightning'" when typed directly, since
+  `ModelRef.parse` splits on the first colon and Ollama ids carry their own `:tag`. Added a pure
+  `catalog_has_ref(ref, entries)` bare-id membership helper (`model_picker.py`, alongside
+  `prefix_catalog_refs`) and wired a catalog-validated fallback into `Agent86App._dispatch_model`:
+  the strict `/model` path runs first (zero duplication of `commands.py`'s dispatch logic,
+  detected via `harness.provider` identity), and only a failure shaped like the first-colon-split
+  ambiguity (`_is_bare_ref_candidate`) — never a known provider's build/auth failure — falls
+  through to a catalog lookup of the active provider. A hit retries as `<provider>:<ref>` and
+  echoes `resolved to ...`; a miss surfaces the existing strict error byte-unchanged, preserving
+  typo detection as the feature. Cold-cache dispatches queue as `_pending_model` triples
+  `(arg, strict_error, provider)` — provider captured per entry, not a single slot — with
+  `_model_fetch_inflight` gating exactly one fetch per provider per burst; `on_catalog_ready`'s
+  new `model_fallback` branch resolves only same-provider entries and re-queues the rest, so an
+  entry is validated only against the catalog of the provider active when *it* was dispatched,
+  even across an intervening successful `/model` switch to another provider. `tui/commands.py`,
+  `ui/repl.py`, `types.py`, and `cognitive/catalog.py` left unmodified — the fallback is
+  TUI-app-layer only, keeping `--plain`/`run --json` strict. 17 new regression tests (6 pure
+  `catalog_has_ref` cases + 10 Pilot cases + 1 plain-adapter pin), including the
+  overlapping-same-provider and cross-provider-stranding sequences from the plan's locked
+  decisions, both driven by hard-timeout blocking fakes so a routing regression fails the suite
+  rather than hanging it. RED proof confirmed against the pre-Task-2 source. Full suite green:
+  454 passed, 6 skipped, 1 known pre-existing unrelated failure
+  (`test_build_embedder_falls_back_without_torch`).
 
 ## Next Step
 
