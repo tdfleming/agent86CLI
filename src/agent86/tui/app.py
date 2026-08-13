@@ -9,6 +9,8 @@ whatever calls `run_tui` — never at `cli.py` module-import time (RESEARCH Pitf
 
 from __future__ import annotations
 
+from typing import Any
+
 from textual import work
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
@@ -43,7 +45,12 @@ from agent86.tui.screens.mcp_manager import (
 )
 from agent86.tui.screens.mcp_test import MCPTestModal, MCPTestOutcome
 from agent86.tui.screens.mode_picker import ModePickerModal
-from agent86.tui.screens.model_picker import ModelPickerModal, model_choices, prefix_catalog_refs
+from agent86.tui.screens.model_picker import (
+    ModelPickerModal,
+    catalog_has_ref,
+    model_choices,
+    prefix_catalog_refs,
+)
 from agent86.tui.screens.provider_manager import (
     CatalogPickerModal,
     ProviderManagerModal,
@@ -54,6 +61,13 @@ from agent86.tui.turn_bridge import run_turn_worker
 from agent86.tui.widgets.status_footer import StatusFooter
 
 __all__ = ["Agent86App", "run_tui"]
+
+#: Provider names `cognitive.base._build_provider` resolves without a [providers.X] config block.
+#: Used ONLY as a failure-shape heuristic (see _is_bare_ref_candidate). Under-inclusion is safe —
+#: a future built-in missing from this set costs one extra catalog lookup whose miss re-emits the
+#: same strict error, never a different outcome. Over-inclusion would be the harmful direction
+#: (it would wrongly suppress the catalog branch), so keep this an exact mirror of that chain.
+_BUILTIN_PROVIDERS = frozenset({"anthropic", "openai", "openai-compatible", "ollama", "llamacpp"})
 
 
 class Agent86App(App):
@@ -110,6 +124,15 @@ class Agent86App(App):
         # RESEARCH Open Question 3: this lives on the App, not on _Repl/Harness — the plain
         # loop never needs a catalog.
         self._catalog_cache: dict[str, list[tuple[str, str]]] = {}
+        # /model bare-ref fallback. A LIST of (arg, strict_error, provider) triples, not a slot:
+        #  - two /model dispatches inside one fetch window must each still get an answer;
+        #  - the provider is captured PER ENTRY because an intervening successful /model switch can
+        #    change the active provider between two queued dispatches — an entry must only ever be
+        #    validated against the catalog of the provider that was active when it was dispatched.
+        self._pending_model: list[tuple[str, Any, str]] = []
+        # Providers with a model_fallback catalog fetch outstanding — one fetch per provider
+        # per burst.
+        self._model_fetch_inflight: set[str] = set()
         self._pending_row = None  # ProviderRow being configured
         self._pending_key: str | None = None  # entered key, in memory only until the test passes
         self._pending_ref: str | None = None  # chosen provider:model ref
@@ -196,6 +219,9 @@ class Agent86App(App):
             if entry.needs_choice and not arg:
                 self._run_or_chain(entry)
                 return
+            if entry.name == "/model" and arg:
+                self._dispatch_model(arg)
+                return
 
         result = handle_command(self.repl, line)
         if result.action == "exit":
@@ -207,6 +233,93 @@ class Agent86App(App):
         # "handled" / "noop"
         if result.render is not None:
             log.write(result.render)
+        self.query_one("#status", StatusFooter).status = self.repl.status
+
+    # ---- /model typed bare-ref catalog fallback ------------------------------ #
+
+    def _is_bare_ref_candidate(self, arg: str, active: str) -> bool:
+        """Is this failure PLAUSIBLY ModelRef.parse's first-colon split, and not something else?
+
+        Only a plausible candidate may reach the catalog branch. A ref that names a real provider
+        and merely failed to build (missing key, bad base_url, SDK error) must NOT trigger a
+        catalog fetch of the *active* provider — that would put a real network call and a
+        "fetching … catalog…" line in front of the correct strict error.
+        """
+        from agent86.types import ModelRef
+
+        try:
+            parsed = ModelRef.parse(arg)
+        except ValueError:
+            return True  # no colon at all (e.g. "gpt-4o") — a bare id is exactly this shape
+        if parsed.provider == active:
+            return False  # explicitly targets the active provider; the failure is build/auth
+        return (
+            parsed.provider not in self.repl.cfg.providers
+            and parsed.provider not in _BUILTIN_PROVIDERS
+        )
+
+    def _dispatch_model(self, arg: str) -> None:
+        """Run `/model <arg>`; if the strict path fails, retry as `<active-provider>:<arg>` ONLY
+        when the failure looks like a first-colon split AND the active provider's catalog vouches
+        for `arg` verbatim (locked user decision). TUI-only — `ui/repl.py` and `run --json` keep
+        strict parsing."""
+        log = self.query_one("#transcript", RichLog)
+        before = self.repl.harness.provider
+        result = handle_command(self.repl, f"/model {arg}")
+        # set_model() replaces harness.provider on success and leaves it untouched on failure
+        # (loop.py:130-143), so identity is an exact success signal — no dispatch duplication.
+        if self.repl.harness.provider is not before:
+            if result.render is not None:
+                log.write(result.render)
+            self.query_one("#status", StatusFooter).status = self.repl.status
+            return
+        provider = before.name
+        if not self._is_bare_ref_candidate(arg, provider):
+            if result.render is not None:
+                log.write(result.render)          # strict error, immediately, no fetch
+            return
+        entries = self._catalog_cache.get(provider)
+        if entries is not None:
+            self._finish_model_fallback(arg, result.render, provider, entries)
+            return
+        # Cold cache: never block the UI. Queue this dispatch WITH the provider that was active
+        # for it, then ensure exactly one fetch is outstanding for that provider.
+        self._pending_model.append((arg, result.render, provider))
+        self._ensure_catalog_fetch(provider)
+
+    def _ensure_catalog_fetch(self, provider: str) -> None:
+        """Start a model_fallback catalog fetch for `provider` unless one is already outstanding.
+
+        Gated on _model_fetch_inflight, NOT on queue length: a queue that is non-empty because of
+        ANOTHER provider's pending entry must still start this provider's own fetch, or that entry
+        would silently piggyback on an unrelated arrival and never be answered.
+        """
+        if provider in self._model_fetch_inflight:
+            return
+        self._model_fetch_inflight.add(provider)
+        self._request_catalog(provider, self._provider_key(provider), "model_fallback")
+
+    def _finish_model_fallback(
+        self, arg: str, strict_error: Any, provider: str, entries: list[tuple[str, str]]
+    ) -> None:
+        log = self.query_one("#transcript", RichLog)
+        if not catalog_has_ref(arg, entries):
+            # Catalog miss (typo, or a ref belonging to another provider): the strict error is
+            # the RIGHT answer — surfacing it unchanged is the point of the locked decision.
+            if strict_error is not None:
+                log.write(strict_error)
+            return
+        # Reuse 260813-adr's exact-prefix double-prefix guard so the typed and picker paths of
+        # /model can never drift.
+        full = prefix_catalog_refs(provider, [(arg, arg)])[0][0]
+        if full == arg:                       # defensive: already prefixed, retry would re-fail
+            if strict_error is not None:
+                log.write(strict_error)
+            return
+        log.write(f"[dim]resolved to {full}[/dim]")
+        retry = handle_command(self.repl, f"/model {full}")
+        if retry.render is not None:
+            log.write(retry.render)
         self.query_one("#status", StatusFooter).status = self.repl.status
 
     # ---- palette selection + picker chaining -------------------------------- #
@@ -264,13 +377,7 @@ class Agent86App(App):
             if cached is None:
                 # D-04: one lazy fetch per provider per session; the picker opens from
                 # on_catalog_ready(purpose="model_picker").
-                from agent86.config import ProviderConfig
-                from agent86.secrets import resolve_api_key
-
-                pconf = self.repl.cfg.providers.get(active, ProviderConfig())
-                self._request_catalog(
-                    active, resolve_api_key(active, pconf.api_key_env), "model_picker"
-                )
+                self._request_catalog(active, self._provider_key(active), "model_picker")
                 return
             self._open_model_picker(cached)
         elif entry.needs_choice == "config_model":
@@ -287,6 +394,13 @@ class Agent86App(App):
     def _on_model_picked(self, value: str | None) -> None:
         if value is not None:
             self._dispatch_line(f"/model {value}")
+
+    def _provider_key(self, provider: str) -> str | None:
+        from agent86.config import ProviderConfig
+        from agent86.secrets import resolve_api_key
+
+        pconf = self.repl.cfg.providers.get(provider, ProviderConfig())
+        return resolve_api_key(provider, pconf.api_key_env)
 
     def _open_model_picker(self, extra: list[tuple[str, str]]) -> None:
         # The catalog yields BARE model ids (catalog.py's documented contract); only a full
@@ -669,6 +783,27 @@ class Agent86App(App):
             )
         if message.purpose == "model_picker":
             self._open_model_picker(message.entries)
+            return
+        if message.purpose == "model_fallback":
+            self._model_fetch_inflight.discard(message.provider)
+            # Resolve ONLY the entries dispatched under this provider (invariant 3); entries queued
+            # under a different provider — an intervening successful /model switch can change the
+            # active provider mid-flight — are re-queued untouched and answered by their own
+            # arrival. A failed/empty fetch leaves entries == [] -> catalog_has_ref False -> the
+            # strict error is written. Never a silent retry, never a silent drop.
+            pending, self._pending_model = self._pending_model, []
+            stranded: list[tuple[str, Any, str]] = []
+            for arg, strict_error, provider in pending:
+                if provider == message.provider:
+                    self._finish_model_fallback(arg, strict_error, provider, message.entries)
+                else:
+                    stranded.append((arg, strict_error, provider))
+            self._pending_model.extend(stranded)
+            # Liveness safety net (invariant 1): normally each stranded provider's fetch is still
+            # in flight from its own dispatch, so this is a no-op. If one somehow is not, restart
+            # it rather than leaving an entry with no outcome forever.
+            for _arg, _err, provider in stranded:
+                self._ensure_catalog_fetch(provider)
             return
         self.push_screen(
             CatalogPickerModal(message.provider, message.entries), self._on_catalog_picked

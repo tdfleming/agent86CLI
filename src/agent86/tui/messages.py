@@ -55,9 +55,10 @@ class TurnError(Message):
 class CatalogReady(Message):
     """A provider's live model catalog finished loading (or failed).
 
-    `purpose` says who asked: "manager" (the /config model chain) or "model_picker" (the /model
-    quick switch, enriched per Phase 2 D-12). `entries` is empty when `error` is set — the caller
-    falls back to free-text entry (D-01), never a dead end.
+    `purpose` says who asked: "manager" (the /config model chain), "model_picker" (the /model
+    quick switch, enriched per Phase 2 D-12), or "model_fallback" (resolving a typed bare /model
+    ref). `entries` is empty when `error` is set — the caller falls back to free-text entry
+    (D-01), never a dead end.
     """
 
     def __init__(
