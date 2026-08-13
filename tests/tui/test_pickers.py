@@ -12,7 +12,8 @@ from textual.app import App, ComposeResult
 
 from agent86.config import load_config
 from agent86.tui.screens.mode_picker import ModePickerModal
-from agent86.tui.screens.model_picker import ModelPickerModal, model_choices
+from agent86.tui.screens.model_picker import ModelPickerModal, model_choices, prefix_catalog_refs
+from agent86.types import ModelRef
 
 
 class _PickerHost(App):
@@ -114,3 +115,56 @@ def test_model_choices_empty_fallback():
         model = _Model()
 
     assert model_choices(_Cfg()) == []
+
+
+def test_prefix_catalog_refs_prefixes_colon_bearing_ollama_id():
+    """Reproduces the reported bug: an Ollama id already contains a colon of its own."""
+    out = prefix_catalog_refs(
+        "ollama", [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+    )
+    assert out == [("ollama:nemotron-3.5-lightning:latest", "ollama:nemotron-3.5-lightning:latest")]
+
+
+def test_prefixed_ollama_ref_parses_back_to_provider_and_full_model():
+    """The exact assertion the reported bug violated: partition(':') must split on the FIRST
+    colon after prefixing, giving back the provider and the full (colon-bearing) model id."""
+    out = prefix_catalog_refs(
+        "ollama", [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+    )
+    ref = ModelRef.parse(out[0][0])
+    assert ref.provider == "ollama"
+    assert ref.model == "nemotron-3.5-lightning:latest"
+
+
+def test_prefix_catalog_refs_prefixes_colon_free_id():
+    """Guards the broader, all-providers breakage: a colon-free id (openai gpt-4o) failed
+    ModelRef.parse outright before this fix."""
+    out = prefix_catalog_refs("openai", [("gpt-4o", "gpt-4o")])
+    assert out == [("openai:gpt-4o", "openai:gpt-4o")]
+    ref = ModelRef.parse(out[0][0])
+    assert ref.provider == "openai"
+    assert ref.model == "gpt-4o"
+
+
+def test_prefix_catalog_refs_does_not_double_prefix():
+    out = prefix_catalog_refs(
+        "ollama", [("ollama:llama3.1:8b", "ollama:llama3.1:8b"), ("gpt-4o", "GPT-4o")]
+    )
+    assert out[0] == ("ollama:llama3.1:8b", "ollama:llama3.1:8b")
+    # A distinct provider-supplied display name is left untouched; only the ref is prefixed.
+    assert out[1] == ("ollama:gpt-4o", "GPT-4o")
+
+
+def test_model_choices_does_not_double_prefix_role_slots():
+    cfg = load_config()
+    default_ref = cfg.model.default
+    provider, _, bare_model = default_ref.partition(":")
+    entries = [(bare_model, bare_model)]
+
+    base = model_choices(cfg)
+    with_extra = model_choices(cfg, extra=prefix_catalog_refs(provider, entries))
+
+    values = [v for _, v in with_extra]
+    assert default_ref in values
+    assert f"{provider}:{default_ref}" not in values
+    assert len(with_extra) == len(base)

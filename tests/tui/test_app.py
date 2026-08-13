@@ -264,6 +264,27 @@ async def test_model_picker_uses_cached_catalog(monkeypatch, tmp_path):
     assert calls["n"] == 0
 
 
+async def test_model_picker_prefixes_cached_ollama_catalog_entry(tmp_path):
+    """End-to-end regression for the reported bug: an Ollama id with its own colon must be
+    dispatched as `ollama:<full-id>`, never the bare id (which ModelRef.parse would mis-split)."""
+    from agent86.tui.commands import find_command
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"  # instance attr shadows TextProvider's class attr
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._catalog_cache["ollama"] = [
+            ("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")
+        ]
+        app._run_or_chain(find_command("/model"))
+        await pilot.pause()
+        assert isinstance(app.screen, ModelPickerModal)
+        values = [value for _, value in app.screen._choices]
+        assert "ollama:nemotron-3.5-lightning:latest" in values
+        assert "nemotron-3.5-lightning:latest" not in values
+
+
 async def test_model_picker_fetches_then_opens(monkeypatch, tmp_path):
     import agent86.cognitive.catalog as catalog
     from agent86.tui.commands import find_command
