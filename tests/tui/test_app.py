@@ -9,6 +9,7 @@ resolves the worker's blocked `threading.Event` on both the approve and deny/esc
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections.abc import Iterator
 
@@ -344,3 +345,328 @@ async def test_shift_tab_cycles_approval_mode(tmp_path):
         await pilot.press("shift+tab")
         await pilot.pause()
         assert repl.harness.gate.mode.value == "deny"
+
+
+# ---- 260813-atc: typed /model bare-ref catalog-validated fallback ----------- #
+
+
+async def _dispatch_typed(pilot, app, line: str) -> None:
+    prompt = app.query_one("#prompt", Input)
+    prompt.value = line
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+def _transcript_lines(app) -> str:
+    transcript = app.query_one("#transcript", RichLog)
+    return "\n".join(str(line) for line in transcript.lines)
+
+
+async def test_typed_bare_ref_warm_cache_hit_switches_and_echoes(tmp_path):
+    """Case 1: a warm-cache catalog hit retries the typed bare ref and echoes the resolution."""
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"  # instance attr shadows TextProvider's class attr
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._catalog_cache["ollama"] = [
+            ("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")
+        ]
+        await _dispatch_typed(pilot, app, "/model nemotron-3.5-lightning:latest")
+
+        assert repl.harness.provider.name == "ollama"
+        assert repl.harness.provider.model == "nemotron-3.5-lightning:latest"
+        assert "resolved to ollama:nemotron-3.5-lightning:latest" in _transcript_lines(app)
+
+
+async def test_typed_bare_ref_warm_cache_typo_miss_keeps_strict_error(tmp_path):
+    """Case 2: a typo NOT in the catalog surfaces the strict error, byte-unchanged, no fallback."""
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._catalog_cache["ollama"] = [
+            ("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")
+        ]
+        before_model = repl.harness.provider.model
+        await _dispatch_typed(pilot, app, "/model nemotron-3.5-lightnin:latest")
+
+        lines = _transcript_lines(app)
+        assert "Unknown provider 'nemotron-3.5-lightnin'" in lines
+        assert "resolved to" not in lines
+        assert repl.harness.provider.name == "ollama"
+        assert repl.harness.provider.model == before_model
+
+
+async def test_typed_colon_free_ref_miss_keeps_strict_error(tmp_path):
+    """Case 3: a colon-free typed ref surfaces the existing strict 'must be provider:model'
+    error."""
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._catalog_cache["ollama"] = [
+            ("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")
+        ]
+        before_model = repl.harness.provider.model
+        await _dispatch_typed(pilot, app, "/model gpt-4o")
+
+        lines = _transcript_lines(app)
+        assert "must be 'provider:model'" in lines
+        assert "resolved to" not in lines
+        assert repl.harness.provider.model == before_model
+
+
+async def test_typed_valid_ref_switches_without_consulting_catalog(monkeypatch, tmp_path):
+    """Case 4: an already-valid ref switches on the strict path and never touches the catalog."""
+    import agent86.cognitive.catalog as catalog
+
+    def fail_fetch(*_a, **_k):
+        raise AssertionError("fetch_catalog must not be called for an already-valid ref")
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fail_fetch)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._catalog_cache == {}
+        await _dispatch_typed(pilot, app, "/model ollama:llama3.1")
+
+        assert repl.harness.provider.name == "ollama"
+        assert repl.harness.provider.model == "llama3.1"
+        assert "resolved to" not in _transcript_lines(app)
+        assert app._catalog_cache == {}
+
+
+async def test_typed_known_provider_failure_skips_catalog_fetch(monkeypatch, tmp_path):
+    """Case 5 (checker warning 1): a known-provider build/auth failure must not fetch the
+    unrelated active provider's catalog."""
+    import agent86.cognitive.base as base
+    import agent86.cognitive.catalog as catalog
+
+    def fail_fetch(*_a, **_k):
+        raise AssertionError("fetch_catalog must not be called for a known-provider failure")
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fail_fetch)
+
+    def fake_provider_for_model(model, config):
+        raise base.ProviderError("No Anthropic API key found ...")
+
+    monkeypatch.setattr(base, "provider_for_model", fake_provider_for_model)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._catalog_cache == {}
+        await _dispatch_typed(pilot, app, "/model anthropic:claude-opus-4-8")
+
+        lines = _transcript_lines(app)
+        assert "No Anthropic API key found" in lines
+        assert "resolved to" not in lines
+        assert "fetching" not in lines
+        assert app._pending_model == []
+
+
+async def test_typed_bare_ref_cold_cache_resolves_after_catalog_ready(monkeypatch, tmp_path):
+    """Case 6: a cold catalog completes the resolution asynchronously without blocking the UI."""
+    import agent86.cognitive.catalog as catalog
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        return [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._catalog_cache == {}
+        await _dispatch_typed(pilot, app, "/model nemotron-3.5-lightning:latest")
+
+        await _wait_until(lambda: repl.harness.provider.model == "nemotron-3.5-lightning:latest")
+        await pilot.pause()
+
+        assert "resolved to ollama:nemotron-3.5-lightning:latest" in _transcript_lines(app)
+        assert app._pending_model == []
+        assert app._model_fetch_inflight == set()
+
+
+async def test_typed_bare_ref_cold_cache_fetch_fails_falls_through(monkeypatch, tmp_path):
+    """Case 7: a failed cold-cache fetch falls through to the strict error, never a silent
+    retry or drop."""
+    import agent86.cognitive.catalog as catalog
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        raise catalog.CatalogUnavailable("nope")
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        before_model = repl.harness.provider.model
+        await _dispatch_typed(pilot, app, "/model nemotron-3.5-lightning:latest")
+
+        await _wait_until(
+            lambda: app._pending_model == [] and app._model_fetch_inflight == set()
+        )
+        await pilot.pause()
+
+        lines = _transcript_lines(app)
+        assert "Unknown provider 'nemotron-3.5-lightning'" in lines
+        assert "resolved to" not in lines
+        assert repl.harness.provider.model == before_model
+
+
+async def test_overlapping_dispatches_same_provider_each_get_one_outcome(monkeypatch, tmp_path):
+    """Case 8 (checker warning 2): two /model dispatches inside one cold-cache fetch window
+    for the SAME provider must each produce exactly one outcome, with exactly one fetch."""
+    import agent86.cognitive.catalog as catalog
+
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        calls["n"] += 1
+        # Hard timeout: a routing bug that never releases must fail the suite, not hang it.
+        if not release.wait(timeout=5.0):
+            raise AssertionError("fake_fetch_catalog: release never set (deadlock?)")
+        return [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _dispatch_typed(pilot, app, "/model nemotron-3.5-lightning:latest")
+        await _dispatch_typed(pilot, app, "/model nemotron-3.5-lightnin:latest")
+
+        await _wait_until(lambda: len(app._pending_model) == 2)
+        assert len(app._pending_model) == 2
+
+        release.set()
+        await _wait_until(lambda: app._pending_model == [])
+        await pilot.pause()
+
+        lines = _transcript_lines(app)
+        assert "resolved to ollama:nemotron-3.5-lightning:latest" in lines
+        assert "Unknown provider 'nemotron-3.5-lightnin'" in lines
+        assert calls["n"] == 1
+        assert app._model_fetch_inflight == set()
+
+
+async def test_cross_provider_stranding_validates_against_own_captured_provider(
+    monkeypatch, tmp_path
+):
+    """Case 9 (checker warning 3): the exact sequence from the plan's <decisions> — an entry
+    queued under provider A must never be validated against provider B's catalog, even when an
+    intervening successful /model switch changed the active provider mid-flight."""
+    import agent86.cognitive.base as base
+    import agent86.cognitive.catalog as catalog
+
+    ollama_release = threading.Event()
+    fetch_calls: list[str] = []
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        fetch_calls.append(provider)
+        if provider == "ollama":
+            # Hard timeout: a routing bug that never releases must fail, not hang, the suite.
+            if not ollama_release.wait(timeout=5.0):
+                raise AssertionError("fake_fetch_catalog: ollama release never set (deadlock?)")
+            return [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+        if provider == "anthropic":
+            return [("gpt-4o", "gpt-4o")]  # answered immediately -- proves no piggybacking
+        return []
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    class _StubAnthropicProvider:
+        name = "anthropic"
+
+        def __init__(self, model: str) -> None:
+            self.model = model
+
+    real_provider_for_model = base.provider_for_model
+
+    def fake_provider_for_model(model, config):
+        if model.startswith("anthropic:"):
+            return _StubAnthropicProvider(model.split(":", 1)[1])
+        return real_provider_for_model(model, config)
+
+    monkeypatch.setattr(base, "provider_for_model", fake_provider_for_model)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        # 1. /model nemotron-3.5-lightning:latest -- queued under ollama, ollama fetch blocks.
+        await _dispatch_typed(pilot, app, "/model nemotron-3.5-lightning:latest")
+        await _wait_until(lambda: "ollama" in app._model_fetch_inflight)
+
+        # 2. /model anthropic:claude-opus-4-8 -- succeeds strictly; active provider is now
+        #    anthropic. This returns early and never touches the queue.
+        await _dispatch_typed(pilot, app, "/model anthropic:claude-opus-4-8")
+        assert repl.harness.provider.name == "anthropic"
+
+        # 3. /model gpt-4o -- fails, candidate, anthropic cold -> queued under anthropic.
+        await _dispatch_typed(pilot, app, "/model gpt-4o")
+
+        await _wait_until(lambda: "resolved to anthropic:gpt-4o" in _transcript_lines(app))
+
+        # gpt-4o was answered against ANTHROPIC's catalog, never ollama's -- proven both by the
+        # positive resolution above and by this negative assertion while ollama is still blocked.
+        assert "resolved to ollama:gpt-4o" not in _transcript_lines(app)
+        assert sorted(fetch_calls) == ["anthropic", "ollama"]
+        # The ollama entry is still stranded, waiting on its own (still-blocked) fetch.
+        assert len(app._pending_model) == 1
+        assert app._pending_model[0][2] == "ollama"
+
+        ollama_release.set()
+        await _wait_until(lambda: app._pending_model == [])
+        await pilot.pause()
+
+        assert "resolved to ollama:nemotron-3.5-lightning:latest" in _transcript_lines(app)
+        assert app._pending_model == []
+        assert app._model_fetch_inflight == set()
+
+
+async def test_typed_colon_free_ref_cold_cache_miss_falls_through(monkeypatch, tmp_path):
+    """Case 10: a cold-cache fetch that does not vouch for a colon-free typed ref falls through
+    to the strict 'must be provider:model' error exactly once."""
+    import agent86.cognitive.catalog as catalog
+
+    def fake_fetch_catalog(provider, pconf, api_key):
+        return [("nemotron-3.5-lightning:latest", "nemotron-3.5-lightning:latest")]
+
+    monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    repl.harness.provider.name = "ollama"
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        before_model = repl.harness.provider.model
+        await _dispatch_typed(pilot, app, "/model gpt-4o")
+
+        await _wait_until(
+            lambda: app._pending_model == [] and app._model_fetch_inflight == set()
+        )
+        await pilot.pause()
+
+        lines = _transcript_lines(app)
+        assert "must be 'provider:model'" in lines
+        assert "resolved to" not in lines
+        assert repl.harness.provider.model == before_model

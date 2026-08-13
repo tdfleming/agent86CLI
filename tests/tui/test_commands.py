@@ -225,6 +225,23 @@ def test_models_table_shows_key_source_not_key(tmp_path, monkeypatch):
     assert "sk-" not in text
 
 
+def test_model_command_bare_ref_stays_strict_no_fallback(tmp_path):
+    """260813-atc case 11: the plain adapter (shared with --plain) has NO catalog fallback --
+    ModelRef.parse's first-colon split is untouched, proving the fallback is TUI-app-layer only."""
+    repl, harness = _repl(tmp_path)
+    before = harness.provider
+
+    result = handle_command(repl, "/model nemotron-3.5-lightning:latest")
+    assert result.action == "handled"
+    assert "Unknown provider 'nemotron-3.5-lightning'" in result.render
+    assert harness.provider is before
+
+    result = handle_command(repl, "/model gpt-4o")
+    assert result.action == "handled"
+    assert "must be 'provider:model'" in result.render
+    assert harness.provider is before
+
+
 def test_models_table_shows_keyring_availability(tmp_path, monkeypatch):
     from rich.console import Console
 
