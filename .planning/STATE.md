@@ -469,6 +469,20 @@ app — no hand-editing TOML, no restarts.
 | 260720-1jw | Fix TUI /models rendering bug — wrap tables in a Group | 2026-07-20 | 47da657 | [260720-1jw-fix-tui-models-rendering-bug-wrap-tables](./quick/260720-1jw-fix-tui-models-rendering-bug-wrap-tables/) |
 | 260720-1rs | Fix TUI shift+tab not cycling approval mode — priority binding | 2026-07-20 | 2050765 | [260720-1rs-fix-tui-shift-tab-not-cycling-approval-m](./quick/260720-1rs-fix-tui-shift-tab-not-cycling-approval-m/) |
 | 260805-xbw | Surface failed tool tracebacks to the model — fix _observe + debugging-discipline prompt | 2026-08-06 | a092502 | [260805-xbw-surface-failed-tool-tracebacks-to-the-mo](./quick/260805-xbw-surface-failed-tool-tracebacks-to-the-mo/) |
+| 260813-adr | Make /model catalog picker insert the active provider prefix | 2026-08-13 | 2a63ada | [260813-adr-make-model-catalog-picker-insert-the-act](./quick/260813-adr-make-model-catalog-picker-insert-the-act/) |
+
+- 2026-08-13 — Quick task 260813-adr complete: fixed the TUI `/model` catalog picker dispatching a
+  broken ref for every provider (reported via the Ollama entry `nemotron-3.5-lightning:latest`
+  producing "Unknown provider 'nemotron-3.5-lightning'"). Root cause: `fetch_catalog` returns bare
+  model ids by contract, but `Agent86App._open_model_picker` passed them straight into
+  `model_choices` unprefixed, so `ModelRef.parse`'s first-colon split mis-parsed any colon-bearing
+  Ollama id and rejected any colon-free id (e.g. openai `gpt-4o`) outright. Added a pure
+  `prefix_catalog_refs(provider, entries)` helper in `model_picker.py` (mirroring
+  `CatalogPickerModal._catalog_ref`, exact-prefix double-prefix guard) and wired it into
+  `_open_model_picker` before `model_choices`, covering both the session-cache and fresh-fetch
+  paths. `cognitive/catalog.py` left unmodified. 6 new regression tests (5 pure + 1 end-to-end
+  Pilot), confirmed RED against the pre-fix source before finalizing. Full suite green: 436 passed,
+  6 skipped, 1 known pre-existing unrelated failure (`test_build_embedder_falls_back_without_torch`).
 
 ## Next Step
 
