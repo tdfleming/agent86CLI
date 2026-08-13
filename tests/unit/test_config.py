@@ -78,6 +78,36 @@ def test_deep_merge_is_recursive():
     assert _deep_merge(base, overlay) == {"a": {"x": 1, "y": 3, "z": 4}, "b": 1}
 
 
+# --- Streaming HTTP timeouts (quick task 260813-jfk) ------------------------------------------ #
+
+
+def test_provider_config_default_timeouts():
+    from agent86.config import ProviderConfig
+
+    pconf = ProviderConfig()
+    assert pconf.read_timeout_s == 300.0
+    assert pconf.connect_timeout_s == 10.0
+
+
+def test_provider_timeout_override_is_per_provider(monkeypatch, tmp_path):
+    user = tmp_path / "config.toml"
+    user.write_text(
+        textwrap.dedent(
+            """
+            [providers.ollama]
+            read_timeout_s = 900.0
+            """
+        )
+    )
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", user)
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none.toml")
+
+    cfg = load_config()
+    assert cfg.providers["ollama"].read_timeout_s == 900.0
+    # Deep-merge must not smear one provider's override onto another.
+    assert cfg.providers["openai"].read_timeout_s == 300.0
+
+
 # --- Wave 0 scaffolds: MCPServerConfig.enabled + build_mcp filtering (MCP-01) ----------------- #
 
 

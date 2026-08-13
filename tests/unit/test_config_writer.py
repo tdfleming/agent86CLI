@@ -282,6 +282,32 @@ def test_forbidden_var_ref_literal_token_rejected(tmp_path, monkeypatch):
     assert "${GITHUB_TOKEN}" in edit.after_text
 
 
+def test_read_timeout_s_roundtrip_through_load_config(tmp_path, monkeypatch):
+    # apply_edit calls load_config(), which reads agent86.config's OWN module globals — patching
+    # only config_writer.USER_CONFIG_PATH (as test_comments_preserved_roundtrip does) is not
+    # enough to assert on the reloaded Config rather than just the written file text.
+    import agent86.config as config
+    import agent86.config_writer as config_writer
+
+    target = tmp_path / "config.toml"
+    shutil.copy(FIXTURE, target)
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+    monkeypatch.setattr(config, "USER_CONFIG_PATH", target)
+    monkeypatch.setattr(config, "PROJECT_CONFIG_PATH", tmp_path / "none.toml")
+
+    edit = config_writer.plan_edit(
+        config_writer.SCOPE_USER, [(["providers", "ollama", "read_timeout_s"], 900.0)]
+    )
+    result = config_writer.apply_edit(edit)
+
+    assert result.providers["ollama"].read_timeout_s == 900.0
+    text = target.read_text()
+    assert "# hand-written comment: my personal agent86 config" in text
+    assert "# do not lose me" in text
+    assert "# inline comment on the default model" in text
+    assert "# a comment between sections" in text
+
+
 def test_forbidden_var_ref_partial_reference_still_rejected(tmp_path, monkeypatch):
     import agent86.config_writer as config_writer
 
