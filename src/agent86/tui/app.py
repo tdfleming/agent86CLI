@@ -43,7 +43,7 @@ from agent86.tui.screens.mcp_manager import (
 )
 from agent86.tui.screens.mcp_test import MCPTestModal, MCPTestOutcome
 from agent86.tui.screens.mode_picker import ModePickerModal
-from agent86.tui.screens.model_picker import ModelPickerModal, model_choices
+from agent86.tui.screens.model_picker import ModelPickerModal, model_choices, prefix_catalog_refs
 from agent86.tui.screens.provider_manager import (
     CatalogPickerModal,
     ProviderManagerModal,
@@ -289,7 +289,11 @@ class Agent86App(App):
             self._dispatch_line(f"/model {value}")
 
     def _open_model_picker(self, extra: list[tuple[str, str]]) -> None:
-        choices = model_choices(self.repl.cfg, extra=extra)
+        # The catalog yields BARE model ids (catalog.py's documented contract); only a full
+        # `provider:model` ref survives ModelRef.parse. Prefix BEFORE model_choices so its
+        # role-slot dedupe compares full refs against full refs.
+        provider = self.repl.harness.provider.name
+        choices = model_choices(self.repl.cfg, extra=prefix_catalog_refs(provider, extra))
         if not choices:
             prompt = self.query_one("#prompt", Input)
             prompt.value = "/model "

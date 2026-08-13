@@ -20,6 +20,38 @@ from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
 
+def prefix_catalog_refs(
+    provider: str, entries: list[tuple[str, str]] | None
+) -> list[tuple[str, str]]:
+    """Prefix bare catalog `(ref, label)` pairs with `provider:` so they parse via `ModelRef.parse`.
+
+    `fetch_catalog` (`cognitive/catalog.py`) returns BARE model ids by documented contract — the
+    caller prefixes `provider:`. Mirrors `CatalogPickerModal._catalog_ref`
+    (`provider_manager.py`), but kept pure here so it's unit-testable without a Pilot app.
+
+    Double-prefix guard: "already prefixed" is tested via an EXACT `f"{provider}:"` prefix match
+    only. A bare id can legitimately contain a colon of its own (Ollama's `llama3.1:8b`,
+    `nemotron-3.5-lightning:latest`) — "contains a colon" is NOT a valid already-prefixed test,
+    that's precisely the bug this function fixes. Same reasoning as
+    `CatalogPickerModal._freetext_ref` (`provider_manager.py`).
+
+    Label rule: when the provider supplied no distinct display name (label == ref, e.g. Ollama's
+    `(name, name)` or an OpenAI id echoed as its own label), the label is prefixed too so it stays
+    equal to the ref and `model_choices`'s `label if label != ref else ref` expression keeps
+    rendering the full `provider:model`. A real provider-supplied display name (e.g. OpenRouter's
+    `data[].name`) is left untouched.
+
+    Returns a new list; never mutates `entries` (the caller's list may be the session cache stored
+    in `Agent86App._catalog_cache` — mutating it would corrupt the cache for later opens).
+    """
+    out: list[tuple[str, str]] = []
+    for ref, label in entries or []:
+        full = ref if ref.startswith(f"{provider}:") else f"{provider}:{ref}"
+        new_label = full if label == ref else label
+        out.append((full, new_label))
+    return out
+
+
 def model_choices(cfg, extra: list[tuple[str, str]] | None = None) -> list[tuple[str, str]]:
     """Return (label, value) pairs sourced from the three config role slots, deduped by ref.
 
@@ -76,4 +108,4 @@ class ModelPickerModal(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-__all__ = ["ModelPickerModal", "model_choices"]
+__all__ = ["ModelPickerModal", "model_choices", "prefix_catalog_refs"]
