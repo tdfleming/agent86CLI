@@ -166,22 +166,43 @@ class Message(BaseModel):
 
 
 class Usage(BaseModel):
-    """Token accounting for a single model call."""
+    """Token accounting for a single model call.
+
+    ``cache_read_tokens`` and ``cache_creation_tokens`` are *subsets* of the prompt that
+    providers bill at a different rate: a cache hit is a fraction of the input price, a
+    cache write a premium over it. Providers that expose them (Anthropic's
+    ``cache_read_input_tokens`` / ``cache_creation_input_tokens``, OpenAI's
+    ``prompt_tokens_details.cached_tokens``) fill them in; everyone else leaves them at 0,
+    so arithmetic and display stay correct for providers with no cache at all.
+
+    Whether ``input_tokens`` already *includes* the cached counts is a provider detail the
+    pricing layer normalises (see ``cognitive/pricing.py``); consumers should treat
+    ``input_tokens`` as the full prompt size and the cache fields as a breakdown of it.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
     def __add__(self, other: Usage) -> Usage:
         return Usage(
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             cost_usd=self.cost_usd + other.cost_usd,
+            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
+            cache_creation_tokens=self.cache_creation_tokens + other.cache_creation_tokens,
         )
 
 
 class CompletionRequest(BaseModel):
-    """What the Orchestration Tier hands to a ``ModelProvider``."""
+    """What the Orchestration Tier hands to a ``ModelProvider``.
+
+    ``max_tokens`` is the cap on the model's *output* for this call. ``None`` means "let
+    the provider pick its own default" — each adapter resolves it against its config and
+    a conservative floor, so no caller is forced to know a provider-specific limit.
+    """
 
     model: str
     messages: list[Message]
