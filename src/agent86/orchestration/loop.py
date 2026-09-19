@@ -46,10 +46,8 @@ from agent86.types import (
     Role,
     Step,
     ToolResult,
+    Usage,
 )
-
-# Per-turn model-call cap (the circuit breaker also enforces cost/wall-clock).
-_MAX_TURN_STEPS = 12
 
 # Sentinel so an explicitly-passed memory=None means "no memory", not "auto-build".
 _AUTO = object()
@@ -113,6 +111,10 @@ class Harness:
         # being driven by a worker). An Event, not a bool, so the flag is published safely
         # across threads; `run_turn` clears it as its first act.
         self._cancel = threading.Event()
+        # Usage burned by sub-agents since the last tool call. The `delegate` tool's contract
+        # is `str -> str`, so a spawned agent's cost cannot ride back on its return value;
+        # it lands here and `run_turn` folds it into the turn after each tool call.
+        self._subagent_usage = Usage()
         self._enforce_retention()
 
     def cancel(self) -> None:
@@ -280,7 +282,12 @@ class Harness:
 
         recall_note = self.memory.episodic.recall_note(user_text) if self.memory else None
         state.add_message(Message(role=Role.USER, content=user_text))
-        breaker = CircuitBreaker(self.config.limits, max_steps=_MAX_TURN_STEPS)
+        # No private cap here: a hard-coded 12 silently overrode `limits.max_steps` (default
+        # 40), so a long legitimate task died at 12 steps and raising the configured limit did
+        # nothing. The breaker's own bounds — steps, cost, wall-clock, error streak — are the
+        # only budget, and they are the ones the user can see and change.
+        breaker = CircuitBreaker(self.config.limits)
+        self._subagent_usage = Usage()
 
         while True:
             # Cancellation point (a): never start another model call once cancelled — that is
@@ -415,6 +422,7 @@ class Harness:
                     result = self._execute_tool(call, sid)
 
                 content = self._observe(result, call.name, sid)
+                step.usage = step.usage + self._take_subagent_usage(breaker)
                 step.results.append(result)
                 state.add_message(
                     Message(role=Role.TOOL, content=content, tool_call_id=call.id, name=call.name)
@@ -507,7 +515,24 @@ class Harness:
         if depth > max_depth:
             return f"[delegation refused: max agent depth {max_depth} reached]"
         self.recorder.event("sub", "spawn", role=role, depth=depth, task=task[:200])
-        return SubAgent(self, role, depth).run(task)
+        text, usage = SubAgent(self, role, depth).run(task)
+        # Accumulated rather than returned: `ToolContext.spawn` is `(role, task) -> str` and
+        # the delegate tool's output must stay exactly the sub-agent's answer.
+        self._subagent_usage = self._subagent_usage + usage
+        return text
+
+    def _take_subagent_usage(self, breaker: CircuitBreaker) -> Usage:
+        """Drain the sub-agent accumulator into the turn's budget; return it for the step.
+
+        Tokens a sub-agent burned are tokens this turn burned, so they belong in the cost cap
+        and in `state.usage` — otherwise delegation is a blind spot the breaker cannot see and
+        `/cost` under-reports every delegated turn. The cost is added to the breaker directly
+        rather than via `record_step`, which would also count the sub-agent as one of the
+        PARENT's model calls and quietly shrink the step budget the user configured.
+        """
+        usage, self._subagent_usage = self._subagent_usage, Usage()
+        breaker.cost_usd += usage.cost_usd
+        return usage
 
     def _finish_turn(self, state: AgentState, task: str, outcome: str) -> None:
         if self.memory:

@@ -445,6 +445,70 @@ def test_cancel_mid_stream_closes_the_provider_generator():
     assert _turn_end(recorder)["status"] == "cancelled"
 
 
+# ---- the step budget is the configured one --------------------------------- #
+
+
+class _AlwaysToolProvider(ModelProvider):
+    """Never stops asking for a tool, so the turn runs until a bound trips."""
+
+    name = "always"
+
+    def __init__(self, tool: str = "ping"):
+        self.model = "fake:always"
+        self.tool = tool
+        self.calls = 0
+
+    def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+        self.calls += 1
+        call = ToolCall(id=f"c{self.calls}", name=self.tool, arguments={})
+        yield CompletionDelta(
+            done=True,
+            completion=Completion(
+                text="", tool_calls=[call], usage=Usage(input_tokens=1, output_tokens=1),
+                model=self.model, stop_reason="tool_use",
+            ),
+        )
+
+
+def _stepping_harness(max_steps: int):
+    from agent86.tools.registry import ToolRegistry
+
+    cfg = _config()
+    cfg.limits.max_steps = max_steps
+    registry = ToolRegistry()
+    registry.register(_RecordingTool("ping"))
+    provider = _AlwaysToolProvider()
+    harness = Harness(cfg, provider=provider, memory=None, registry=registry)
+    harness.recorder = _CapturingRecorder()
+    return harness, provider
+
+
+def test_turn_step_budget_is_the_configured_limit():
+    from agent86.orchestration.loop import HarnessError
+
+    harness, provider = _stepping_harness(3)
+    state = harness.new_session()
+
+    with pytest.raises(HarnessError, match="step budget reached"):
+        list(harness.run_turn("go", state))
+
+    assert provider.calls == 3  # tripped at limits.max_steps, not at some hidden constant
+    assert state.phase is AgentPhase.ERROR
+
+
+def test_turn_step_budget_above_twelve_is_honoured():
+    """Regression: a private _MAX_TURN_STEPS=12 silently capped `limits.max_steps`."""
+    from agent86.orchestration.loop import HarnessError
+
+    harness, provider = _stepping_harness(14)
+    state = harness.new_session()
+
+    with pytest.raises(HarnessError, match="step budget reached"):
+        list(harness.run_turn("go", state))
+
+    assert provider.calls == 14
+
+
 # ---- provider failure mid-stream ------------------------------------------- #
 
 

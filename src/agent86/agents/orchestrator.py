@@ -34,8 +34,10 @@ class SupervisorOrchestrator:
             )
             self.bus.send(request)
             try:
-                result = SubAgent(self.h, role, depth=1).run(task)
+                result, usage = SubAgent(self.h, role, depth=1).run(task)
                 reply = request.reply(result, intent=Intent.RESPONSE)
+                # What the fan-out cost, per branch, is part of the audit trail.
+                reply.metadata["usage"] = usage.model_dump()
             except Exception as exc:  # a failing sub-agent must not sink the whole fan-out
                 reply = request.reply(f"{type(exc).__name__}: {exc}", intent=Intent.ERROR)
             self.bus.send(reply)
