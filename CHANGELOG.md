@@ -6,12 +6,92 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-19
+
+The interactive milestone. `agent86` with no subcommand is now a full-screen terminal app, and
+model providers and MCP servers can be configured from inside it — no hand-edited TOML, no
+restart. The scripting contract (`run`, `run --json`, `--plain`) is unchanged.
+
+### Added
+
+- **A full-screen Textual TUI, now the default interactive UI.** Running `agent86` with no
+  subcommand opens an app with a scrollable transcript, a prompt input, and a footer status bar
+  that stays *live while a turn runs* — active model, context-fill %, output tokens, session
+  cost, sandbox/approval mode, and the current phase. Turns still run on a worker thread, so
+  streamed output arrives incrementally and the UI never freezes. Tool approvals are a modal
+  dialog instead of an inline `y/N`. Textual is lazy-imported, so `run` and `--plain` don't pay
+  for it.
+- **A slash-command palette with autocomplete.** Typing `/` drops an autocompleting list of every
+  command with its description; arrow keys select, Enter runs. Commands that need a choice
+  (`/model`, `/mode`) present an arrow-key picker rather than demanding a typed argument. One
+  declarative `COMMANDS` registry backs the palette, `/help`, and dispatch, so they can't drift.
+- **`/config model` — in-app model and provider configuration.** A provider manager lists what's
+  configured, a type-to-filter catalog picker browses a provider's live model list (with a
+  free-text fallback), an API key is entered masked, a live connection test confirms the endpoint
+  actually answers before anything is saved, and a diff of the exact TOML change is shown for
+  confirmation. Writes go through `config_writer.py` (tomlkit), so existing comments and
+  formatting survive; user scope (`~/.agent86/config.toml`) is the default with a project-scope
+  option. Switching the active model takes effect on the next turn.
+- **API keys in the OS keyring (`SEC-01`).** New `secrets.py` resolves a provider key from the
+  environment first, then the keyring, so existing env-var setups keep working unchanged and a
+  missing/headless keyring backend silently falls through. **Keys are still never written to
+  config** — a `config_writer` guard rejects secret-looking leaf keys, Typer's
+  `pretty_exceptions_show_locals` is off, and provider construction fails soft with a redacted
+  `ProviderError` so a key can't surface in a traceback.
+- **`/config mcp` — in-app MCP server configuration.** List, add, edit, remove, and
+  enable/disable servers across all three transports (stdio · SSE · streamable HTTP). Values may
+  reference secrets as `${VAR}`, resolved at connect time (and prompted for through the same
+  masked entry modal, never stored). Before an entry is written, a connection test starts the
+  server and enumerates its tools; after saving, the server's tools are mounted **live** into the
+  running session — no restart. Remove/disable go through the identical diff-and-confirm gate.
+  `[mcp.servers.<name>] enabled` is a new config field, and `agent86 mcp list` shows it.
+- **Turn cancellation.** Escape (or Ctrl+C) cancels a running turn and returns to the prompt; a
+  second Ctrl+C quits. Shutdown no longer hangs on a modal nobody is left to answer — pending
+  approvals are released with a bounded wait.
+
 ### Changed
 
+- **The default interactive UI is the TUI.** `--plain`, `AGENT86_PLAIN=1`, or a non-TTY
+  stdin/stdout forces the plain `input()` loop, exactly as before.
+- **`[ui] tui = true|false` replaces `[ui] status_line`.** The old spelling is still accepted and
+  mapped onto `tui`, so pre-v0.6 configs keep working.
+- **The plain loop dispatches slash-commands through the shared registry** rather than its own
+  hand-parsed chain, so the two surfaces can't drift. Commands that need a modal (`/config
+  model`, `/config mcp`) return a plain-mode explanation.
+- **The startup banner and launch notes print only in plain mode.** Behind the full-screen app
+  they were invisible anyway; the TUI renders the notes into the transcript instead.
 - **`mcp` is now a dev dependency**, so CI installs it with `.[dev]` and the live MCP transport
   test (`test_mcp_live.py`) runs in CI instead of skipping. It also means CI's mypy now
   type-checks `tools/mcp_client.py` against the real (py.typed) `mcp` API rather than treating it
   as an ignored missing import.
+
+### Removed
+
+- **The prompt_toolkit rich REPL loop and the threaded spinner.** The TUI replaced both; the
+  rich loop had become unreachable. `prompt_toolkit` is no longer a dependency, and
+  `ui/spinner.py` is gone — the status footer renders the working state.
+- **`[ui] mode_cycle_key`.** The approval-mode cycle is a fixed Shift+Tab binding in the TUI
+  (`/mode [ask|auto|deny]` still works on both surfaces).
+
+### Fixed
+
+- **Bracketed text no longer crashes the TUI.** Untrusted text (a user line like
+  `see [/path]`, a model response, a tool error, a config value) reached Rich's markup parser
+  unescaped and raised `MarkupError`, taking the transcript down. Everything written to the
+  transcript — including command renderables — is now escaped at the boundary, with a
+  `MarkupError` guard behind it.
+- **The harness is built once per process.** `run_tui` now takes the already-constructed `_Repl`
+  instead of building a second one, which had been starting every MCP server twice and doubling
+  startup cost.
+- **Quitting no longer hangs.** An approval waiting on a modal that would never be answered could
+  block shutdown indefinitely; the approval wait is now bounded and workers are torn down on
+  quit, unmount, and interrupt.
+- **A long response no longer pushes the prompt off screen.** The live stream region is capped
+  and holds only the tail, so the prompt and the status footer stay visible on short terminals.
+- **`/help` printed `/mode` instead of `/mode [ask|auto|deny]`** — the usage string's literal
+  brackets were being eaten as console markup.
+- **Catalog-picker test flake fixed**, and the `/model` bare-ref fallback is validated against
+  the active provider's catalog.
 
 ## [0.5.8] - 2026-07-19
 
@@ -338,6 +418,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.6.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.6.0
 [0.5.8]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.8
 [0.5.7]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.7
 [0.5.6]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.6
