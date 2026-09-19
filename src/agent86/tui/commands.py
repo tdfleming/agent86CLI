@@ -64,11 +64,14 @@ class CommandEntry:
 
 
 def _help_table():
+    from rich.markup import escape
     from rich.table import Table
 
     table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     for entry in COMMANDS:
-        table.add_row(f"[cyan]{entry.usage}[/cyan]", entry.description)
+        # Usage strings carry literal brackets ("/mode [ask|auto|deny]") that console
+        # markup would otherwise eat as an unknown style tag.
+        table.add_row(f"[cyan]{escape(entry.usage)}[/cyan]", entry.description)
     return table
 
 

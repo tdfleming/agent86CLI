@@ -167,6 +167,11 @@ def test_model_with_arg_still_parses(tmp_path):
     )
 
 
+def test_help_shows_literal_brackets_in_usage(tmp_path):
+    """`/mode [ask|auto|deny]` must render its argument list, not swallow it as markup."""
+    assert "/mode [ask|auto|deny]" in _render_to_text(_help_table())
+
+
 def test_help_lists_config_model(tmp_path):
     from rich.console import Console
 
