@@ -198,5 +198,69 @@ set — see `phases/06-trustworthy-harness/SUMMARY.md` for the commit-by-commit 
 | `2ea8642` fix(router): invalidate the provider cache when config changes | REL-03 |
 
 ---
+
+# Roadmap: agent86 Context & Cost Milestone (v0.8)
+
+**Created:** 2026-09-19
+**Phases:** 1 | **Requirements mapped:** 7/7 ✓
+
+| # | Phase | Goal | Requirements | Success Criteria |
+|---|-------|------|--------------|------------------|
+| 7 | Context & Cost | 7/7 | Complete | 2026-09-19 |
+
+### Phase 7: Context & Cost
+**Goal:** spend the context window and the token budget well, rather than merely reporting them
+accurately. v0.7 made the numbers honest; this phase makes the numbers good. Every item was a
+v0.6/v0.7 review finding recorded in `PROJECT.md` § "Next milestone candidates" and
+`docs/BACKLOG.md` § "Context & cost", not new surface area.
+
+**Requirements:** CTX-01, CTX-02, CTX-03, CTX-04, COST-01, COST-02, COST-03
+
+**Success criteria:**
+1. The conversation is trimmed against the model's real context window minus the system prompt,
+   the tool schemas, a reserve and the output cap — not a flat 8000 — recomputed before every
+   request and shared with sub-agents; `limits.max_context_tokens` is an optional hard cap.
+2. A session long enough to overflow the budget keeps its goal: the oldest span is replaced by a
+   model-written summary, tool_call/result pairs are never split, the compacted history survives a
+   resume, and a failed summary degrades to the old drop rather than failing the turn.
+3. An answer that hits the output cap continues instead of ending mid-sentence, up to 3 times per
+   turn, with each continuation counted by the circuit breaker.
+4. A step that asks for several files reads them concurrently, with approvals asked exactly once
+   each and beforehand, side-effecting calls still sequential and in order, and results observed in
+   call order.
+5. The Anthropic system prompt and tool list are sent as a cacheable prefix, and the cost meter
+   prices reads and writes at their own rates rather than at the input rate.
+6. Every finished turn — including one that failed halfway — ends with one line naming its steps,
+   tools, tokens (cached included), cost and duration, identically on the TUI, the plain loop and
+   `agent86 run`; `run --json` carries the same summary additively.
+7. The scripting contract is unchanged: `run`, `run --json` and `--plain` keep working, and the
+   status footer fits one row from 80 columns up.
+
+**Status:** Complete (2026-09-19). Executed as a review-driven pass rather than a numbered plan
+set — see `phases/07-context-and-cost/SUMMARY.md` for the commit-by-commit breakdown grouped by
+workstream.
+
+**Commits** (oldest-first, `085d2dc..`):
+
+| Commit | Workstream |
+|---|---|
+| `eace8c0` feat(types): add cache token fields to Usage | Providers |
+| `a87a4fa` feat(context): add TurnSummary and the v0.8 context/cost config surface | Loop & context |
+| `32b7224` feat(ui): print a per-turn cost line on every surface | UI |
+| `88c2829` feat(context): budget the conversation against the model's real window | Loop & context |
+| `9222a29` feat(ui): make the footer and /cost cache- and context-aware | UI |
+| `b610628` feat(pricing): price prompt-cache reads and writes apart from input | Providers |
+| `3b0c733` feat(cognitive): honour request.max_tokens and normalize stop_reason | Providers |
+| `d7259cb` feat(anthropic): cache the stable prompt prefix and account for it | Providers |
+| `607595f` feat(tui): keep the status footer to one row under width pressure | UI |
+| `c3e08f3` feat(context): summarize the compacted prefix instead of dropping it | Loop & context |
+| `d0b487e` feat(loop): continue a completion that stopped for length | Loop & context |
+| `e64a713` feat(ui): set the harness's mid-turn notices apart from model speech | UI |
+| `31e30f6` fix(cli): read `last_turn.model_dump` through a bound-method lookup | Integration |
+| `a464ad7` fix(ui): resolve the ctx gauge's window the way the harness budgets it | Integration |
+| `41cbbfb` feat(tools): run a step's read-only tool calls in parallel | Loop & context |
+
+---
 *v0.6 roadmap created: 2026-07-19 · v0.6 complete: 2026-09-19 (5/5 phases)*
 *v0.7 roadmap created: 2026-09-19 · v0.7 complete: 2026-09-19 (1/1 phase, 8/8 requirements)*
+*v0.8 roadmap created: 2026-09-19 · v0.8 complete: 2026-09-19 (1/1 phase, 7/7 requirements)*

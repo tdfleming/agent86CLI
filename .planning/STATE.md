@@ -1,7 +1,7 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.7
-milestone_name: Trustworthy harness
+milestone: v0.8
+milestone_name: Context & cost
 status: complete
 last_updated: "2026-09-19"
 progress:
@@ -17,27 +17,91 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-07-19)
 
-**Core value:** What the harness reports is true and what it claims to defend, it defends —
-on top of v0.6's "run, configure and steer the agent entirely from the terminal app".
-**Current focus:** v0.7 milestone complete (1/1 phase) — released as v0.7.0
+**Core value:** The context window and the token budget are spent well, not merely measured
+accurately — on top of v0.7's "what the harness reports is true" and v0.6's "run, configure and
+steer the agent entirely from the terminal app".
+**Current focus:** v0.8 milestone complete (1/1 phase) — released as v0.8.0.
+**Next:** v0.9 — coding-agent UX (Markdown transcript rendering, diff preview in the approval
+modal, prompt history and multi-line input, `@file` mentions, a session picker, tool-call
+collapsing, and the Agent Skills convention with `allowed-tools` enforced as a gate).
 
 ## Milestone
 
-**v0.7 — Trustworthy harness** (agent86 now at v0.7.0)
-1 phase | 8 requirements (REL-01…REL-05, SEC-02…SEC-04) | 1 phase complete
+**v0.8 — Context & cost** (agent86 now at v0.8.0)
+1 phase | 7 requirements (CTX-01…CTX-04, COST-01…COST-03) | 1 phase complete
 
-Previous: **v0.6 — Interactive** — 5 phases, 10 requirements, complete, released as v0.6.0.
+Previous: **v0.7 — Trustworthy harness** — 1 phase, 8 requirements, complete, released as v0.7.0.
+Before that: **v0.6 — Interactive** — 5 phases, 10 requirements, complete, released as v0.6.0.
 
 ## Progress
 
 | Phase | Status | Plans | Progress |
 |-------|--------|-------|----------|
-| 6 — Trustworthy Harness | ● | n/a | 100% |
+| 7 — Context & Cost | ● | n/a | 100% |
 
+v0.7 (closed): 6 — Trustworthy Harness ● n/a.
 v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette + Menus ● 4/4 ·
 3 — Secrets + Model Config ● 13/13 · 4 — MCP Config UI ● 8/8 · 5 — Packaging & Hardening ● n/a.
 
 ## Recent Activity
+
+- 2026-09-19 — **Phase 7 (Context & Cost) complete; v0.8 milestone complete at 1/1 phase and
+  released as v0.8.0.** Executed as a review-driven pass rather than a numbered plan set (see
+  `phases/07-context-and-cost/SUMMARY.md` for the commit-by-commit breakdown grouped by
+  workstream). **CTX-01 real window budget:** `WorkingMemory` was constructed with
+  `limits.max_context_tokens` — a flat 8000 for every model, which wasted ~96% of a 200k Claude
+  window and overspent a 4k local one, and which ignored the system prompt and tool schemas that
+  are in every request before any history. New `cognitive/capabilities.context_window_for`
+  resolves the window (a `[model.context_window]` override → the provider where the *server* owns
+  the window, Ollama's `num_ctx` and llama.cpp's undiscoverable `-c` → a built-in family table,
+  Claude 4.x/5.x 200k, `gpt-5` 400k, `gpt-4.1` 1,047,576, `gpt-4o` 128k, o-series 200k, common
+  open-weights ids → 8192), and `memory.working.conversation_budget` derives window − (system +
+  tool schemas) − `context_reserve_tokens` − the output cap, with the reserve clamped to half the
+  window, a floor, and `max_context_tokens` (now `0` = no cap) applied last as an optional hard
+  cap. `Harness._context_budget` recomputes it before every request and publishes it on the shared
+  `WorkingMemory` so sub-agents trim to the same number; `count_tokens` now counts tool-call
+  arguments and names (a step whose payload was one large tool argument measured as zero).
+  **CTX-02 compaction:** `[limits] compaction = "summarize"` replaces the oldest prefix with a
+  GOAL/DECISIONS/FACTS/OPEN digest written by the cheap route model (else the current provider),
+  carried on a USER message headed `[Conversation summary — earlier turns compacted]` and merged
+  into the following user turn; tool_call/result pairs are never split, the last 6 messages and
+  the current turn are never compacted, it runs at most once per step and never re-entrantly, and
+  it never raises — a failed or empty summary falls back to `drop` and records
+  `compaction status="failed" fallback="drop"`. The compacted history is persisted immediately so
+  a resume sees it, and the originals are archived verbatim to episodic memory
+  (`record_compaction`), held out of `recall`. **CTX-03 continuation:** `stop_reason ==
+  "max_tokens"` with no tool calls continues up to 3 times per turn, each a full breaker step,
+  stitched into one assistant message so neither partials nor the harness's continuation prompts
+  enter the history; `continuation` event + `TurnSummary.continuations`. **CTX-04 parallel
+  tools:** approvals for the whole step resolved sequentially first on the orchestrator's thread,
+  then read-only calls on a `ThreadPoolExecutor(max_workers=min(4, n))`, then side-effecting calls
+  one at a time in model order; results observed in call order; `Tool.parallel_safe` opts out
+  (`delegate` does, because a nested loop has its own approval prompts); a mid-batch cancel gives
+  pending calls a `Not executed: cancelled` result so no `tool_use` is left unanswered;
+  `[limits] parallel_tools = false` restores the sequential path. **COST-01 prompt caching:**
+  Anthropic `cache_control` on the last tool and the system block (the two stable prefixes),
+  placed only above that model's minimum cacheable length — a per-family table, since the minimum
+  is *not* monotonic (512 on the newest, 4096 on Opus 4.6/4.5 and Haiku 4.5) — estimated at ~4
+  chars/token rather than a `count_tokens` round trip; `[providers.<name>] prompt_cache` disables
+  it; `Usage.cache_read_tokens`/`cache_creation_tokens` carry the breakdown, with `input_tokens`
+  kept as the whole prompt. **COST-02 cache pricing:** reads at 0.1×, 5-minute writes at 1.25×,
+  the remainder at the input rate, per-model overrides and optional explicit per-mtok cache rates.
+  **COST-03 per-turn line:** `TurnSummary` on `state.last_turn`, published at turn start and
+  closed at every exit, rendered as `— 3 steps · 2 tools · 4.1k in / 612 out (1.9k cached) ·
+  $0.0123 · 8.2s` on the TUI, the plain loop and `agent86 run`'s stderr through one formatter,
+  with an additive `turn` key in `run --json`. Also: every provider honours `request.max_tokens`
+  (OpenAI `max_completion_tokens` with a memoised one-shot fallback to `max_tokens`, Ollama
+  `num_predict`, Anthropic defaulting to 8192 up from 4096, local-fronting adapters sending no cap
+  unless configured); `types.StopReason` normalizes stop reasons across providers; the footer
+  reads `tok <in>/<out> (cached)`, resolves its ctx gauge through the same
+  `context_window_for` the budget uses, and sheds segments by priority to stay one row from 80
+  columns (never shedding model, cost, mode or phase); `/cost` reports cache reads/writes and
+  savings; and harness notices (`[compacted …]`, `[compaction failed …]`, `[continuation k/3]`)
+  render dim and apart from model speech. Release: CHANGELOG `[0.8.0] - 2026-09-19`, README status
+  block plus a new "Context management" section and an extended "Cost tracking",
+  `docs/ARCHITECTURE.md` synced to 0.8.0 (§5 loop, §6 cognitive, §8 memory, §11 config, §15
+  "not built" table), `docs/BACKLOG.md` pruned of what shipped, and the version bumped to 0.8.0 in
+  `pyproject.toml` and `src/agent86/__init__.py`. 868 tests collected.
 
 - 2026-09-19 — **Phase 6 (Trustworthy Harness) complete; v0.7 milestone complete at 1/1 phase
   and released as v0.7.0.** Executed as a review-driven pass rather than a numbered plan set

@@ -1,4 +1,4 @@
-# agent86 — Trustworthy Milestone (v0.7)
+# agent86 — Context & Cost Milestone (v0.8)
 
 ## What This Is
 
@@ -9,15 +9,19 @@ in-CLI configuration, a live status line). v0.7 makes it **trustworthy**: the pl
 harness reported or defended *less than it claimed* — a cost meter backed by an empty price
 table, a `redact` mode that only warned, a provider failure that vanished mid-turn, tool and
 MCP subprocesses inheriting every key on the machine, a `web_fetch` that would happily read
-cloud metadata.
+cloud metadata. v0.8 makes it **deliberate about what it spends**: v0.7 taught the harness to
+report its context and cost accurately, and the numbers it then reported were bad — a flat 8000-token
+conversation budget on a 200k window, the oldest turns silently forgotten, a stable prompt prefix
+re-billed every turn, a long answer cut off mid-sentence, and five file reads taken one at a time.
 
 ## Core Value
 
-What the harness reports is true and what it claims to defend, it defends. The cost meter is
-real enough to trip a cap (and says `n/a` when it doesn't know), a transient provider failure
-retries instead of ending the turn, a failed turn ends cleanly and resumably, and the model's
-tools cannot reach the private network or the user's secrets.
+The context window and the token budget are spent well, not merely measured accurately. The
+conversation is budgeted against the model's real window, what no longer fits is summarized rather
+than forgotten, a truncated answer continues, independent reads run together, the stable prompt
+prefix is cached and priced as cached, and every turn ends with one line saying what it cost.
 
+Carried from v0.7: what the harness reports is true and what it claims to defend, it defends.
 Carried from v0.6: the user can run, configure, and steer the agent entirely from within an
 interactive terminal app — switching models, wiring up MCP servers, and watching live progress —
 without hand-editing TOML or restarting.
@@ -92,11 +96,49 @@ without hand-editing TOML or restarting.
 - ✓ **SEC-04**: MCP stdio subprocesses get the scrubbed sandbox environment plus their own
   declared `env`, instead of the full host environment — Phase 6
 
+<!-- v0.8 "Context & cost" — Phase 7. Shipped as v0.8.0 on 2026-09-19. -->
+
+- ✓ **CTX-01**: The conversation is budgeted against the model's **real** context window —
+  `capabilities.context_window_for` (a `[model.context_window]` override → the provider where the
+  server owns the window → a built-in family table → 8192), minus the system prompt and tool
+  schemas, minus `limits.context_reserve_tokens`, minus the output cap; recomputed before every
+  request and shared with sub-agents; `limits.max_context_tokens` demoted from *the budget* (a flat
+  8000) to an optional hard cap defaulting to `0` = none; `count_tokens` counts tool-call arguments
+  and names — Phase 7
+- ✓ **CTX-02**: The span that no longer fits is **summarized, not forgotten** —
+  `[limits] compaction = "summarize"` writes a GOAL/DECISIONS/FACTS/OPEN digest with the cheap
+  route model, merged into the next user message under
+  `[Conversation summary — earlier turns compacted]`; tool_call/result pairs are never split, the
+  last 6 messages and the current turn are never compacted, the compacted history is persisted for
+  resume and the originals archived to episodic memory, and a failure falls back to `drop` rather
+  than raising — Phase 7
+- ✓ **CTX-03**: A completion that stops for length continues — `stop_reason == "max_tokens"` with
+  no tool calls continues up to 3 times per turn, each a full breaker step, stitched into one
+  assistant message with a `continuation` event — Phase 7
+- ✓ **CTX-04**: A step's read-only tool calls run **in parallel** — approvals resolved
+  sequentially first, then reads on a ≤4-worker pool, then side-effecting calls one at a time in
+  model order; results observed in call order; `Tool.parallel_safe` opts a tool out (`delegate`
+  does); cancellation gives pending calls a `Not executed: cancelled` result;
+  `[limits] parallel_tools` — Phase 7
+- ✓ **COST-01**: The stable prompt prefix is **cached** — Anthropic `cache_control` breakpoints on
+  the last tool and the system block, placed only above that model's minimum cacheable length
+  (a per-family table, since the minimum is not monotonic across generations),
+  `[providers.<name>] prompt_cache` to disable, and `Usage.cache_read_tokens` /
+  `cache_creation_tokens` carrying the breakdown provider-agnostically — Phase 7
+- ✓ **COST-02**: Cache traffic is **priced as cache** — reads at 0.1×, 5-minute writes at 1.25×,
+  the uncached remainder at the input rate, with per-model overrides and optional explicit
+  per-mtok cache rates, so `limits.max_cost_usd` stops being wrong in both directions — Phase 7
+- ✓ **COST-03**: Every turn ends with **one line saying what it cost** — `TurnSummary` on
+  `state.last_turn` (tokens incl. cache, cost, steps, tool calls, duration, compactions,
+  continuations), published at turn start and closed on every exit, rendered identically on the
+  TUI, the plain loop and `agent86 run`'s stderr, with an additive `turn` key in `run --json` —
+  Phase 7
+
 ### Active
 
 <!-- This milestone. Hypotheses until shipped. -->
 
-_None — all 10 v0.6 requirements and all 8 v0.7 requirements validated; v0.7 shipped as v0.7.0
+_None — all 10 v0.6, all 8 v0.7 and all 7 v0.8 requirements validated; v0.8 shipped as v0.8.0
 on 2026-09-19._
 
 ### Out of Scope
@@ -160,22 +202,40 @@ on 2026-09-19._
 | Sub-agent usage folds into the parent's **cost**, never `record_step` | A sub-agent is not one of the parent's model calls and must not shrink its step budget | ✓ Good (Phase 6) |
 | `env_passthrough` refuses credential-looking names even when explicitly listed | An allowlist entry must not become a way to hand tool subprocesses the key that pays for the model | ✓ Good (Phase 6) |
 | `web_fetch` keeps `side_effecting = False`; the SSRF guard is the mitigation | A read is a read; approval-gating every fetch would train users to approve blindly | ✓ Good (Phase 6) |
+| The context window is resolved by a **capabilities seam**, not by the provider adapters | One lookup the loop, the budget and the ctx gauge all ask; two tables is how the gauge came to lie | ✓ Good (Phase 7) |
+| For Ollama/llama.cpp the **provider** owns the window, not the model name | The server serves `num_ctx` / was launched with `-c`; guessing 131k from `llama3.1` hands the budget a number the server truncates | ✓ Good (Phase 7) |
+| `max_context_tokens` demoted to an optional hard cap (`0` = none) rather than removed | An explicitly chosen budget is a legitimate preference; it just must not *be* the default budget | ✓ Good (Phase 7) |
+| The summary rides on a **USER** message, not a new `Role` | Nothing for four provider adapters to learn; merged into the next user turn because consecutive user messages are a shape some providers reject | ✓ Good (Phase 7) |
+| Compaction **never raises** — it falls back to the old drop | Losing the digest is a degradation; losing the turn is a failure | ✓ Good (Phase 7) |
+| Approvals resolved sequentially *before* any parallel dispatch | The gate may prompt a human and must be asked exactly once per call; two prompts racing for one terminal is not untanglable | ✓ Good (Phase 7) |
+| Reads in parallel, writes strictly sequential and in model order | Two writes could interleave edits to one file, and a write racing a read hands the model a half-written one; determinism is worth the latency | ✓ Good (Phase 7) |
+| Results observed in **call** order regardless of completion order | The `TOOL` messages must line up with the assistant's `tool_calls` for every provider | ✓ Good (Phase 7) |
+| Continuation is a **step the circuit breaker counts**, not a retry | A truncated answer that continues 3× really is 4 model calls, and the budget must see them | ✓ Good (Phase 7) |
+| Cache-breakpoint eligibility estimated at ~4 chars/token, not via `count_tokens` | A round trip per turn to decide something whose only cost when wrong is an ignored marker | ✓ Good (Phase 7) |
+| `Usage.input_tokens` is the whole prompt; cache fields are a breakdown *of* it | Anthropic reports the uncached remainder; left as-is, a well-cached turn would look like it barely used context | ✓ Good (Phase 7) |
+| `TurnSummary` lives in `orchestration/state.py`, not `types.py` | It is an orchestration record, not part of the provider-agnostic lingua franca | ✓ Good (Phase 7) |
+| `TurnSummary` published at turn **start**, duration stamped at every exit | A UI can watch it fill, and a turn that failed halfway still spent tokens | ✓ Good (Phase 7) |
+| The footer sheds whole segments by priority; model/cost/mode/phase are never shed | They say what is running, what it costs, and whether it can act without asking — the quiet omission v0.7 exists to remove | ✓ Good (Phase 7) |
 
 ## Next milestone candidates
 
-Every v0.7 candidate shipped. v0.6 made the harness usable and v0.7 made it honest; the natural
-**v0.8** theme is **context & cost** — spending the context window and the token budget well,
-rather than merely reporting them accurately:
+Every v0.8 candidate shipped. v0.6 made the harness usable, v0.7 made it honest, v0.8 made it
+frugal; the natural **v0.9** theme is **coding-agent UX** — the transcript and the prompt doing
+for a coding session what the TUI already does for a chat session:
 
-- **Context compaction / summarization** — working memory trims by sliding window; a long
-  session should summarize the dropped span instead of forgetting it outright
-- **Prompt caching** — the Anthropic provider marks no cache breakpoints, so a stable system
-  prompt + tool-schema block is re-billed every turn
-- **Parallel tool calls** — a turn's independent tool calls execute one at a time
-- **`max_tokens` continuation** — a response truncated at the output cap just ends; detect the
-  stop reason and continue
-- **Per-turn cost in the footer and `/cost`** — the session total is there; the turn's own spend
-  is the number a user watches while deciding whether to interrupt
+- **Markdown rendering in the transcript** — model output is written as escaped plain text; code
+  fences, lists, and tables deserve real rendering
+- **Diff preview in the approval modal** — approving a `write_file`/`edit_file` should show the
+  diff being approved, not just the tool name and arguments
+- **Prompt history and multi-line input** — up-arrow recall and a soft-wrap composer
+- **`@file` mentions** — path autocomplete in the prompt that inlines a file's content
+- **Session picker** — sessions persist and resume, but only by id on the command line
+- **Tool-call collapsing** — long tool observations folded to an expandable one-line summary
+- **Agent Skills convention + `allowed-tools` enforcement** — a skill's declared tool allowlist is
+  documentation today, not a gate
+
+Then **v1.0** as the release milestone: an OTel exporter actually wired up, flight-recorder
+redaction and rotation, and a PyPI publish workflow.
 
 Deferred further: see `docs/BACKLOG.md` § "Review findings 2026-09-19" (TUI, skills,
 observability, release) and § "v0.7 review leftovers".
@@ -198,6 +258,7 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-19 after Phase 6 (Trustworthy Harness) — REL-01…REL-05 and SEC-02…SEC-04
-validated; the v0.7 Trustworthy milestone is complete (1/1 phase, 8/8 requirements) and released
-as v0.7.0. The v0.6 Interactive milestone closed at 5/5 phases and 10/10 requirements.*
+*Last updated: 2026-09-19 after Phase 7 (Context & Cost) — CTX-01…CTX-04 and COST-01…COST-03
+validated; the v0.8 Context & Cost milestone is complete (1/1 phase, 7/7 requirements) and
+released as v0.8.0. The v0.7 Trustworthy milestone closed at 1/1 phase and 8/8 requirements; the
+v0.6 Interactive milestone at 5/5 phases and 10/10 requirements.*
