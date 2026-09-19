@@ -32,69 +32,9 @@ def test_path_jail_allows_inside_and_blocks_outside(tmp_path):
         policy.resolve_within("../escape.txt")
 
 
-def test_web_fetch_sends_descriptive_user_agent(tmp_path, monkeypatch):
-    import agent86.tools.builtin.web as web
-    from agent86.tools.builtin.web import WebFetchTool
-
-    captured: dict = {}
-
-    class FakeResp:
-        status_code = 200
-        is_success = True
-        headers = {"content-type": "text/plain"}
-        text = "hello"
-
-    def fake_get(url, **kwargs):
-        captured.update(kwargs)
-        return FakeResp()
-
-    monkeypatch.setattr(web.httpx, "get", fake_get)
-    WebFetchTool().run(
-        ToolCall(id="1", name="web_fetch", arguments={"url": "https://example.com"}), _ctx(tmp_path)
-    )
-    ua = captured["headers"]["User-Agent"]
-    # Descriptive UA with a contact URL — required by sites like Wikipedia (a generic UA 403s).
-    assert ua.startswith("agent86/") and "github.com/tdfleming/agent86CLI" in ua
-
-
-def test_web_fetch_caps_extracted_text(tmp_path, monkeypatch):
-    import agent86.tools.builtin.web as web
-    from agent86.tools.builtin.web import WebFetchTool
-
-    class FakeResp:
-        status_code = 200
-        is_success = True
-        headers = {"content-type": "text/plain"}
-        text = "word " * 5000  # ~25k chars, far over the default cap
-
-    monkeypatch.setattr(web.httpx, "get", lambda *a, **k: FakeResp())
-    ctx = _ctx(tmp_path)
-    ctx.config.tools.web_max_chars = 500
-    res = WebFetchTool().run(
-        ToolCall(id="1", name="web_fetch", arguments={"url": "https://example.com"}), ctx
-    )
-    assert res.ok
-    assert "[truncated to 500 chars]" in res.content
-    # body (excluding the HTTP header + truncation note) is bounded by the cap
-    assert len(res.content) < 800
-
-
-def test_web_fetch_sets_error_on_non_2xx(tmp_path, monkeypatch):
-    import agent86.tools.builtin.web as web
-    from agent86.tools.builtin.web import WebFetchTool
-
-    class FakeResp:
-        status_code = 403
-        is_success = False
-        headers = {"content-type": "text/html"}
-        text = "<html>Forbidden</html>"
-
-    monkeypatch.setattr(web.httpx, "get", lambda *a, **k: FakeResp())
-    res = WebFetchTool().run(
-        ToolCall(id="1", name="web_fetch", arguments={"url": "https://example.com"}), _ctx(tmp_path)
-    )
-    assert res.ok is False
-    assert res.error and "403" in res.error  # a failed fetch now carries a usable error string
+# web_fetch's request behaviour (user agent, redirects, SSRF guard, body caps) moved to
+# tests/unit/test_web.py when the v0.7 guard replaced the single httpx.get call. What
+# remains here is the HTML -> text reduction, which is pure and needs no transport.
 
 
 _SAMPLE_HTML = """
