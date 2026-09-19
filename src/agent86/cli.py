@@ -171,7 +171,8 @@ def run(
         # Additive (v0.8): the per-turn summary, or null on a state that has none. Existing
         # keys are untouched — `run --json` is the scripting/CI contract.
         summary = getattr(state, "last_turn", None)
-        payload["turn"] = summary.model_dump() if hasattr(summary, "model_dump") else summary
+        dump = getattr(summary, "model_dump", None)
+        payload["turn"] = dump() if dump is not None else summary
         console.print_json(_json.dumps(payload, default=str))
     else:
         console.print()
