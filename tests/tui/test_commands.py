@@ -8,6 +8,7 @@ from agent86.tui.commands import (
     COMMANDS,
     CommandResult,
     _help_table,
+    _models_tables,
     find_command,
     find_command_for_line,
     handle_command,
@@ -240,6 +241,65 @@ def test_model_command_bare_ref_stays_strict_no_fallback(tmp_path):
     assert result.action == "handled"
     assert "must be 'provider:model'" in result.render
     assert harness.provider is before
+
+
+def _render_to_text(renderable) -> str:
+    """Render exactly as the transcript does — markup on — and return the visible text."""
+    from rich.console import Console
+
+    console = Console(record=True, width=200, markup=True)
+    console.print(renderable)
+    return console.export_text()
+
+
+def test_unknown_command_escapes_the_echoed_line(tmp_path):
+    """The typed line is user input; `[bold]` in it must show, not style."""
+    repl, _ = _repl(tmp_path)
+    result = handle_command(repl, "/nope [bold]x[/bold]")
+    assert "\\[bold]" in result.render
+    assert "[bold]x[/bold]" in _render_to_text(result.render)
+
+
+def test_bad_model_ref_error_is_escaped(tmp_path):
+    repl, _ = _repl(tmp_path)
+    result = handle_command(repl, "/model [red]boom[/red]:m")
+    # The error quotes the ref back; rendering it must not raise or swallow the brackets.
+    assert "[red]boom[/red]" in _render_to_text(result.render)
+
+
+def test_unknown_mode_arg_is_escaped(tmp_path):
+    repl, _ = _repl(tmp_path)
+    result = handle_command(repl, "/mode [x]")
+    assert "[x]" in _render_to_text(result.render)
+
+
+def test_tools_and_skills_names_are_escaped(tmp_path):
+    repl, harness = _repl(tmp_path)
+    harness.registry.names = lambda: ["ok_tool", "mcp[weird]/tool"]
+    assert "mcp[weird]/tool" in _render_to_text(handle_command(repl, "/tools").render)
+
+    class _Skill:
+        name = "sk[1]"
+        description = "does [i]things[/i]"
+
+    harness.skills = {"sk[1]": _Skill()}
+    text = _render_to_text(handle_command(repl, "/skills").render)
+    assert "sk[1]" in text and "[i]things[/i]" in text
+
+
+def test_models_table_escapes_config_values(tmp_path):
+    repl, _ = _repl(tmp_path)
+    repl.cfg.model.default = "ollama:qwen[2.5]"
+    assert "qwen[2.5]" in _render_to_text(_models_tables(repl.cfg))
+
+
+def test_startup_notes_are_escaped(tmp_path):
+    from agent86.tui.commands import startup_notes
+
+    repl, harness = _repl(tmp_path)
+    harness.sandbox_note = "docker unavailable [fallback: subprocess]"
+    notes = startup_notes(repl)
+    assert any("\\[fallback" in n for n in notes)
 
 
 def test_models_table_shows_keyring_availability(tmp_path, monkeypatch):

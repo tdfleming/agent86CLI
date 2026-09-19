@@ -7,15 +7,20 @@ mutation (mode/model/session) is applied directly to the passed-in ``repl`` obje
 ``_Repl`` exactly — this module does not duplicate that logic, it just changes how the result is
 surfaced.
 
-``ui/repl.py`` and the plain loop are untouched; this module is purely additive.
+Both surfaces dispatch through here: the TUI writes ``CommandResult.render`` to its
+``RichLog(markup=True)`` transcript, and ``_Repl.dispatch`` prints it to a Rich ``Console``.
+Both interpret console markup, so every untrusted interpolation below — model refs, provider
+names, config values, skill/tool names, exception strings, the echoed command line — goes
+through ``rich.markup.escape``. Only this module's own literal tags are live markup.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
-from agent86.guardrails.policy import cycle_mode, parse_mode
+from agent86.guardrails.policy import parse_mode
 
 __all__ = [
     "CommandResult",
@@ -53,7 +58,7 @@ class CommandEntry:
     name: str
     usage: str
     description: str
-    handler: Callable[[Any, str], "CommandResult"]
+    handler: Callable[[Any, str], CommandResult]
     needs_choice: ChoiceKind = None
     terminal: bool = False
 
@@ -84,6 +89,7 @@ def _key_source(name: str, prov) -> str:
 
 def _models_tables(cfg):
     from rich.console import Group
+    from rich.markup import escape
     from rich.table import Table
     from rich.text import Text
 
@@ -96,10 +102,11 @@ def _models_tables(cfg):
     table.add_column("API key env")
     table.add_column("Key")
     for name, prov in cfg.providers.items():
+        # Provider names, URLs and env-var names come from config.toml — user data, not markup.
         table.add_row(
-            name,
-            prov.base_url or "[dim]-[/dim]",
-            prov.api_key_env or "[dim]-[/dim]",
+            escape(name),
+            escape(prov.base_url) if prov.base_url else "[dim]-[/dim]",
+            escape(prov.api_key_env) if prov.api_key_env else "[dim]-[/dim]",
             _key_source(name, prov),
         )
 
@@ -117,7 +124,7 @@ def _models_tables(cfg):
             valid = "[green]ok[/green]"
         except ValueError:
             valid = "[red]invalid[/red]"
-        roles.add_row(role, ref, valid)
+        roles.add_row(role, escape(ref), valid)
 
     keyring_line = Text.from_markup(
         "OS keyring: [green]available[/green]"
@@ -130,22 +137,26 @@ def _models_tables(cfg):
 
 
 def _set_mode(repl, arg: str) -> str:
+    from rich.markup import escape
+
     if not arg:
         repl._cycle_approval()
     else:
         mode = parse_mode(arg)
         if mode is None:
-            return f"unknown mode '{arg}' (ask|auto|deny)"
+            return f"unknown mode '{escape(arg)}' (ask|auto|deny)"
         repl.harness.gate.mode = mode
         repl.status.approval = mode.value
     return f"approval mode: {repl.harness.gate.mode.value}"
 
 
 def _set_model(repl, arg: str) -> str:
+    from rich.markup import escape
+
     p = repl.harness.provider
     if not arg:
         return (
-            f"current model: {p.name}:{p.model}\n"
+            f"current model: {escape(p.name)}:{escape(p.model)}\n"
             "usage: /model <provider:model>  "
             "e.g. /model openrouter:anthropic/claude-3.7-sonnet"
         )
@@ -154,9 +165,10 @@ def _set_model(repl, arg: str) -> str:
     try:
         new = repl.harness.set_model(arg)
     except (ProviderError, ValueError) as exc:
-        return str(exc)
+        # The message quotes the ref the user typed, and SDK errors are arbitrary text.
+        return escape(str(exc))
     repl._refresh_status()
-    return f"model: {new.name}:{new.model}"
+    return f"model: {escape(new.name)}:{escape(new.model)}"
 
 
 def _show_cost(repl) -> str:
@@ -169,19 +181,39 @@ def _show_cost(repl) -> str:
 
 
 def _show_memory(repl) -> str:
+    from rich.markup import escape
+
     if repl.harness.memory:
         c = repl.harness.memory.store.counts()
         return (
             f"memory sessions {c['sessions']}  episodes {c['episodes']}  "
-            f"facts {c['memories']}  session {repl.state.session_id}"
+            f"facts {c['memories']}  session {escape(repl.state.session_id)}"
         )
     return "memory is disabled"
 
 
 def _skills_render(repl) -> str:
+    from rich.markup import escape
+
+    # Skill names and descriptions are read off disk (SKILL.md front-matter) — untrusted.
     if repl.harness.skills:
-        return "\n".join(f"{s.name} - {s.description}" for s in repl.harness.skills.values())
+        return "\n".join(
+            f"{escape(s.name)} - {escape(s.description)}" for s in repl.harness.skills.values()
+        )
     return "no skills discovered"
+
+
+def _tools_render(repl) -> str:
+    from rich.markup import escape
+
+    # Tool names include MCP tools, named by the server rather than by us.
+    return "tools: " + ", ".join(escape(n) for n in repl.harness.registry.names())
+
+
+def _config_render(repl) -> str:
+    from rich.markup import escape
+
+    return escape(repl.cfg.model_dump_json(indent=2))
 
 
 def _clear_session(repl) -> CommandResult:
@@ -200,9 +232,7 @@ COMMANDS: list[CommandEntry] = [
         name="/config",
         usage="/config",
         description="Show the resolved configuration",
-        handler=lambda repl, arg: CommandResult(
-            "handled", repl.cfg.model_dump_json(indent=2)
-        ),
+        handler=lambda repl, arg: CommandResult("handled", _config_render(repl)),
     ),
     CommandEntry(
         name="/config model",
@@ -243,9 +273,7 @@ COMMANDS: list[CommandEntry] = [
         name="/tools",
         usage="/tools",
         description="List available tools",
-        handler=lambda repl, arg: CommandResult(
-            "handled", "tools: " + ", ".join(repl.harness.registry.names())
-        ),
+        handler=lambda repl, arg: CommandResult("handled", _tools_render(repl)),
     ),
     CommandEntry(
         name="/skills",
@@ -321,21 +349,29 @@ def handle_command(repl, line: str) -> CommandResult:
         return CommandResult("turn")
     match = find_command_for_line(line)
     if match is None:
-        return CommandResult("handled", f"unknown command {line}")
+        from rich.markup import escape
+
+        return CommandResult("handled", f"unknown command {escape(line)}")
     entry, arg = match
     return entry.handler(repl, arg)
 
 
 def startup_notes(repl) -> list[str]:
-    """Return the launch-note strings (mirrors ``_Repl.print_notes``) for the transcript."""
+    """Return the launch-note strings for the transcript / the plain loop's banner area.
+
+    Every note is markup-escaped: the harness notes quote filesystem paths and MCP/sandbox
+    error text, and skill names come off disk.
+    """
+    from rich.markup import escape
+
     notes: list[str] = []
     if repl.harness.memory_note:
-        notes.append(f"memory: {repl.harness.memory_note}")
+        notes.append(f"memory: {escape(repl.harness.memory_note)}")
     if repl.harness.mcp_note:
-        notes.append(f"mcp: {repl.harness.mcp_note}")
+        notes.append(f"mcp: {escape(repl.harness.mcp_note)}")
     if repl.harness.sandbox_note:
-        notes.append(f"sandbox: {repl.harness.sandbox_note}")
+        notes.append(f"sandbox: {escape(repl.harness.sandbox_note)}")
     if repl.harness.skills:
-        notes.append(f"skills: {', '.join(repl.harness.skills)}")
-    notes.append(f"session {repl.state.session_id}")
+        notes.append("skills: " + ", ".join(escape(s) for s in repl.harness.skills))
+    notes.append(f"session {escape(repl.state.session_id)}")
     return notes
