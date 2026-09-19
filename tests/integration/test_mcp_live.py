@@ -1,12 +1,15 @@
 """Live MCP transport test — connects agent86 to a real MCP server over HTTP and SSE.
 
-Unlike ``test_mcp_client.py`` (which mocks the manager), this spins up an actual FastMCP server
-in a subprocess and drives ``MCPManager`` against it end-to-end: connect, ``list_tools``, and a
-real ``call_tool`` round trip. It exercises the remote-transport code (``_streamable_http`` /
-``sse_client``) that unit tests cannot reach.
+Unlike ``test_mcp_client.py`` (which mocks the manager), this spins up an actual MCP server in
+a subprocess (``live_mcp_server.py``) and drives ``MCPManager`` against it end-to-end: connect,
+``list_tools``, and a real ``call_tool`` round trip. It exercises the remote-transport code
+(``_streamable_http`` / ``sse_client``) that unit tests cannot reach.
 
-Requires the ``mcp`` extra (which brings the FastMCP server + uvicorn); the whole module is
-skipped when it is not installed — e.g. CI's minimal ``.[dev]`` install.
+This module was permanently skipped for a while: it probed ``mcp.server.fastmcp``, which mcp
+2.0 removed when FastMCP moved out of the SDK, so the skip fired on every machine including
+ones with the extra installed. It now probes what it actually needs — the SDK's own
+``MCPServer`` and the uvicorn it serves its ASGI apps with — so it runs wherever the ``mcp``
+extra is present, and still skips cleanly on CI's minimal ``.[dev]`` install.
 """
 
 from __future__ import annotations
@@ -19,15 +22,18 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("mcp.server.fastmcp", reason="requires the 'mcp' extra (FastMCP server)")
+_EXTRA = "requires the 'mcp' extra (MCP server + uvicorn)"
+pytest.importorskip("mcp.server.mcpserver", reason=_EXTRA)
+pytest.importorskip("uvicorn", reason=_EXTRA)
 
 from agent86.config import Config, MCPServerConfig  # noqa: E402
 from agent86.tools.mcp_client import build_mcp  # noqa: E402
 
 _SERVER = Path(__file__).with_name("live_mcp_server.py")
 
-# Each case is a single (FastMCP transport, URL path, explicit agent86 transport) tuple —
-# passed whole to the indirect `live_server` fixture.
+# Each case is a single (server transport, URL path, explicit agent86 transport) tuple —
+# passed whole to the indirect `live_server` fixture. Streamable HTTP is inferred from the
+# URL; SSE has to be named.
 _CASES = [
     pytest.param(("streamable-http", "/mcp", None), id="http"),
     pytest.param(("sse", "/sse", "sse"), id="sse"),
@@ -56,24 +62,32 @@ def _wait_for_port(port: int, timeout: float = 15.0) -> None:
 
 
 @pytest.fixture
-def live_server(request):
-    """Launch the FastMCP server subprocess for a transport; yield its base URL."""
-    fastmcp_transport, path, _ = request.param
+def live_server(request, tmp_path):
+    """Launch the live MCP server subprocess for a transport; yield its endpoint URL."""
+    server_transport, path, _ = request.param
     port = _free_port()
-    proc = subprocess.Popen(
-        [sys.executable, str(_SERVER), fastmcp_transport, str(port)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        _wait_for_port(port)
-        yield f"http://127.0.0.1:{port}{path}"
-    finally:
-        proc.terminate()
+    # Kept rather than devnull'd: when the SDK's server API shifts again, the traceback in
+    # here is the difference between "did not come up within 15s" and an actionable error.
+    log = tmp_path / f"live-mcp-{server_transport}.log"
+    with log.open("wb") as sink:
+        proc = subprocess.Popen(
+            [sys.executable, str(_SERVER), server_transport, str(port)],
+            stdout=sink,
+            stderr=subprocess.STDOUT,
+        )
         try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+            try:
+                _wait_for_port(port)
+            except RuntimeError as exc:
+                output = log.read_text(encoding="utf-8", errors="replace").strip()
+                raise RuntimeError(f"{exc}\n--- server output ---\n{output}") from exc
+            yield f"http://127.0.0.1:{port}{path}"
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 def _build_ready_manager(cfg: Config, tries: int = 15):
