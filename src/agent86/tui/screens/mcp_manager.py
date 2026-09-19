@@ -230,7 +230,7 @@ class MCPManagerModal(ModalScreen[MCPManagerAction | None]):
     BINDINGS = [
         ("escape", "cancel", "Cancel"),
         ("d", "remove", "Remove"),
-        ("t", "toggle", "Enable/disable"),
+        ("t", "toggle_server", "Enable/disable"),
     ]
 
     def __init__(self, rows: list[MCPServerRow]) -> None:
@@ -280,7 +280,11 @@ class MCPManagerModal(ModalScreen[MCPManagerAction | None]):
             return
         self.dismiss(MCPManagerAction("remove", name))
 
-    def action_toggle(self) -> None:
+    def action_toggle_server(self) -> None:
+        # Not `action_toggle`: DOMNode already defines `toggle(attribute_name)`, so that name
+        # overrides a Textual built-in with an incompatible signature (mypy flags it, and any
+        # `toggle(...)` binding elsewhere would dispatch here). The `MCPManagerAction` kind
+        # stays "toggle" — that string is the caller's contract, not the action's name.
         name = self._highlighted_server_name()
         if name is None:
             return

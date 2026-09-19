@@ -906,4 +906,4 @@ async def test_mcp_manager_list_pushed_during_shutdown_does_not_raise():
         host.push_screen(modal)
         # Deliberately no pause. Then drive the bindings against the childless screen.
         modal.action_remove()
-        modal.action_toggle()
+        modal.action_toggle_server()
