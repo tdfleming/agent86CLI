@@ -6,6 +6,208 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-19
+
+The context-and-cost milestone. v0.7 made what the harness *reports* true; v0.8 makes what it
+*spends* deliberate. The conversation is budgeted against the model's real context window instead
+of a flat 8000 tokens, the span that no longer fits is summarized rather than forgotten, an answer
+truncated at the output cap continues instead of stopping mid-sentence, a step's read-only tool
+calls run concurrently, the Anthropic prompt cache is used and priced, and every surface ends a
+turn with one line saying what it cost. No breaking changes to the scripting contract: `run`,
+`run --json` (which gains one additive key), and `--plain` are unchanged.
+
+### Added
+
+- **The conversation is budgeted against the model's real context window.** `WorkingMemory` was
+  constructed with `limits.max_context_tokens`, a flat **8000** for every model — which threw away
+  ~96% of a 200k Claude window the user is paying for, and *overspent* a 4k local model into a
+  context-length 400. It also ignored the two things that are in every request before any history:
+  the compiled system prompt and the tool schemas. New `cognitive/capabilities.context_window_for`
+  resolves the window in priority order — a `[model.context_window]` override (by full
+  `provider:model` ref, then bare id), then the *provider* where the server owns the window
+  (Ollama serves `[providers.ollama] num_ctx`; llama.cpp's `-c` is not discoverable over the API,
+  so 8192), then a built-in family table (Claude 4.x/5.x 200k, `gpt-5` 400k, `gpt-4.1` 1,047,576,
+  `gpt-4o` 128k, o-series 200k, common open-weights ids), then 8192. The conversation budget is
+  then
+
+      window − (system prompt + tool schemas) − limits.context_reserve_tokens − output cap
+
+  with the reserve clamped to half the window so a small local model isn't starved, floored at a
+  minimum, and only then clamped by `limits.max_context_tokens` when one is set.
+  `Harness._context_budget` recomputes it before *every* request — skills, MCP servers, and the
+  episodic recall note all change the overhead at runtime — and publishes it on the shared
+  `WorkingMemory`, so sub-agents trim to the same number.
+- **Compaction summarizes the oldest turns instead of dropping them.** `WorkingMemory.fit` used to
+  drop the oldest messages silently, so the first thing a long session forgot was the user's
+  original ask — and the agent carried on confidently pursuing a goal it could no longer see. With
+  `[limits] compaction = "summarize"` (the default) the oldest prefix is replaced by a
+  model-written digest (GOAL / DECISIONS / FACTS / OPEN, instructed to reproduce paths,
+  identifiers, and numbers verbatim, ~600 tokens), written by the cheap route model when routing
+  is on and the current provider otherwise. The digest rides on a USER message headed
+  `[Conversation summary — earlier turns compacted]` — no new `Role`, nothing for a provider
+  adapter to learn — and is merged into the following turn when that is also a USER message,
+  because consecutive user messages are a shape some providers reject. Invariants: an assistant
+  `tool_calls` message is never separated from its `TOOL` results (the cut walks back off any
+  `TOOL` message it lands on), the last 6 messages and the whole current user turn are never
+  compacted, compaction runs at most once per step and never re-entrantly, and it **never raises**
+  — a failed or empty summary falls back to the old drop behaviour and records
+  `compaction status="failed" fallback="drop"` in the trace. The compacted `state.messages` is
+  persisted immediately so a resume sees the compacted history, and the originals are archived
+  verbatim to episodic memory (`record_compaction`, `kind="compaction"`), held out of `recall` so
+  a new turn is never handed a raw transcript. `compaction = "drop"` restores the old behaviour
+  exactly.
+- **A response truncated at the output cap continues.** `stop_reason == "max_tokens"` was read as a
+  finished answer, so a long answer just ended mid-sentence and the turn closed `status="done"`.
+  When a completion stops for length with no tool calls, the harness appends the partial assistant
+  text, asks *"Continue exactly where you left off; do not repeat."*, and calls again — up to 3
+  times per turn, each one a full step the circuit breaker counts and budgets. The pieces stream as
+  they arrive and are stitched into a single assistant message, so neither the partials nor the
+  harness's own prompts survive into the history to be imitated next turn. A `continuation` event
+  goes to the recorder and `TurnSummary.continuations` to the UI. A truncated step that then calls
+  a tool abandons the stitching — those tool results have to attach to the assistant message that
+  actually requested them.
+- **A step's read-only tool calls run in parallel.** A model that asks for five files in one step
+  waited for five sequential round-trips through the sandbox. Approvals for the whole step are now
+  resolved first, sequentially, on the orchestrator's thread (the gate may prompt a human, and it
+  must be asked exactly once per call); then read-only calls run together in a
+  `ThreadPoolExecutor(max_workers=min(4, n))`; then side-effecting calls run one at a time, in the
+  order the model asked for them — two writes racing could interleave edits to one file, and a
+  write racing a read could hand the model a half-written file. Results are observed in **call**
+  order regardless of completion order, so the `TOOL` messages line up with the assistant's
+  `tool_calls` for every provider, and the `[tool] name(...)` start lines are emitted for the whole
+  batch up front rather than claiming an ordering that isn't real. A cancel landing mid-batch skips
+  the calls that have not started and gives them a `Not executed: cancelled` result, so the history
+  never keeps a `tool_use` that no `tool_result` answers. `Tool.parallel_safe` (default `True`) is
+  the opt-out for a read-only tool that still cannot run twice at once; `delegate` sets it, because
+  a nested agent loop has approval prompts of its own. `[limits] parallel_tools = false` and a
+  single-call step both take the unchanged strictly sequential path.
+- **`TurnSummary`, and a per-turn cost line on every surface.** `state.usage` is cumulative across
+  a session, so a surface wanting to show what the turn that just ended cost had to diff snapshots.
+  `orchestration/state.TurnSummary` (an orchestration record, deliberately not in the
+  provider-agnostic `types.py`) carries input/output/cache tokens, cost, steps, tool calls,
+  duration, compactions, and continuations. It is published on `state.last_turn` at the **start** of
+  a turn so a UI can watch it fill, and its duration is stamped at every exit — done, cancelled,
+  blocked, aborted — so the line is written on the error path too. Each finished turn now ends with
+  one dim read-out:
+
+      — 3 steps · 2 tools · 4.1k in / 612 out (1.9k cached) · $0.0123 · 8.2s
+
+  on the TUI transcript, the plain loop, and `agent86 run` (stderr, non-JSON), all through one
+  formatter so they cannot drift. An unpriced model reads `cost n/a (unpriced model)` rather than a
+  fabricated `$0.0000`, the cached parenthetical is dropped when nothing was cached, and a state
+  with no summary prints nothing. `run --json` grows an additive **`turn`** key carrying the same
+  summary; every existing key is untouched.
+- **Anthropic prompt caching.** Every turn re-sent the whole system prompt and tool list at full
+  input price, though neither changes across a session. Caching is a prefix match over
+  tools → system → messages, so a breakpoint on the **last tool** caches the whole tool list and one
+  on the **system block** caches tools + system; both are stable while the conversation after them
+  is not. At most two of the four available breakpoints are used, leaving room for a caller that
+  marks message content. A marker is placed only when the prefix it closes clears that model's
+  minimum cacheable length — below it the API silently ignores the marker and a breakpoint is spent
+  for nothing — and the minimum is **not** monotonic across generations (512 on the newest models,
+  4096 on Opus 4.6/4.5 and Haiku 4.5), so it is a per-family table with a conservative 4096
+  fallback. Length is estimated at ~4 chars/token rather than spending a `count_tokens` round trip
+  per turn on a decision whose only cost when wrong is an ignored marker. The system string is
+  converted to the block-list form only when it is being marked, so an unmarked request goes out
+  byte-identical to before. `[providers.<name>] prompt_cache = false` turns it off for an endpoint
+  that proxies Anthropic and rejects the field.
+- **Cache reads and writes are priced apart from input.** Billing every prompt token at the input
+  rate makes caching invisible in the cost meter: a fully-cached turn is a tenth of the price and a
+  cache write a 25% premium, so `limits.max_cost_usd` was reading a number caching had already made
+  wrong in *both* directions. `Price.cost()` now bills cache reads at 0.1×, 5-minute cache writes at
+  1.25×, and the uncached remainder at the input rate, with a per-model override table (Claude
+  Fable 5.1's cheaper reads) and optional explicit `cache_read_per_mtok` / `cache_write_per_mtok` so
+  a config override can state a rate instead of inheriting the multiplier. Passing zeros reduces
+  exactly to the old arithmetic, and every existing call site is unchanged.
+- **`Usage.cache_read_tokens` / `Usage.cache_creation_tokens`** — a provider-agnostic place to
+  record the two token classes that are billed differently from plain input, defaulting to `0` so
+  providers with no cache keep producing valid `Usage`. `Usage.__add__` folds both, so per-step and
+  sub-agent accumulation carries the breakdown instead of dropping it. `input_tokens` remains the
+  **whole prompt**, with the cache fields a breakdown *of* it. OpenAI's
+  `prompt_tokens_details.cached_tokens` lands in `cache_read_tokens` on the same convention.
+- **`types.StopReason`** — the normalized vocabulary every provider now maps onto:
+  `end_turn | tool_use | max_tokens | stop_sequence | other`. "Was this answer truncated?" needed a
+  different test per provider before, and nothing in the harness could ask it generically.
+  `Completion.stop_reason` stays `str | None`, so this is additive; `None` still means "the provider
+  said nothing". Anything unrecognised — Anthropic's `pause_turn`, `refusal`, and whatever is added
+  later — becomes `other` rather than being read as a finished turn, and the OpenAI-compatible
+  servers that report a plain `stop` on a turn that emitted tool calls are mapped to `tool_use`.
+- **Every provider honours `request.max_tokens`.** An output cap the caller asked for was reaching
+  only some endpoints. OpenAI-compatible adapters send `max_completion_tokens` (OpenAI's current
+  name) and fall back **once** to the older `max_tokens` on a 400 that names the parameter,
+  remembering the answer per endpoint for the session — a deterministic correction, so it
+  deliberately does not come out of the transient-failure retry budget and still works with
+  `max_retries = 0`. Ollama sends `options.num_predict`. Both send **no** cap at all when nobody
+  asked for one: they front local servers where a guessed ceiling truncates a generation that runs
+  free today. `stream_options: {include_usage: true}` was already requested and is now pinned by a
+  test — without it a streamed run has no tokens at all and every cost reads zero.
+- **Harness notices are set apart from model speech.** `[compacted N messages into a summary]`,
+  `[compaction failed; dropped N messages]`, and `[continuation k/3]` reach the UI as ordinary text
+  deltas, but they are the harness talking *about* the conversation, not the model answering. Both
+  surfaces classify them by prefix through one shared helper and render them **dim on their own
+  line** — escaped, like every other untrusted string in the transcript. The TUI carries them as a
+  `TurnNotice` message so the app can flush the live stream first and keep transcript order; the
+  plain loop breaks the current stream line before printing, so a notice can never be glued onto the
+  model's sentence. Model prose that merely opens with a bracket (`[see docs/ARCHITECTURE.md]`) is
+  not a notice and still renders as the answer.
+- **The footer and `/cost` are cache- and context-aware.** The status line is built from keyed
+  segments now, so a surface can reason about its parts. `/cost` adds a cumulative
+  `cache read N  written N tok` line, plus `saved $X` where the pricing module can compute it.
+- **The status footer stays one row under width pressure.** Measured before the change, the idle
+  footer wrapped onto a second row at 80 and 100 columns and only settled at one row from ~127 — a
+  wasted transcript row that appeared and vanished as the numbers changed. The footer now fits
+  itself to the widget's own width, shedding whole segments in a fixed order: the `[Shift+Tab]` hint
+  first (it is in `/help` too), then the token counts (one `/cost` away), then the ctx gauge. The
+  model name, the cost, the approval mode, and the working/phase indicator are **never** shed — they
+  say what is running, what it costs, and whether it can act without asking. The footer re-fits on
+  resize, so widening the terminal brings the shed segments straight back. The plain loop still
+  renders the whole line: it has no widget width to fit to.
+- **New config fields**: `[providers.<name>] max_tokens` (`None` = the provider's own default) and
+  `prompt_cache` (`true`); `[limits] max_output_tokens` (8192), `context_reserve_tokens` (4096),
+  `compaction` (`"summarize"` | `"drop"`), and `parallel_tools` (`true`); plus the
+  `[model.context_window]` override table read by `context_window_for`.
+
+### Changed
+
+- **`[limits] max_context_tokens` now defaults to `0`, and `0` means "no cap".** It was a flat
+  `8000` that *was* the budget — the single number this milestone exists to remove. It is now an
+  optional **hard cap** for anyone who wants to spend less than the model's window allows: the
+  budget is derived from the real context window (above), and `max_context_tokens` only clamps it
+  further when set. Anyone who had deliberately set a value keeps exactly that value, applied after
+  the floor so an explicitly typed cap is never overruled.
+- **The Anthropic adapter's default `max_tokens` is 8192, up from a fixed 4096.** It now resolves
+  the request's cap first, then `[providers.anthropic] max_tokens`, then 8192 — which matches
+  `limits.max_output_tokens`'s own fallback. The Messages API requires the parameter, so unlike the
+  OpenAI-compatible adapters this one always sends a number.
+- **`Usage.input_tokens` is the whole prompt on Anthropic too.** The API reports `input_tokens` as
+  the *uncached remainder*, with `cache_read_input_tokens` / `cache_creation_input_tokens` beside
+  it; `Usage`'s contract is that `input_tokens` is the whole prompt with the cache fields a
+  breakdown of it, so the adapter sums them — otherwise a well-cached turn would look like it barely
+  used any context. `pricing.py` subtracts the breakdown back out to bill each part at its own rate.
+- **The footer's token segment reads `tok <in>/<out>`** (it was output-only), and grows
+  `(1.9k cached)` when the session has any prompt-cache traffic. Providers without a cache say
+  nothing about one.
+- **Working memory summarizes by default.** `[limits] compaction` defaults to `"summarize"`, so the
+  sliding-window drop is now opt-in behaviour (`"drop"`) rather than the only behaviour.
+- **`ModelProvider.count_tokens` counts tool-call arguments and tool names.** A step whose entire
+  payload was a large tool argument used to measure as **zero** tokens — the one shape most likely
+  to blow the window was the one the budget could not see.
+- **The sub-agent usage accumulator is lock-guarded.** `acc = acc + usage` is a read-modify-write and
+  delegation can now be reached from a worker thread.
+
+### Fixed
+
+- **The ctx gauge and the context budget can no longer disagree.** `ui.status` kept a second, older
+  window table; where the two differed the bar lied — an Ollama session read `ctx 13% (1.1k/33k)`
+  while the loop was compacting against 8k, because the *server*, not the model name, owns that
+  window. The gauge now resolves the window through `cognitive.capabilities.context_window_for`, the
+  same lookup `_context_budget` uses, keeping its own table only as a fallback for a tree without
+  that module; a test pins the two together so they cannot drift again.
+- **`run --json` serialises `last_turn` cleanly.** The summary is read through a bound-method lookup
+  rather than a `hasattr` narrowing, which left `mypy` with `Any | None` and an error on the call.
+  Behaviour is unchanged: a summary that is not a Pydantic model is serialised as-is, and `None`
+  stays `null`.
+
 ## [0.7.0] - 2026-09-19
 
 The trustworthy milestone. v0.6 made the harness usable; v0.7 makes what it *reports* and what
@@ -615,6 +817,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.8.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.8.0
 [0.7.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.7.0
 [0.6.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.6.0
 [0.5.8]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.8
