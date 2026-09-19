@@ -9,6 +9,7 @@ resolves the worker's blocked `threading.Event` on both the approve and deny/esc
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -115,6 +116,46 @@ async def test_turn_streams_and_footer_goes_live_then_idle(tmp_path):
         assert "hello world" in lines
         idle_text = str(footer.render())
         assert "ctx" in idle_text
+
+
+async def test_turn_writes_the_per_turn_cost_line(tmp_path):
+    """v0.8: every finished turn leaves one dim summary line in the transcript."""
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "hi there"
+        await pilot.press("enter")
+        await _wait_until(lambda: repl.status.working is False)
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", RichLog)
+        summary = next(
+            (str(line) for line in transcript.lines if "1 step" in str(line)), ""
+        )
+        assert "0 tools" in summary and " in / " in summary
+        assert re.search(r"\d+\.\d+s", summary)
+        assert "dim=True" in summary  # the line is dim, not loud
+
+
+async def test_per_turn_cost_line_is_skipped_without_a_summary(tmp_path):
+    """No `last_turn` (older state / a getattr fallback) -> no half-empty line."""
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        repl.turn_summary_line = lambda: None  # type: ignore[method-assign]
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "hi there"
+        await pilot.press("enter")
+        await _wait_until(lambda: repl.status.working is False)
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", RichLog)
+        lines = "\n".join(str(line) for line in transcript.lines)
+        assert "hello world" in lines
+        assert "—" not in lines
 
 
 async def _run_approval_case(tmp_path, approve: bool):

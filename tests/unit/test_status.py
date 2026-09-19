@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from agent86.config import load_config
 from agent86.guardrails.policy import cycle_mode, parse_mode
 from agent86.types import ApprovalMode
@@ -11,7 +13,9 @@ from agent86.ui.status import (
     context_percent,
     context_window_for,
     format_cost,
+    format_last_turn,
     format_status_line,
+    format_turn_summary,
     human_tokens,
 )
 
@@ -104,6 +108,82 @@ def test_status_line_working_shows_phase():
     assert "running tool: python_exec…" in line
     assert "ctx" not in line  # stats hidden while working
     assert "mode: ask" in line  # mode still shown
+
+
+# ---- per-turn summary line --------------------------------------------- #
+
+
+def _summary(**over):
+    """A ``TurnSummary``-shaped stub (the real model lives in orchestration/state.py)."""
+    base = dict(
+        input_tokens=4100,
+        output_tokens=612,
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+        cost_usd=0.0123,
+        steps=3,
+        tool_calls=2,
+        duration_s=8.23,
+        compactions=0,
+        continuations=0,
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_turn_summary_line_shape():
+    line = format_turn_summary(_summary(), "anthropic:claude-opus-4-8")
+    assert line == "— 3 steps · 2 tools · 4.1k in / 612 out · $0.0123 · 8.2s"
+
+
+def test_turn_summary_includes_cached_tokens_when_present():
+    line = format_turn_summary(
+        _summary(cache_read_tokens=1900, cache_creation_tokens=0), "anthropic:claude-opus-4-8"
+    )
+    assert "4.1k in / 612 out (1.9k cached)" in line
+    # reads and writes are both cache traffic and are summed into the one figure
+    both = format_turn_summary(
+        _summary(cache_read_tokens=1000, cache_creation_tokens=900), "anthropic:claude-opus-4-8"
+    )
+    assert "(1.9k cached)" in both
+
+
+def test_turn_summary_omits_cached_when_zero():
+    assert "cached" not in format_turn_summary(_summary(), "anthropic:claude-opus-4-8")
+
+
+def test_turn_summary_singular_units():
+    line = format_turn_summary(_summary(steps=1, tool_calls=1), "anthropic:claude-opus-4-8")
+    assert "1 step ·" in line and "1 tool ·" in line
+
+
+def test_turn_summary_unpriced_model_says_na():
+    line = format_turn_summary(_summary(), "groq:llama-3.3-70b-versatile")
+    assert UNPRICED_LABEL in line
+    assert "$0.0123" not in line
+
+
+def test_turn_summary_reports_compaction_and_continuation():
+    line = format_turn_summary(
+        _summary(compactions=2, continuations=1), "anthropic:claude-opus-4-8"
+    )
+    assert "2 compactions" in line and "1 continuation" in line
+
+
+def test_turn_summary_tolerates_a_summary_missing_fields():
+    """Every field is read with a getattr fallback — a partial summary must still render."""
+    line = format_turn_summary(SimpleNamespace(steps=1), "ollama:qwen2.5:3b")
+    assert line == "— 1 step · 0 tools · 0 in / 0 out · $0.0000 · 0.0s"
+
+
+def test_format_last_turn_absent_returns_none():
+    assert format_last_turn(SimpleNamespace(), "anthropic:claude-opus-4-8") is None
+    assert format_last_turn(SimpleNamespace(last_turn=None), "anthropic:claude-opus-4-8") is None
+
+
+def test_format_last_turn_uses_state_summary():
+    state = SimpleNamespace(last_turn=_summary())
+    assert format_last_turn(state, "anthropic:claude-opus-4-8").startswith("— 3 steps")
 
 
 # ---- approval mode cycling -------------------------------------------- #

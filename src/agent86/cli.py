@@ -162,18 +162,27 @@ def run(
     if as_json:
         # Honor the egress guardrail (e.g. redact mode) on the machine-readable output.
         output = harness.egress.inspect("".join(parts)).text
-        console.print_json(
-            _json.dumps(
-                {
-                    "session_id": state.session_id,
-                    "output": output,
-                    "steps": state.step_count,
-                    "usage": state.usage.model_dump(),
-                }
-            )
-        )
+        payload = {
+            "session_id": state.session_id,
+            "output": output,
+            "steps": state.step_count,
+            "usage": state.usage.model_dump(),
+        }
+        # Additive (v0.8): the per-turn summary, or null on a state that has none. Existing
+        # keys are untouched — `run --json` is the scripting/CI contract.
+        summary = getattr(state, "last_turn", None)
+        payload["turn"] = summary.model_dump() if hasattr(summary, "model_dump") else summary
+        console.print_json(_json.dumps(payload, default=str))
     else:
         console.print()
+        from agent86.ui.status import format_last_turn
+
+        provider = harness.provider
+        line = format_last_turn(state, f"{provider.name}:{provider.model}")
+        if line:
+            # stderr: stdout is the answer, and a scripted `agent86 run ... > out.txt` must
+            # keep getting only that.
+            err_console.print(f"[dim]{escape(line)}[/dim]")
 
 
 # --------------------------------------------------------------------------- #

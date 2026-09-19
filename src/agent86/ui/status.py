@@ -8,6 +8,7 @@ lookup, context-fill percentage, and formatting. The widget that renders this li
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from agent86.cognitive.pricing import is_priced
 from agent86.config import Config
@@ -80,6 +81,73 @@ def format_cost(cost_usd: float, model_ref: str) -> str:
     return f"${cost_usd:.4f}" if is_priced(model_ref) else UNPRICED_LABEL
 
 
+def _plural(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _int(obj: Any, field: str) -> int:
+    """Read an int field off a summary that may predate this milestone."""
+    value = getattr(obj, field, 0)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return 0
+
+
+def _float(obj: Any, field: str) -> float:
+    value = getattr(obj, field, 0.0)
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return 0.0
+
+
+def format_turn_summary(summary: Any, model_ref: str) -> str:
+    """One dim line summarising a finished turn, shared by every surface.
+
+    Reads a ``TurnSummary``-shaped object (``orchestration.state``) entirely through
+    ``getattr`` so a surface never crashes on an older state object, or on a summary that
+    grows a field later. The cached parenthetical is dropped when nothing was cached — a
+    provider with no prompt cache should not pay for a permanent ``(0 cached)``.
+
+    Example: ``— 3 steps · 2 tools · 4.1k in / 612 out (1.9k cached) · $0.0123 · 8.2s``
+    """
+    cached = _int(summary, "cache_read_tokens") + _int(summary, "cache_creation_tokens")
+    tokens = (
+        f"{human_tokens(_int(summary, 'input_tokens'))} in / "
+        f"{human_tokens(_int(summary, 'output_tokens'))} out"
+    )
+    if cached:
+        tokens += f" ({human_tokens(cached)} cached)"
+    parts = [
+        _plural(_int(summary, "steps"), "step"),
+        _plural(_int(summary, "tool_calls"), "tool"),
+        tokens,
+        format_cost(_float(summary, "cost_usd"), model_ref),
+        f"{_float(summary, 'duration_s'):.1f}s",
+    ]
+    compactions = _int(summary, "compactions")
+    if compactions:
+        parts.append(_plural(compactions, "compaction"))
+    continuations = _int(summary, "continuations")
+    if continuations:
+        parts.append(_plural(continuations, "continuation"))
+    return "— " + " · ".join(parts)
+
+
+def format_last_turn(state: Any, model_ref: str) -> str | None:
+    """``format_turn_summary`` for ``state.last_turn``, or ``None`` when there isn't one.
+
+    The one place the ``last_turn`` contract is probed, so the TUI, the plain loop and
+    ``agent86 run`` all print the same line — and all print nothing when the loop hasn't
+    populated it (an older state, a turn that raised before the summary was set).
+    """
+    summary = getattr(state, "last_turn", None)
+    if summary is None:
+        return None
+    return format_turn_summary(summary, model_ref)
+
+
 @dataclass
 class StatusState:
     model: str
@@ -125,5 +193,7 @@ __all__ = [
     "context_percent",
     "human_tokens",
     "format_cost",
+    "format_last_turn",
     "format_status_line",
+    "format_turn_summary",
 ]

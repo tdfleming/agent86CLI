@@ -9,6 +9,8 @@ v0.6 — ``tests/tui/`` covers it there.)
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from agent86.cognitive.base import ProviderError
@@ -115,6 +117,83 @@ def test_dispatch_slash_commands_do_not_run_turns(tmp_path, capsys):
     assert repl.dispatch("/cost") == "handled"
     assert repl.dispatch("/memory") == "handled"
     assert repl.dispatch("hello") == "turn"  # non-command routes to a turn
+
+
+# ---- per-turn cost line (v0.8) ----------------------------------------- #
+
+
+def _set_last_turn(state, summary) -> None:
+    """Attach a ``TurnSummary``-shaped object to ``state`` the way ``run_turn`` will.
+
+    ``object.__setattr__`` so the test still works on a state model that has not grown the
+    field yet — the UI reads it with ``getattr`` either way.
+    """
+    object.__setattr__(state, "last_turn", summary)
+
+
+def _summary(**over):
+    base = dict(
+        input_tokens=4100, output_tokens=612, cache_read_tokens=1900, cache_creation_tokens=0,
+        cost_usd=0.0123, steps=3, tool_calls=2, duration_s=8.2, compactions=0, continuations=0,
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_plain_loop_prints_the_per_turn_cost_line(tmp_path, capsys, monkeypatch):
+    repl, harness = _repl(tmp_path, reply="done")
+    real = harness.run_turn
+
+    def _run(line, state):  # noqa: ANN001
+        yield from real(line, state)
+        _set_last_turn(state, _summary())
+
+    monkeypatch.setattr(harness, "run_turn", _run)
+    _feed(monkeypatch, "go", "/exit")
+
+    repl.plain_loop()
+
+    out = capsys.readouterr().out
+    assert "3 steps" in out and "2 tools" in out
+    assert "4.1k in / 612 out (1.9k cached)" in out
+    assert "8.2s" in out
+
+
+def test_plain_loop_prints_nothing_when_there_is_no_summary(tmp_path, capsys, monkeypatch):
+    """Older state (or a getattr fallback) must not produce a half-empty line."""
+    repl, harness = _repl(tmp_path, reply="done")
+    real = harness.run_turn
+
+    def _run(line, state):  # noqa: ANN001
+        yield from real(line, state)
+        object.__setattr__(state, "last_turn", None)
+
+    monkeypatch.setattr(harness, "run_turn", _run)
+    _feed(monkeypatch, "go", "/exit")
+
+    repl.plain_loop()
+
+    out = capsys.readouterr().out
+    assert "steps ·" not in out and "—" not in out
+
+
+def test_plain_loop_prints_the_summary_of_a_failed_turn(tmp_path, capsys, monkeypatch):
+    """A turn that died halfway still spent tokens; the loop closes the summary either way."""
+    repl, harness = _repl(tmp_path)
+
+    def _boom(line, state):  # noqa: ANN001
+        _set_last_turn(state, _summary(steps=1, tool_calls=0))
+        raise ProviderError("upstream exploded")
+        yield  # pragma: no cover - makes this a generator function
+
+    monkeypatch.setattr(harness, "run_turn", _boom)
+    _feed(monkeypatch, "go", "/exit")
+
+    repl.plain_loop()
+
+    out = capsys.readouterr().out
+    assert "upstream exploded" in out
+    assert "1 step" in out
 
 
 @pytest.mark.parametrize("command", ["/exit", "/quit"])

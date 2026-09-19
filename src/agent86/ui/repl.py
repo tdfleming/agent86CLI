@@ -20,12 +20,18 @@ import os
 import sys
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from agent86 import __version__
 from agent86.config import Config
 from agent86.guardrails.policy import cycle_mode
-from agent86.ui.status import StatusState, context_window_for, format_status_line
+from agent86.ui.status import (
+    StatusState,
+    context_window_for,
+    format_last_turn,
+    format_status_line,
+)
 
 console = Console()
 
@@ -117,6 +123,10 @@ class _Repl:
         self.status.approval = self.harness.gate.mode.value
         self.status.working = False
 
+    def turn_summary_line(self) -> str | None:
+        """The per-turn cost line for the turn that just finished, or None if unavailable."""
+        return format_last_turn(self.state, self.status.price_ref)
+
     def _cycle_approval(self) -> None:
         self.harness.gate.mode = cycle_mode(self.harness.gate.mode)
         self.status.approval = self.harness.gate.mode.value
@@ -191,8 +201,14 @@ class _Repl:
                 console.print(f"\n[red]error:[/red] {exc}")
             except KeyboardInterrupt:
                 console.print("\n[dim]interrupted[/dim]")
-            console.print()  # blank line separating the response from the next prompt
             self._refresh_status()
+            # Printed on the error/interrupt paths too: the loop publishes a fresh summary at
+            # the START of every turn and closes it on every exit, so what's on `state` is
+            # always THIS turn — and a turn that failed halfway still spent tokens.
+            summary = self.turn_summary_line()
+            if summary:
+                console.print(f"[dim]{escape(summary)}[/dim]")
+            console.print()  # blank line separating the response from the next prompt
 
 
 def _use_tui(cfg: Config, plain: bool) -> bool:

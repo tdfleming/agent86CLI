@@ -1005,6 +1005,12 @@ class Agent86App(App):
         self._turn_running = False
         self._cancel_requested = False
         self.repl._refresh_status()
+        # Written on the error path too: the loop publishes a fresh summary at the START of
+        # every turn and closes it on every exit, so this is always THIS turn — and a turn
+        # that failed halfway still spent tokens.
+        summary = self.repl.turn_summary_line()
+        if summary:
+            self._write(f"[dim]{escape(summary)}[/dim]")
         self.query_one("#status", StatusFooter).status = self.repl.status
         self._reenable_input()
 
