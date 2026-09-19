@@ -63,6 +63,15 @@ from agent86.types import (
 # Sentinel so an explicitly-passed memory=None means "no memory", not "auto-build".
 _AUTO = object()
 
+#: What the harness says to a model that ran out of output tokens mid-answer. Terse on
+#: purpose: anything longer invites the model to restate its plan instead of resuming.
+CONTINUE_PROMPT = "Continue exactly where you left off; do not repeat."
+
+#: How many times one turn may ask for more. A model that hits the output cap four times in
+#: a row is not writing a long answer, it is looping — and each continuation is a full-price
+#: request carrying the whole conversation.
+MAX_CONTINUATIONS = 3
+
 
 class HarnessError(RuntimeError):
     """A turn could not be completed."""
@@ -474,6 +483,11 @@ class Harness:
         # only budget, and they are the ones the user can see and change.
         breaker = CircuitBreaker(self.config.limits)
         self._subagent_usage = Usage()
+        # Continuation state: where in `state.messages` the first partial answer went, and
+        # the pieces collected so far. Both reset the moment a step turns out to want tools.
+        cont_start: int | None = None
+        cont_parts: list[str] = []
+        continuations = 0
 
         while True:
             # Cancellation point (a): never start another model call once cancelled — that is
@@ -596,11 +610,49 @@ class Harness:
             )
 
             if not completion.tool_calls:
+                # The model ran out of OUTPUT tokens, not out of things to say. Treating that
+                # as a finished answer is how a long answer silently ends mid-sentence; ask
+                # for the rest instead, bounded, and stitch the pieces back together.
+                if (
+                    completion.stop_reason == "max_tokens"
+                    and continuations < MAX_CONTINUATIONS
+                    and not self._cancel.is_set()
+                ):
+                    continuations += 1
+                    summary.continuations = continuations
+                    if cont_start is None:
+                        cont_start = len(state.messages) - 1  # the first partial answer
+                    cont_parts.append(text)
+                    state.add_message(Message(role=Role.USER, content=CONTINUE_PROMPT))
+                    state.record_step(step)
+                    self.recorder.event(
+                        sid, "continuation", index=continuations, step=breaker.steps,
+                        model=self.provider.model, chars=len(text),
+                    )
+                    continue
+
+                if cont_start is not None:
+                    # Collapse [partial, "continue", partial, ...] into the one answer the
+                    # model meant to give. Keeping the harness's own prompts in the history
+                    # would teach the next turn to imitate them.
+                    cont_parts.append(text)
+                    text = "".join(cont_parts)
+                    state.messages[cont_start:] = [Message(role=Role.ASSISTANT, content=text)]
+                    step.thought = text
+
                 state.record_step(step)
                 state.phase = AgentPhase.DONE
-                self.recorder.event(sid, "turn_end", status="done", steps=breaker.steps)
+                self.recorder.event(
+                    sid, "turn_end", status="done", steps=breaker.steps,
+                    continuations=continuations,
+                )
                 self._finish_turn(state, user_text, text)
                 return
+
+            # A step that wants tools ends any continuation in progress: the partial answers
+            # and the prompts that joined them stay in the history exactly as they happened,
+            # because the tool results have to attach to the right assistant message.
+            cont_start, cont_parts = None, []
 
             for call in completion.tool_calls:
                 # Cancellation point (c): BETWEEN tool calls, never mid-execution — a tool

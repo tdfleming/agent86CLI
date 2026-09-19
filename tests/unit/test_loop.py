@@ -727,3 +727,104 @@ def test_request_carries_the_resolved_max_tokens():
     list(harness.run_turn("hi", harness.new_session()))
 
     assert provider.requests[0].max_tokens == 3_000
+
+
+# ---- max_tokens continuation ----------------------------------------------- #
+
+
+def _partial(text: str, stop: str) -> Completion:
+    return Completion(
+        text=text, usage=Usage(input_tokens=4, output_tokens=2), stop_reason=stop
+    )
+
+
+def test_max_tokens_stop_is_continued_and_stitched_back_together():
+    from tests.support import ScriptedProvider
+
+    provider = ScriptedProvider(
+        [
+            _partial("one ", "max_tokens"),
+            _partial("two ", "max_tokens"),
+            _partial("three", "end_turn"),
+        ]
+    )
+    harness = Harness(_config(), provider=provider, memory=None)
+    recorder = _CapturingRecorder()
+    harness.recorder = recorder
+    state = harness.new_session()
+
+    streamed = "".join(d.text for d in harness.run_turn("write a long thing", state) if d.text)
+
+    # Every piece reached the user as it streamed ...
+    assert streamed == "one two three"
+    assert provider.calls == 3
+    # ... and the history holds ONE assistant answer, not three partials and two prompts.
+    assert [m.role for m in state.messages] == [Role.USER, Role.ASSISTANT]
+    assert state.messages[-1].content == "one two three"
+    # The harness's own continuation prompt never survives into the history.
+    assert all("Continue exactly where" not in m.content for m in state.messages)
+
+    events = [d for _s, k, d in recorder.events if k == "continuation"]
+    assert [e["index"] for e in events] == [1, 2]
+    assert state.last_turn is not None and state.last_turn.continuations == 2
+    assert state.last_turn.steps == 3  # each continuation is a step the breaker counted
+
+
+def test_continuations_are_bounded():
+    from agent86.orchestration.loop import MAX_CONTINUATIONS
+    from tests.support import ScriptedProvider
+
+    provider = ScriptedProvider([_partial("chunk ", "max_tokens")])  # never stops
+    harness = Harness(_config(), provider=provider, memory=None)
+    state = harness.new_session()
+
+    list(harness.run_turn("go", state))
+
+    assert provider.calls == MAX_CONTINUATIONS + 1
+    assert state.phase is AgentPhase.DONE
+    assert state.messages[-1].content == "chunk " * (MAX_CONTINUATIONS + 1)
+
+
+def test_a_normal_stop_reason_is_not_continued():
+    from tests.support import ScriptedProvider
+
+    provider = ScriptedProvider([_partial("done", "end_turn")])
+    harness = Harness(_config(), provider=provider, memory=None)
+    state = harness.new_session()
+
+    list(harness.run_turn("go", state))
+
+    assert provider.calls == 1
+    assert state.last_turn is not None and state.last_turn.continuations == 0
+
+
+def test_a_truncated_step_that_then_calls_a_tool_keeps_its_real_history():
+    """Continuation stitching must never rewrite a message a tool result attaches to."""
+    from agent86.tools.registry import ToolRegistry
+    from tests.support import ScriptedProvider
+
+    registry = ToolRegistry()
+    registry.register(_RecordingTool("probe"))
+    provider = ScriptedProvider(
+        [
+            _partial("thinking ", "max_tokens"),
+            Completion(
+                text="",
+                tool_calls=[ToolCall(id="t1", name="probe", arguments={})],
+                usage=Usage(),
+                stop_reason="tool_use",
+            ),
+            _partial("finished", "end_turn"),
+        ]
+    )
+    harness = Harness(_config(), provider=provider, memory=None, registry=registry)
+    state = harness.new_session()
+
+    list(harness.run_turn("go", state))
+
+    roles = [m.role for m in state.messages]
+    assert Role.TOOL in roles
+    # The tool result still follows the assistant message that requested it.
+    tool_idx = roles.index(Role.TOOL)
+    assert roles[tool_idx - 1] is Role.ASSISTANT
+    assert state.messages[tool_idx - 1].tool_calls[0].id == "t1"
