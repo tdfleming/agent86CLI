@@ -203,6 +203,17 @@ turn with one line saying what it cost. No breaking changes to the scripting con
   window. The gauge now resolves the window through `cognitive.capabilities.context_window_for`, the
   same lookup `_context_budget` uses, keeping its own table only as a fallback for a tree without
   that module; a test pins the two together so they cannot drift again.
+- **Per-provider config is keyed on the config *section*, not the adapter name.**
+  `max_output_tokens_for` keys on the provider segment of a `provider:model` ref, but the loop
+  built that ref from the adapter's `name` — which is `openai` for *every* OpenAI-compatible
+  adapter. So `[providers.openrouter] max_tokens`, Groq's, and any custom `base_url` section's were
+  looked up under `[providers.openai]` and silently ignored; the same held for the
+  `[model.context_window]` override and, in the TUI, for the model-catalog fetch and its API-key
+  lookup. `ModelProvider` grows `config_name` (the `[providers.<section>]` it was built from,
+  defaulting to `name`) and `config_ref` (the one place a lookup ref is spelled), and the loop, the
+  status line, the `run` cost line and the TUI all use them. `max_retries` and `prompt_cache` were
+  already keyed correctly — the section's `ProviderConfig` is handed to the adapter at construction
+  — and tests now pin that they stay that way.
 - **`run --json` serialises `last_turn` cleanly.** The summary is read through a bound-method lookup
   rather than a `hasattr` narrowing, which left `mypy` with `Any | None` and an error on the call.
   Behaviour is unchanged: a summary that is not a Pydantic model is serialised as-is, and `None`
