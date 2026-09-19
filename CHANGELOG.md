@@ -6,6 +6,199 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-19
+
+The trustworthy milestone. v0.6 made the harness usable; v0.7 makes what it *reports* and what
+it *defends* true. The cost meter is backed by a real price table (so `limits.max_cost_usd` can
+actually trip), a provider failure mid-stream degrades instead of vanishing, `redact` really
+redacts, `web_fetch` can no longer be pointed at the private network, and tool and MCP
+subprocesses get a curated environment rather than every key on the machine. No breaking changes
+to the scripting contract: `run`, `run --json`, and `--plain` are unchanged.
+
+### Added
+
+- **A real price table, so the cost cap is real.** `cognitive/pricing.py` shipped with an empty
+  `PRICES` dict, which meant `estimate_cost` always returned `0.0` — `limits.max_cost_usd` was
+  unreachable dead code and `/cost` and the status footer showed `$0.0000` no matter what a turn
+  spent. There is now a built-in table in USD per million tokens covering Anthropic (ids and
+  rates from the Claude API reference) and OpenAI (developers.openai.com pricing, fetched
+  2026-09-19). Lookup tries the full `provider:model` ref, then the bare model id, then a
+  dated-snapshot prefix match, so `claude-sonnet-5-20260101` resolves to `claude-sonnet-5` (the
+  prefix rule is restricted to a dated suffix on purpose — a loose longest-prefix match would
+  price `gpt-5.6-sol` off the `gpt-5` entry).
+- **Three distinct pricing outcomes instead of one lie.** *Priced* (a built-in or configured rate
+  exists), *local* (Ollama and llama.cpp really are free — `Price.source == "local"`, `$0.0000`
+  is the truth), and *unknown* (`lookup` and `estimate_cost` return `None`, and the status line
+  reads **`cost n/a (unpriced model)`** rather than implying a free call). Groq and OpenRouter are
+  deliberately left unpriced: OpenRouter ids are `vendor/model` with per-route pricing that
+  cannot be derived from the id, and unknown beats wrong.
+- **`[pricing.models]` config overrides.** Keys are a `provider:model` ref or a bare model id,
+  each with `input_per_mtok` / `output_per_mtok`; overrides win over the built-in table and reach
+  it through a `Config` post-validation hook, because providers price usage deep inside a stream
+  with no access to the resolved config.
+
+  ```toml
+  [pricing.models."anthropic:claude-sonnet-5"]
+  input_per_mtok  = 3.0
+  output_per_mtok = 15.0
+  ```
+- **Automatic retries for transient provider failures.** A 429 while a rate-limit bucket refills,
+  a 503 from a gateway shedding load, or a connection reset before the first byte used to fail
+  the whole turn *after* the prompt had already been paid for. New `cognitive/retry.py` is the
+  single place that decides whether a failure is worth another attempt and how long to wait:
+  retryable statuses (429/500/502/503/504), transport errors (`ConnectError`, `ConnectTimeout`,
+  `RemoteProtocolError`), exponential backoff with equal jitter, and `Retry-After` honoured as
+  either delta-seconds or an HTTP-date (both clamped). The budget is
+  `[providers.<name>] max_retries` (default `2`; `0` disables). Two invariants: **nothing is
+  retried once a delta has been yielded** — a second attempt would duplicate text the user has
+  already seen, so it surfaces a `ProviderError` instead — and the Anthropic provider passes
+  `max_retries` to the SDK client rather than wrapping a client that already retries. llama.cpp
+  inherits the OpenAI path. Retries log to the `agent86.cognitive` logger.
+- **Validated enums for the mode fields.** `model.router`, `sandbox.mode`, `guardrails.ingress`,
+  and `guardrails.egress` were plain strings, so `egress = "redcat"` validated cleanly and
+  silently turned a safety switch off. They are now `StrEnum`s (like `ApprovalMode` already was):
+  a typo raises a `ValidationError` naming the allowed values, every existing `== "triage"` /
+  `== "docker"` / `== "off"` comparison still works, and `model_dump(mode="json")` still emits
+  plain strings so the tomlkit round-trip is unaffected.
+- **New config fields**: `[providers.<name>] max_retries` (int, `2`), `[agents] max_steps` (int,
+  `8`), `[tools] web_allow_private` (bool, `false`), `[sandbox] env_passthrough` (list, `[]`),
+  and `[limits] tool_timeout_s` (int, `60`). `env_passthrough` holds variable *names* only —
+  values are read from the parent environment at spawn time, so the "no secrets in config" rule
+  still holds.
+- **Tool-name collisions are recorded and logged.** A tool whose name was already taken used to
+  be dropped by a bare `except ValueError: pass`, so a user whose two MCP servers expose the same
+  tool name — or whose server shadows a built-in — just saw a tool that never worked, with
+  nothing to explain it. Bulk registration now keeps the first registration, appends the loser to
+  `registry.collisions`, and warns through the module logger (naming the 64-character truncation
+  when the clash is a truncation artefact). The strict `register()` still raises, so an explicit
+  `add_mcp_server` keeps reporting collisions.
+
+### Changed
+
+- **`[limits] max_steps` is now the only step budget.** A hard-coded `_MAX_TURN_STEPS = 12` was
+  handed to every turn's circuit breaker, which takes the *minimum* of it and `limits.max_steps`
+  — so the configured budget (default 40) never applied, and a user who raised it watched a long
+  task die at 12 anyway. The constant is gone. Relatedly, the breaker now reads `max_steps=None`
+  as "use `limits.max_steps`" via an explicit `is None` check rather than a falsy test, so an
+  explicit `0` trips immediately instead of being silently replaced with the config budget.
+- **Sub-agents are accountable.** A delegated turn had a hard-coded 8-step cap, no context
+  trimming, and its tokens billed to nobody. Sub-agents now take `[agents] max_steps`, run their
+  messages through the parent's working memory (with the system prompt held out of the trim),
+  inherit the parent's compiled system prompt and skills list (they were previously offered
+  `use_skill` with no skills to call it with), record `model_call` events tagged with role and
+  depth, and return their `Usage`. `spawn_subagent` accumulates that usage on the harness and
+  `run_turn` folds it into the step and the breaker's cost, so delegated spend shows up in
+  `state.usage` and counts against the cost cap. Cost only, not `record_step` — a sub-agent is
+  not one of the parent's model calls and must not shrink the parent's step budget. The
+  `delegate` tool's `str -> str` contract is unchanged.
+- **The per-tool timeout is `[limits] tool_timeout_s`** (default 60) instead of
+  `max_wall_clock_s if under 120 else 60`, which silently shortened every tool timeout for
+  anyone who lowered their run budget.
+- **Read-only MCP tools no longer ask for approval.** A tool whose annotations carry
+  `readOnlyHint` is mounted with `side_effecting = False`, so reading through an MCP server stops
+  prompting the user to approve a read.
+- **MCP failure notes accumulate and the manager restarts.** `start()` used to overwrite its
+  notes, reporting only the last failing server; it now reports all of them. `close()` resets the
+  started flag and the session/task maps, so a later `start()` actually reconnects instead of
+  silently doing nothing.
+- **The streamable-HTTP MCP transport builds its client with the SDK's own
+  `create_mcp_http_client`**, matching what `mcp>=2` expects rather than casting an httpx client
+  at the call site.
+
+### Fixed
+
+- **A failed provider stream can no longer leave a turn dangling.** A `ProviderError` — or a raw
+  `httpx.RemoteProtocolError` / `json.JSONDecodeError` from a truncated SSE or NDJSON line —
+  escaped `run_turn` *after* the user message had been appended: no abort, no `turn_end` event,
+  nothing persisted, so the session was unresumable and the trace showed a turn that started and
+  never ended. The model-call stream is now wrapped: any exception aborts the turn (ERROR phase,
+  `turn_end status="error"`, persisted) before being re-raised — as the original `ProviderError`
+  when the provider produced one, and wrapped in a `ProviderError` naming provider and model
+  otherwise. A stream that ends with no final completion takes the same path instead of raising a
+  bare `HarnessError`.
+- **Malformed provider output is a `ProviderError`, not a stray decode error.** The OpenAI and
+  Ollama providers convert `json.JSONDecodeError` and the remaining `httpx.HTTPError` subclasses
+  into a `ProviderError` that names the endpoint, the model, and what to do about it.
+- **`guardrails.egress = "redact"` actually redacts.** The inspection computed a redacted copy and
+  threw it away: the raw text had already been streamed delta by delta, and the raw text was what
+  got stored in the assistant message and the episodic outcome — "redact" was, in practice,
+  "warn". In redact mode the step's text deltas (and the terminal done delta, whose order
+  consumers rely on) are now buffered and replayed from the *inspected* text, so a secret is never
+  shown, never persisted, and never recalled later. A cancelled turn still gets its buffered
+  partial, redacted. `warn` and `off` keep streaming live and are untouched.
+- **Egress scanning now covers tool-call arguments.** In `warn` and `redact`, a model that reads a
+  key from a file and posts it to a URL never puts it in its prose — the arguments are scanned and
+  recorded as `guardrail stage="egress_tool_args"`. The call is recorded, not blocked: the
+  approval gate is what stops side effects, and rewriting arguments would hand the tool something
+  the model never asked for.
+- **Malformed tool-call JSON says so.** When the OpenAI provider could not parse streamed tool
+  arguments it substituted `{}`, so the schema validator answered "field required" — sending the
+  model off to invent a missing argument when the real bug was its own truncated JSON. Providers
+  now carry the raw argument text through a sentinel key (also for valid JSON that isn't an
+  object, e.g. a bare string), and the orchestrator and the sub-agent loop intercept such calls
+  before the registry, the approval gate, and any tool, returning *"invalid JSON in tool
+  arguments … Call the tool again with its arguments as a single valid JSON object."* Tools never
+  see the sentinel. Ollama's unparseable-string branch stops fabricating `{"value": …}` the same
+  way.
+- **A runtime config change reaches the provider.** `ModelRouter` built one provider per model
+  string and cached it forever, so a new API key, a new `base_url`, or a provider re-registered
+  from the manager kept hitting the old endpoint with the old key for the rest of the session —
+  and the change looked like it had silently done nothing. `invalidate()` now clears the cache
+  (keeping the pinned provider, which is the current choice rather than a stale entry) and
+  `Harness.set_model` calls it before pinning the new one.
+- **The status line prices the right model.** `format_cost` can only distinguish priced,
+  free-local, and unpriced from a full `provider:model` ref, but the plain REPL set only the bare
+  model id — so `llama3.1` fell through the table as *unknown* and an Ollama user read "cost n/a
+  (unpriced model)" where `$0.0000` is the truth. `model_ref` is now set alongside `model` (the
+  short display label) in both construction and refresh.
+- **MCP 2.0 tool mounting.** `Tool.inputSchema` was renamed `input_schema` in `mcp` 2.0, so the
+  old attribute access would have raised `AttributeError` against any real 2.x server — at mount
+  time, for every tool. It is now read defensively across both spellings.
+- **Two TUI crashes closed with the types that allowed them.** A key entered with no provider row
+  in flight raised `AttributeError` (it is now discarded — never tested, never echoed to the
+  transcript), and the connection-test and MCP-test dismissal callbacks now accept `None`, so a
+  cancel reads as a cancel: no save-diff modal, and the in-memory secret cleared rather than
+  stored.
+
+### Security
+
+- **`web_fetch` is guarded against SSRF.** It ran inside the user's trust boundary with no address
+  check: a model-chosen URL could read cloud metadata (`169.254.169.254`), the user's own Ollama
+  on localhost, or any RFC1918 host — and httpx followed redirects automatically, so a public host
+  could bounce the fetch straight into the private network. Every hop is now vetted before a
+  connection is made: `http`/`https` schemes only; all A/AAAA answers resolved and refused when
+  loopback, private, link-local, multicast, reserved, or unspecified (IPv4-mapped, 6to4, and
+  Teredo forms unwrapped first); redirects followed manually with a bound of 5 hops; the body
+  streamed and stopped at 2 MB *before* any decoding; and the content type required to be textual.
+  Each refusal returns a structured `ToolResult` error naming the reason and the
+  `[tools] web_allow_private` escape hatch for local development targets.
+- **The sandbox environment allowlist is cross-platform, and opt-in extension can't leak keys.**
+  The allowlist was Windows-only, so on macOS/Linux every tool subprocess lost `HOME`, `USER`,
+  `LOGNAME`, `SHELL`, `TMPDIR`, `TERM`, the locale and `XDG_*` families, and the CA-bundle
+  variables — which breaks git, pip, and npm outright rather than merely constraining them. The
+  POSIX set is added alongside the Windows one, with `LC_*` / `XDG_*` prefix families, and
+  `[sandbox] env_passthrough` forwards anything else by name. Credential-looking names
+  (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`, `*_KEY`) are refused even when explicitly
+  named, with a logged warning: an allowlist entry must not become a way to hand tool
+  subprocesses the key that pays for the model.
+- **MCP stdio servers get the scrubbed environment, not the host's.** A stdio server that declared
+  any `env` value received `{**os.environ, **cfg.env}` — the whole host environment, every API key
+  on the machine, handed to a third-party subprocess. It now gets the same
+  `SandboxPolicy.scrubbed_env()` the tool subprocesses do (platform allowlist plus
+  `sandbox.env_passthrough`, credential names refused), with its own `env` layered on top — so a
+  server that genuinely needs a token still gets exactly the one it asked for via `${VAR}`, and
+  nothing else.
+- **A timed-out tool no longer leaves its children running.** A timeout only killed the direct
+  child: `npm test`, a shell one-liner, or anything that spawns workers left those workers alive,
+  holding ports, burning CPU, and keeping the output pipes open after the harness had moved on.
+  Each command now starts in its own process group (`CREATE_NEW_PROCESS_GROUP` on Windows,
+  `start_new_session` on POSIX) and the whole group is killed on timeout (`taskkill /T /F` or
+  `killpg`), with a bounded drain of the pipes. Docker had the same hole one level up — killing
+  the `docker run` client leaves the container running and `--rm` never fires — so each run gets a
+  unique `--name agent86-<uuid>` and a timeout follows up with `docker kill`, reporting in stderr
+  if that fails. Commands also get a closed stdin (EOF) instead of inheriting the parent's, so a
+  command that reads stdin fails fast rather than blocking until the timeout.
+
 ## [0.6.0] - 2026-09-19
 
 The interactive milestone. `agent86` with no subcommand is now a full-screen terminal app, and
@@ -418,6 +611,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.7.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.7.0
 [0.6.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.6.0
 [0.5.8]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.8
 [0.5.7]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.5.7
