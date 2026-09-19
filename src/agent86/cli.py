@@ -505,8 +505,10 @@ def mcp_tools_cmd() -> None:
     if manager is None:
         console.print("[dim]No MCP servers configured (or MCP disabled).[/dim]")
         return
-    if manager.note:
-        err_console.print(f"[yellow]{manager.note}[/yellow]")
+    # One line per degradation, not one joined blob: with several bad servers a single
+    # newline-joined note is easy to skim past, and only the last one reads as the failure.
+    for note in manager.notes or ([manager.note] if manager.note else []):
+        err_console.print(f"[yellow]{escape(note)}[/yellow]")
     tools = manager.tools()
     if not tools:
         console.print("[dim]No MCP tools discovered.[/dim]")

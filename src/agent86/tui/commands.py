@@ -380,8 +380,20 @@ def startup_notes(repl) -> list[str]:
     notes: list[str] = [escape(n) for n in getattr(repl, "resume_notes", ())]
     if repl.harness.memory_note:
         notes.append(f"memory: {escape(repl.harness.memory_note)}")
-    if repl.harness.mcp_note:
-        notes.append(f"mcp: {escape(repl.harness.mcp_note)}")
+    # One line per degradation: `mcp_note` joins them with newlines, and several bad servers
+    # collapsed into one multi-line note render as a single squashed transcript entry.
+    mcp = getattr(repl.harness, "mcp", None)
+    mcp_notes = list(getattr(mcp, "notes", None) or [])
+    if not mcp_notes and repl.harness.mcp_note:
+        mcp_notes = [repl.harness.mcp_note]
+    for note in mcp_notes:
+        notes.append(f"mcp: {escape(note)}")
+    # A tool whose name was already taken is not callable. Dropping it in silence looks
+    # exactly like the server failing to connect, so say which names went missing.
+    collisions = list(getattr(repl.harness.registry, "collisions", None) or [])
+    if collisions:
+        joined = ", ".join(escape(n) for n in collisions)
+        notes.append(f"tools: name collision, not callable: {joined}")
     if repl.harness.sandbox_note:
         notes.append(f"sandbox: {escape(repl.harness.sandbox_note)}")
     if repl.harness.skills:

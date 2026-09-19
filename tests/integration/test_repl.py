@@ -236,3 +236,61 @@ def test_handle_command_escapes_the_unknown_line_itself(tmp_path):
     buf = io.StringIO()
     Console(file=buf, width=200).print(result.render)
     assert "/foo [/bar]" in buf.getvalue()
+
+
+# ---- startup diagnostics ------------------------------------------------- #
+
+
+def test_registry_collisions_surface_as_a_startup_note(tmp_path):
+    """A tool that lost its name is not callable — saying nothing looks like a dead server."""
+    repl, harness = _repl(tmp_path)
+    harness.registry.collisions = ["mcp__a__search", "read_file"]
+
+    from agent86.tui.commands import startup_notes
+
+    notes = startup_notes(repl)
+    line = next(n for n in notes if n.startswith("tools: "))
+    assert "mcp__a__search" in line and "read_file" in line
+    assert "not callable" in line
+
+
+def test_no_collision_note_when_every_tool_kept_its_name(tmp_path):
+    repl, harness = _repl(tmp_path)
+    assert harness.registry.collisions == []
+
+    from agent86.tui.commands import startup_notes
+
+    assert not any(n.startswith("tools: ") for n in startup_notes(repl))
+
+
+def test_every_mcp_note_gets_its_own_startup_line(tmp_path):
+    """Several bad servers used to collapse into one newline-joined blob."""
+    from agent86.tools.mcp_client import MCPManager
+    from agent86.tui.commands import startup_notes
+
+    repl, harness = _repl(tmp_path)
+    manager = MCPManager({})
+    manager._add_note("MCP server 'alpha' failed to start: boom")
+    manager._add_note("MCP server 'beta' failed to start: nope")
+    harness.mcp = manager
+
+    lines = [n for n in startup_notes(repl) if n.startswith("mcp: ")]
+    assert lines == [
+        "mcp: MCP server 'alpha' failed to start: boom",
+        "mcp: MCP server 'beta' failed to start: nope",
+    ]
+
+
+def test_mcp_and_collision_notes_are_markup_escaped(tmp_path):
+    from agent86.tools.mcp_client import MCPManager
+    from agent86.tui.commands import startup_notes
+
+    repl, harness = _repl(tmp_path)
+    manager = MCPManager({})
+    manager._add_note("MCP server 'a' failed to start: [boom]")
+    harness.mcp = manager
+    harness.registry.collisions = ["mcp__a__[x]"]
+
+    notes = startup_notes(repl)
+    assert any(r"\[boom]" in n for n in notes)
+    assert any(r"mcp__a__\[x]" in n for n in notes)
