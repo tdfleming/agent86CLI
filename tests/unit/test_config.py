@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import textwrap
 
-import pytest
-
 from agent86 import config as config_mod
 from agent86.config import Config, MCPServerConfig, _deep_merge, load_config
 from agent86.types import ApprovalMode

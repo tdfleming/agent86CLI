@@ -9,8 +9,6 @@ omission for free.
 
 from __future__ import annotations
 
-import json
-
 import anthropic
 import httpx
 import pytest

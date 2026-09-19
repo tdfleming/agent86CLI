@@ -39,9 +39,10 @@ def _patch_user_scope(monkeypatch, tmp_path):
 
 
 async def test_diff_matches_actual_write(tmp_path, monkeypatch):
+    from textual.widgets import Static
+
     from agent86.config_writer import apply_edit
     from agent86.tui.screens.save_diff import SaveDiffModal
-    from textual.widgets import Static
 
     target = _patch_user_scope(monkeypatch, tmp_path)
 
@@ -62,8 +63,9 @@ async def test_diff_matches_actual_write(tmp_path, monkeypatch):
 
 
 async def test_default_scope_is_user(tmp_path, monkeypatch):
-    from agent86.tui.screens.save_diff import SaveDiffModal
     from textual.widgets import RadioButton
+
+    from agent86.tui.screens.save_diff import SaveDiffModal
 
     _patch_user_scope(monkeypatch, tmp_path)
     host = _PickerHost(
@@ -119,9 +121,10 @@ async def test_cancel_returns_none(tmp_path, monkeypatch):
 
 
 async def test_preview_then_apply_preserves_all_comments(tmp_path, monkeypatch):
+    from textual.widgets import Static
+
     from agent86.config_writer import apply_edit
     from agent86.tui.screens.save_diff import SaveDiffModal
-    from textual.widgets import Static
 
     target = _patch_user_scope(monkeypatch, tmp_path)
 
@@ -156,9 +159,10 @@ async def test_preview_then_apply_preserves_all_comments(tmp_path, monkeypatch):
 
 
 async def test_malformed_existing_config_disables_save(tmp_path, monkeypatch):
+    from textual.widgets import Button, Static
+
     import agent86.config_writer as config_writer
     from agent86.tui.screens.save_diff import SaveDiffModal
-    from textual.widgets import Button, Static
 
     target = tmp_path / "config.toml"
     target.write_text("[model\nbroken", encoding="utf-8")

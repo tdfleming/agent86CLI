@@ -21,8 +21,8 @@ from agent86.types import (
     CompletionRequest,
     Role,
     ToolCall,
-    Usage,
     ToolResult,
+    Usage,
 )
 
 

@@ -131,8 +131,6 @@ def _capture_console(monkeypatch):
 
 
 def test_run_repl_fails_soft_on_opaque_typeerror(monkeypatch):
-    import agent86.ui.repl as repl_mod
-
     repl_mod, buf = _capture_console(monkeypatch)
     monkeypatch.setenv("AGENT86_PLAIN", "1")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-TESTKEY-0001")

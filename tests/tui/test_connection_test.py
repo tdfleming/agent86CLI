@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import threading
 
-import pytest
 from textual.app import App, ComposeResult
 
 from agent86.config import load_config
@@ -116,9 +115,9 @@ async def test_key_entry_reports_keyring_unavailable():
 
 
 async def test_success_dismisses_ok(monkeypatch):
-    from agent86.types import ModelRef
-    from agent86.tui.screens.connection_test import ConnectionTestModal, TestOutcome
     import agent86.tui.screens.connection_test as connection_test
+    from agent86.tui.screens.connection_test import ConnectionTestModal, TestOutcome
+    from agent86.types import ModelRef
 
     fake = _FakeProvider()
     monkeypatch.setattr(connection_test, "provider_for_ref", lambda ref, cfg, api_key: fake)
@@ -134,10 +133,10 @@ async def test_success_dismisses_ok(monkeypatch):
 
 
 async def test_failure_dismisses_with_verbatim_error(monkeypatch):
-    from agent86.cognitive.base import ProviderError
-    from agent86.types import ModelRef
-    from agent86.tui.screens.connection_test import ConnectionTestModal
     import agent86.tui.screens.connection_test as connection_test
+    from agent86.cognitive.base import ProviderError
+    from agent86.tui.screens.connection_test import ConnectionTestModal
+    from agent86.types import ModelRef
 
     fake = _FakeProvider(error=ProviderError("401 unauthorized: bad key"))
     monkeypatch.setattr(connection_test, "provider_for_ref", lambda ref, cfg, api_key: fake)
@@ -160,10 +159,10 @@ async def test_failure_dismisses_with_verbatim_error(monkeypatch):
 
 
 async def test_save_anyway_sets_override(monkeypatch):
-    from agent86.cognitive.base import ProviderError
-    from agent86.types import ModelRef
-    from agent86.tui.screens.connection_test import ConnectionTestModal
     import agent86.tui.screens.connection_test as connection_test
+    from agent86.cognitive.base import ProviderError
+    from agent86.tui.screens.connection_test import ConnectionTestModal
+    from agent86.types import ModelRef
 
     fake = _FakeProvider(error=ProviderError("401 unauthorized: bad key"))
     monkeypatch.setattr(connection_test, "provider_for_ref", lambda ref, cfg, api_key: fake)
@@ -184,9 +183,9 @@ async def test_save_anyway_sets_override(monkeypatch):
 
 
 async def test_timeout_dismisses_with_timeout_message(monkeypatch):
-    from agent86.types import ModelRef
-    from agent86.tui.screens.connection_test import ConnectionTestModal
     import agent86.tui.screens.connection_test as connection_test
+    from agent86.tui.screens.connection_test import ConnectionTestModal
+    from agent86.types import ModelRef
 
     monkeypatch.setattr(ConnectionTestModal, "TIMEOUT_S", 0.05)
     block_event = threading.Event()
@@ -205,9 +204,9 @@ async def test_timeout_dismisses_with_timeout_message(monkeypatch):
 
 
 async def test_max_tokens_one_and_single_message(monkeypatch):
-    from agent86.types import ModelRef
-    from agent86.tui.screens.connection_test import ConnectionTestModal
     import agent86.tui.screens.connection_test as connection_test
+    from agent86.tui.screens.connection_test import ConnectionTestModal
+    from agent86.types import ModelRef
 
     fake = _FakeProvider()
     monkeypatch.setattr(connection_test, "provider_for_ref", lambda ref, cfg, api_key: fake)

@@ -180,9 +180,8 @@ _MCP_SERVERS_TOML = (
 
 
 def test_delete_removes_a_server_table(tmp_path, monkeypatch):
-    from agent86.config_writer import DELETE
-
     import agent86.config_writer as config_writer
+    from agent86.config_writer import DELETE
 
     target = tmp_path / "config.toml"
     target.write_text(_MCP_SERVERS_TOML)
@@ -201,9 +200,8 @@ def test_delete_removes_a_server_table(tmp_path, monkeypatch):
 
 
 def test_delete_of_missing_path_is_noop(tmp_path, monkeypatch):
-    from agent86.config_writer import DELETE
-
     import agent86.config_writer as config_writer
+    from agent86.config_writer import DELETE
 
     target = tmp_path / "config.toml"
     target.write_text(_MCP_SERVERS_TOML)
@@ -216,9 +214,8 @@ def test_delete_of_missing_path_is_noop(tmp_path, monkeypatch):
 
 
 def test_delete_and_set_in_one_edit(tmp_path, monkeypatch):
-    from agent86.config_writer import DELETE
-
     import agent86.config_writer as config_writer
+    from agent86.config_writer import DELETE
 
     target = tmp_path / "config.toml"
     target.write_text(_MCP_SERVERS_TOML)
@@ -245,7 +242,12 @@ def test_forbidden_var_ref_literal_authorization_rejected(tmp_path, monkeypatch)
     with pytest.raises(ValueError):
         config_writer.plan_edit(
             config_writer.SCOPE_USER,
-            [(["mcp", "servers", "gh", "headers", "Authorization"], "Bearer sk-live-abcdefghijklmnop")],
+            [
+                (
+                    ["mcp", "servers", "gh", "headers", "Authorization"],
+                    "Bearer sk-live-abcdefghijklmnop",
+                )
+            ],
         )
 
 

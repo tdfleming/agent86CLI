@@ -681,7 +681,8 @@ async def test_headers_are_written_as_individual_key_paths(tmp_path):
         ),
     )
     changes = app._mcp_changes(draft)
-    assert (["mcp", "servers", "alpha", "headers", "Authorization"], "Bearer ${A86_TEST_TOKEN}") in changes
+    header_path = ["mcp", "servers", "alpha", "headers", "Authorization"]
+    assert (header_path, "Bearer ${A86_TEST_TOKEN}") in changes
     assert not any(path == ["mcp", "servers", "alpha", "headers"] for path, _ in changes)
 
 
@@ -703,7 +704,10 @@ async def _make_repl_with_mcp_servers(tmp_path, provider):
     repl.cfg.mcp_servers = servers
     fake = _FakeMCPManager()
     fake.servers = dict(servers)
-    tools = [_FakeMCPTool("mcp__alpha__search", "search"), _FakeMCPTool("mcp__alpha__fetch", "fetch")]
+    tools = [
+        _FakeMCPTool("mcp__alpha__search", "search"),
+        _FakeMCPTool("mcp__alpha__fetch", "fetch"),
+    ]
     fake._tools["alpha"] = tools
     for tool in tools:
         repl.harness.registry.register(tool)
@@ -731,7 +735,7 @@ async def test_remove_opens_save_diff_with_delete_sentinel(tmp_path, monkeypatch
         body = app.screen.query_one("#save-diff-body", Static)
         diff = str(body.render())
     assert "[mcp.servers.alpha]" in diff
-    assert diff.strip().startswith("---") or "-[mcp.servers.alpha]" in diff or "-[mcp.servers.alpha]".lstrip() in diff
+    assert diff.strip().startswith("---") or "-[mcp.servers.alpha]" in diff
 
 
 async def test_confirmed_remove_unmounts_tools(tmp_path, monkeypatch):

@@ -60,7 +60,9 @@ class MissingSecretRef(RuntimeError):
 
     def __init__(self, var_name: str) -> None:
         self.var_name = var_name
-        super().__init__(f"'${{{var_name}}}' is not set (checked the environment, then the OS keyring)")
+        super().__init__(
+            f"'${{{var_name}}}' is not set (checked the environment, then the OS keyring)"
+        )
 
 
 def find_var_refs(*texts: str | None) -> set[str]:

@@ -14,7 +14,10 @@ from agent86.cognitive.base import ProviderError, provider_for_model, provider_f
 from agent86.config import ProviderConfig, load_config
 from agent86.types import ModelRef
 
-def _fake_keyring(monkeypatch, *, store=None, raises=None, backend_module="keyring.backends.SecretService"):
+
+def _fake_keyring(
+    monkeypatch, *, store=None, raises=None, backend_module="keyring.backends.SecretService"
+):
     store = store if store is not None else {}
     mod = types.ModuleType("keyring")
     errors = types.ModuleType("keyring.errors")

@@ -142,8 +142,9 @@ class FakeManager:
 
 
 def test_manager_start_server_registers_tools_for_lookup(monkeypatch):
-    import agent86.tools.mcp_client as mcp_client
     from contextlib import asynccontextmanager
+
+    import agent86.tools.mcp_client as mcp_client
 
     @asynccontextmanager
     async def _fake_open_transport(cfg):
@@ -185,8 +186,9 @@ def test_manager_start_server_registers_tools_for_lookup(monkeypatch):
 
 
 def test_manager_stop_server_drops_its_tools(monkeypatch):
-    import agent86.tools.mcp_client as mcp_client
     from contextlib import asynccontextmanager
+
+    import agent86.tools.mcp_client as mcp_client
 
     @asynccontextmanager
     async def _fake_open_transport(cfg):

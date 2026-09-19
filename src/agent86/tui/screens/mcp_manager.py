@@ -159,7 +159,7 @@ def parse_server_json(raw: str, name_hint: str = "") -> tuple[str, MCPServerConf
     if not isinstance(data, dict):
         raise ValueError("Expected a JSON object.")
 
-    wrapper_key = "mcpServers" if "mcpServers" in data else ("servers" if "servers" in data else None)
+    wrapper_key = next((key for key in ("mcpServers", "servers") if key in data), None)
     if wrapper_key is not None:
         servers = data[wrapper_key]
         if not isinstance(servers, dict) or len(servers) != 1:

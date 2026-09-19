@@ -22,7 +22,14 @@ from agent86.tui.app import Agent86App
 from agent86.tui.screens.approval import ApprovalModal
 from agent86.tui.screens.model_picker import ModelPickerModal
 from agent86.tui.widgets.status_footer import StatusFooter
-from agent86.types import ApprovalMode, Completion, CompletionDelta, CompletionRequest, ToolCall, Usage
+from agent86.types import (
+    ApprovalMode,
+    Completion,
+    CompletionDelta,
+    CompletionRequest,
+    ToolCall,
+    Usage,
+)
 from agent86.ui.repl import _Repl
 from tests.support import ToolThenTextProvider, make_text_provider
 

@@ -15,7 +15,7 @@ import types
 from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 
-from agent86.config import ProviderConfig, load_config
+from agent86.config import load_config
 from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
 from agent86.types import ApprovalMode
@@ -127,8 +127,9 @@ async def test_manager_cancel_returns_none():
 
 
 async def test_catalog_filter_narrows():
-    from agent86.tui.screens.provider_manager import CatalogPickerModal
     from textual.widgets import OptionList
+
+    from agent86.tui.screens.provider_manager import CatalogPickerModal
 
     entries = [("gpt-4o", "gpt-4o"), ("gpt-4o-mini", "gpt-4o-mini"), ("o3", "o3")]
     host = _PickerHost(CatalogPickerModal("openai", entries))

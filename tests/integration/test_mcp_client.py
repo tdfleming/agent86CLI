@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from agent86.config import Config, MCPServerConfig, load_config
+from agent86.config import MCPServerConfig, load_config
 from agent86.tools.mcp_client import MCPManager, MCPTool, build_mcp
 from agent86.types import ToolCall
 
@@ -146,8 +146,15 @@ def test_start_server_failure_does_not_break_manager():
     manager = MCPManager({})
     try:
         bad_cfg = MCPServerConfig(command=sys.executable, args=["-c", "import sys; sys.exit(1)"])
-        with pytest.raises(Exception):
+        # A server that exits immediately can surface as any of several transport errors
+        # (McpError, an anyio ExceptionGroup, a closed-pipe OSError), so bind the failure to a
+        # name rather than asserting one blind `Exception` type.
+        failure: BaseException | None = None
+        try:
             manager.start_server("bad", bad_cfg, timeout=30.0)
+        except Exception as exc:
+            failure = exc
+        assert failure is not None, "a server whose process exits must raise, not return tools"
         manager.start_server("alpha", _stdio_cfg(), timeout=30.0)
     finally:
         manager.close()
