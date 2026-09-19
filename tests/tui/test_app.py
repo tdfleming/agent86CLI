@@ -727,11 +727,16 @@ async def test_cross_provider_stranding_validates_against_own_captured_provider(
 
     monkeypatch.setattr(catalog, "fetch_catalog", fake_fetch_catalog)
 
-    class _StubAnthropicProvider:
+    class _StubAnthropicProvider(base.ModelProvider):
+        # A real subclass, not a duck: the status line asks every provider for its
+        # `config_ref` (the config section it was built from + the model).
         name = "anthropic"
 
         def __init__(self, model: str) -> None:
             self.model = model
+
+        def stream(self, request):  # noqa: ANN001, ANN201 - never streamed in this test
+            raise AssertionError("the stub provider is never asked to stream")
 
     real_provider_for_model = base.provider_for_model
 

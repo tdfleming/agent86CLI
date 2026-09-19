@@ -130,3 +130,68 @@ def test_explicit_api_key_argument_wins(monkeypatch):
         ModelRef.parse("openai:gpt-4o"), load_config(), api_key="sk-injected"
     )
     assert provider._api_key == "sk-injected"
+
+
+# --------------------------------------------------------------------------- #
+# v0.8 — the config SECTION a provider was built from (`config_name`)
+# --------------------------------------------------------------------------- #
+
+
+def test_config_name_records_the_section_not_the_adapter(monkeypatch):
+    """`name` is the adapter ("openai" for every OpenAI-compatible gateway); the config
+    section the user wrote is the only correct key for per-provider settings."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    provider = provider_for_model("openrouter:anthropic/claude-3.7-sonnet", load_config())
+
+    assert provider.name == "openai"
+    assert provider.config_name == "openrouter"
+    assert provider.config_ref == "openrouter:anthropic/claude-3.7-sonnet"
+
+
+def test_config_name_defaults_to_the_adapter_name():
+    """A directly-constructed provider (tests, ad-hoc use) behaves exactly as before."""
+    from tests.support import TextProvider
+
+    provider = TextProvider("hi")
+    assert provider.config_name == provider.name == "text"
+
+
+def test_max_output_tokens_is_read_from_the_section_the_user_wrote(monkeypatch):
+    from agent86.cognitive.capabilities import max_output_tokens_for
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    cfg = load_config()
+    cfg.providers["openrouter"].max_tokens = 1234
+    cfg.providers["openai"].max_tokens = 4321
+    provider = provider_for_model("openrouter:some/model", cfg)
+
+    assert max_output_tokens_for(provider.config_ref, cfg) == 1234
+    # ...and the old, adapter-named ref is what used to be read instead.
+    assert max_output_tokens_for(f"{provider.name}:{provider.model}", cfg) == 4321
+
+
+def test_groq_max_retries_is_honoured(monkeypatch):
+    """`max_retries` is already keyed right (the ProviderConfig is handed to the adapter);
+    this pins it, because it is the same per-section setting as `max_tokens`."""
+    monkeypatch.setenv("GROQ_API_KEY", "sk-test")
+    cfg = load_config()
+    cfg.providers["groq"].max_retries = 7
+    cfg.providers["openai"].max_retries = 0
+
+    provider = provider_for_model("groq:llama-3.3-70b-versatile", cfg)
+
+    assert provider.config_name == "groq"
+    assert provider._max_retries == 7
+
+
+def test_prompt_cache_is_read_from_the_section_the_user_wrote(monkeypatch):
+    """Same keying for the Anthropic-only cache flag: the adapter gets its own section."""
+    pytest.importorskip("anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    cfg = load_config()
+    cfg.providers["anthropic"].prompt_cache = False
+
+    provider = provider_for_model("anthropic:claude-opus-4-8", cfg)
+
+    assert provider.config_name == "anthropic"
+    assert provider._prompt_cache_enabled is False

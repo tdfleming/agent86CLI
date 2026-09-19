@@ -301,7 +301,14 @@ class Harness:
         return content
 
     def _model_ref(self) -> str:
-        return f"{self.provider.name}:{self.provider.model}"
+        """The ``provider:model`` ref every per-model config lookup keys on.
+
+        ``config_name``, never ``name``: the adapter behind ``openrouter:`` calls itself
+        "openai", so building this from ``name`` looked up ``[providers.openai]`` and threw
+        away the ``max_tokens`` (and the window override) the user set on the section they
+        actually wrote.
+        """
+        return self.provider.config_ref
 
     def _context_budget(self, system_content: str, specs: list) -> int:
         """Conversation tokens available for THIS request, from the model's real window.

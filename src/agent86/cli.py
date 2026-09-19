@@ -178,8 +178,7 @@ def run(
         console.print()
         from agent86.ui.status import format_last_turn
 
-        provider = harness.provider
-        line = format_last_turn(state, f"{provider.name}:{provider.model}")
+        line = format_last_turn(state, harness.provider.config_ref)
         if line:
             # stderr: stdout is the answer, and a scripted `agent86 run ... > out.txt` must
             # keep getting only that.

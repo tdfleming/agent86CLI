@@ -736,6 +736,65 @@ def test_request_carries_the_resolved_max_tokens():
     assert provider.requests[0].max_tokens == 3_000
 
 
+def test_openrouter_max_tokens_reaches_the_request(monkeypatch):
+    """`[providers.openrouter] max_tokens` must not be swallowed by the adapter's name.
+
+    Every OpenAI-compatible gateway is served by OpenAIProvider, whose `name` is "openai",
+    so the loop's `provider:model` ref used to read `[providers.openai]` and ignore the
+    section the user actually wrote.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    cfg = _config()
+    cfg.providers["openrouter"].max_tokens = 1234
+    cfg.providers["openai"].max_tokens = 4321  # the section that must NOT be read
+
+    provider = provider_for_model("openrouter:anthropic/claude-3.7-sonnet", cfg)
+    assert provider.name == "openai" and provider.config_name == "openrouter"
+
+    requests: list[CompletionRequest] = []
+
+    def _fake_stream(request: CompletionRequest) -> Iterator[CompletionDelta]:
+        requests.append(request)
+        yield CompletionDelta(
+            done=True,
+            completion=Completion(
+                text="ok", usage=Usage(), model=provider.model, stop_reason="end_turn"
+            ),
+        )
+
+    monkeypatch.setattr(provider, "stream", _fake_stream)
+    harness = Harness(cfg, provider=provider, memory=None)
+    list(harness.run_turn("hi", harness.new_session()))
+
+    assert requests[0].max_tokens == 1234
+
+
+def test_the_context_window_override_is_keyed_on_the_section_too(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    cfg = _config()
+    cfg.model.context_window = {"openrouter:anthropic/claude-3.7-sonnet": 32_768}
+    provider = provider_for_model("openrouter:anthropic/claude-3.7-sonnet", cfg)
+
+    monkeypatch.setattr(
+        provider,
+        "stream",
+        lambda request: iter(
+            [
+                CompletionDelta(
+                    done=True,
+                    completion=Completion(
+                        text="ok", usage=Usage(), model=provider.model, stop_reason="end_turn"
+                    ),
+                )
+            ]
+        ),
+    )
+    harness = Harness(cfg, provider=provider, memory=None)
+    list(harness.run_turn("hi", harness.new_session()))
+
+    assert 10_000 < harness.working.max_tokens < 32_768
+
+
 # ---- max_tokens continuation ----------------------------------------------- #
 
 

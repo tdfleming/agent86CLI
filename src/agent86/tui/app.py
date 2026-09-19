@@ -437,7 +437,10 @@ class Agent86App(App):
                 ModePickerModal(self.repl.harness.gate.mode.value), self._on_mode_picked
             )
         elif entry.needs_choice == "model":
-            active = self.repl.harness.provider.name
+            # config_name, not name: `[providers.<section>]` is what the catalog fetch and
+            # the key lookup below are keyed on, and every OpenAI-compatible gateway's
+            # adapter calls itself "openai".
+            active = self.repl.harness.provider.config_name
             cached = self._catalog_cache.get(active)
             if cached is None:
                 # D-04: one lazy fetch per provider per session; the picker opens from
@@ -471,7 +474,7 @@ class Agent86App(App):
         # The catalog yields BARE model ids (catalog.py's documented contract); only a full
         # `provider:model` ref survives ModelRef.parse. Prefix BEFORE model_choices so its
         # role-slot dedupe compares full refs against full refs.
-        provider = self.repl.harness.provider.name
+        provider = self.repl.harness.provider.config_name
         choices = model_choices(self.repl.cfg, extra=prefix_catalog_refs(provider, extra))
         if not choices:
             prompt = self.query_one("#prompt", Input)

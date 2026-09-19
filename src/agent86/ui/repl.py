@@ -115,11 +115,13 @@ class _Repl:
         self.state: AgentState = state if state is not None else self.harness.new_session()
 
         p = self.harness.provider
+        # `config_ref`, not `f"{p.name}:{p.model}"`: the adapter behind `openrouter:` is
+        # named "openai", and this ref is what the window lookup and the price table key on.
         self.status = StatusState(
             model=p.model,
-            model_ref=f"{p.name}:{p.model}",
+            model_ref=p.config_ref,
             used_tokens=0,
-            window=self._context_window(f"{p.name}:{p.model}"),
+            window=self._context_window(p.config_ref),
             output_tokens=0,
             cost_usd=0.0,
             sandbox=cfg.sandbox.mode,
@@ -160,7 +162,7 @@ class _Repl:
 
     def _refresh_status(self) -> None:
         p = self.harness.provider
-        ref = f"{p.name}:{p.model}"
+        ref = p.config_ref
         self.status.model = p.model
         self.status.model_ref = ref
         self.status.window = self._context_window(ref)

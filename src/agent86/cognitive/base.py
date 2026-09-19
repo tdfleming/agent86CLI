@@ -36,12 +36,42 @@ class ProviderError(RuntimeError):
 class ModelProvider(ABC):
     """Adapter behind one provider's API."""
 
-    #: short provider id, e.g. "anthropic"
+    #: short provider id, e.g. "anthropic" — the ADAPTER, not the config section. Every
+    #: OpenAI-compatible gateway (OpenRouter, Groq, a custom base_url) reports "openai".
     name: str = "base"
     #: the concrete model this instance targets
     model: str = ""
     #: whether the backend supports first-class tool/function calling
     supports_native_tools: bool = False
+
+    #: Backing store for :attr:`config_name`; ``None`` means "nobody set one".
+    _config_name: str | None = None
+
+    @property
+    def config_name(self) -> str:
+        """The ``[providers.<section>]`` this provider was built from.
+
+        ``name`` identifies the *adapter*, so it is "openai" for OpenRouter, Groq, and every
+        custom base_url endpoint alike — which meant a ``provider:model`` ref built from it
+        looked up ``[providers.openai]`` and silently ignored ``[providers.openrouter]
+        max_tokens``. ``provider_for_ref`` sets this to the section name the user actually
+        wrote, and it is the segment every config lookup must key on. Defaults to ``name``,
+        so a directly-constructed provider (tests, ad-hoc use) behaves as before.
+        """
+        return self._config_name or self.name
+
+    @config_name.setter
+    def config_name(self, value: str) -> None:
+        self._config_name = value or None
+
+    @property
+    def config_ref(self) -> str:
+        """``<config section>:<model>`` — the ref for per-provider config lookups.
+
+        The one place this string is spelled, so a lookup can never silently regress to the
+        adapter name again.
+        """
+        return f"{self.config_name}:{self.model}"
 
     @abstractmethod
     def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
@@ -152,7 +182,12 @@ def provider_for_ref(ref: ModelRef, config: Config, api_key: Any = UNRESOLVED) -
         api_key = resolve_api_key(ref.provider, pconf.api_key_env)
 
     try:
-        return _build_provider(ref, pconf, api_key)
+        provider = _build_provider(ref, pconf, api_key)
+        # The section the config was READ from, which is not `provider.name` for any
+        # OpenAI-compatible gateway. Everything that looks config up by `provider:model`
+        # keys on this; see ModelProvider.config_name.
+        provider.config_name = ref.provider
+        return provider
     except ProviderError:
         raise
     except Exception as exc:
