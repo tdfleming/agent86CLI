@@ -445,6 +445,101 @@ def test_cancel_mid_stream_closes_the_provider_generator():
     assert _turn_end(recorder)["status"] == "cancelled"
 
 
+# ---- provider failure mid-stream ------------------------------------------- #
+
+
+class _FailingStreamProvider(ModelProvider):
+    """Streams one delta, then blows up the way a dropped connection does."""
+
+    name = "failing"
+
+    def __init__(self, exc: BaseException):
+        self.model = "fake:failing"
+        self._exc = exc
+        self.closed = False
+
+    def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+        try:
+            yield CompletionDelta(text="partial ")
+            raise self._exc
+        finally:
+            self.closed = True
+
+
+def _failing_harness(exc: BaseException):
+    provider = _FailingStreamProvider(exc)
+    harness = Harness(_config(), provider=provider, memory=None)
+    recorder = _CapturingRecorder()
+    harness.recorder = recorder
+    persisted: list[int] = []
+    original = harness._persist
+
+    def _spy(state) -> None:
+        persisted.append(len(state.messages))
+        original(state)
+
+    harness._persist = _spy
+    return harness, provider, recorder, persisted
+
+
+def test_provider_error_mid_stream_aborts_the_turn_cleanly():
+    from agent86.cognitive.base import ProviderError
+
+    harness, provider, recorder, persisted = _failing_harness(ProviderError("stream died"))
+    state = harness.new_session()
+
+    with pytest.raises(ProviderError, match="stream died"):
+        list(harness.run_turn("hi", state))
+
+    # The user message survives, the phase is ERROR, and the turn was persisted + recorded.
+    assert [m.role for m in state.messages] == [Role.USER]
+    assert state.phase is AgentPhase.ERROR
+    end = _turn_end(recorder)
+    assert end["status"] == "error"
+    assert "stream died" in end["reason"]
+    assert persisted[-1] == 1  # persisted AFTER the user message was appended
+    assert provider.closed is True
+
+
+def test_raw_stream_exception_is_wrapped_as_provider_error():
+    import httpx
+
+    from agent86.cognitive.base import ProviderError
+
+    harness, _provider, recorder, _ = _failing_harness(httpx.RemoteProtocolError("peer closed"))
+    state = harness.new_session()
+
+    with pytest.raises(ProviderError) as excinfo:
+        list(harness.run_turn("hi", state))
+
+    assert "RemoteProtocolError" in str(excinfo.value)
+    assert "fake:failing" in str(excinfo.value)
+    assert state.phase is AgentPhase.ERROR
+    assert _turn_end(recorder)["status"] == "error"
+
+
+def test_stream_without_final_completion_aborts_the_turn():
+    from agent86.orchestration.loop import HarnessError
+
+    class _NoFinal(ModelProvider):
+        name = "nofinal"
+        model = "fake:nofinal"
+
+        def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+            yield CompletionDelta(text="orphan")
+
+    harness = Harness(_config(), provider=_NoFinal(), memory=None)
+    recorder = _CapturingRecorder()
+    harness.recorder = recorder
+    state = harness.new_session()
+
+    with pytest.raises(HarnessError, match="without a final completion"):
+        list(harness.run_turn("hi", state))
+
+    assert state.phase is AgentPhase.ERROR
+    assert _turn_end(recorder)["status"] == "error"
+
+
 def test_cancel_at_idle_does_not_poison_the_next_turn():
     """`cancel()` with no turn running is a no-op — run_turn clears the flag on entry."""
     harness = Harness(_config(), provider=FakeProvider(), memory=None)

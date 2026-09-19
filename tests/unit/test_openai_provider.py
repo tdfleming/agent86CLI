@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 
+import httpx
+import pytest
+
 from agent86.cognitive import openai_provider as mod
+from agent86.cognitive.base import ProviderError
 from agent86.cognitive.openai_provider import OpenAIProvider
 from agent86.config import ProviderConfig
 from agent86.types import CompletionRequest, Message, Role, ToolCall
@@ -99,3 +103,40 @@ def test_message_conversion():
     assert fn["name"] == "t"
     assert json.loads(fn["arguments"]) == {"x": 1}
     assert out[3] == {"role": "tool", "tool_call_id": "c1", "content": "result"}
+
+
+def test_malformed_sse_chunk_becomes_provider_error(monkeypatch):
+    # A truncated SSE line used to escape as a bare json.JSONDecodeError, which names
+    # neither the endpoint nor the model.
+    _patch_stream(monkeypatch, [_sse({"choices": [{"delta": {"content": "hi"}}]}), "data: {oops"])
+    with pytest.raises(ProviderError) as excinfo:
+        _provider().complete(CompletionRequest(model="test-model", messages=[]))
+    message = str(excinfo.value)
+    assert "malformed streaming chunk" in message
+    assert "http://local/v1" in message
+    assert "test-model" in message
+
+
+def test_transport_failure_mid_stream_becomes_provider_error(monkeypatch):
+    class Resp:
+        status_code = 200
+        text = ""
+
+        def read(self):
+            pass
+
+        def iter_lines(self):
+            yield _sse({"choices": [{"delta": {"content": "hi"}}]})
+            raise httpx.RemoteProtocolError("peer closed connection without response")
+
+    class CM:
+        def __enter__(self):
+            return Resp()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(mod.httpx, "stream", lambda *a, **k: CM())
+
+    with pytest.raises(ProviderError, match="RemoteProtocolError"):
+        _provider().complete(CompletionRequest(model="test-model", messages=[]))

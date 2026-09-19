@@ -177,6 +177,22 @@ class OpenAIProvider(ModelProvider):
                 timeout=self._timeout,
                 section=None,
             ) from exc
+        except json.JSONDecodeError as exc:
+            # A truncated or non-SSE line. Left raw, this surfaced to the loop as a bare
+            # JSONDecodeError with no hint about which endpoint produced it.
+            raise ProviderError(
+                f"{self.name}: {self._url} returned a malformed streaming chunk for model "
+                f"{self.model!r} — could not parse the SSE 'data:' line as JSON ({exc}). "
+                "The stream was probably truncated, or the endpoint is not OpenAI-compatible."
+            ) from exc
+        except httpx.HTTPError as exc:
+            # RemoteProtocolError / ReadError / anything else transport-level: the connection
+            # died part-way through the response.
+            raise ProviderError(
+                f"{self.name}: the connection to {self._url} failed while streaming model "
+                f"{self.model!r} — {type(exc).__name__}: {exc}. The server closed the stream "
+                "early; retry, or check the endpoint and network."
+            ) from exc
 
         yield CompletionDelta(
             done=True,

@@ -144,6 +144,20 @@ class OllamaProvider(ModelProvider):
                 section="ollama",
                 connect_hint="Is it running? Start it with 'ollama serve'.",
             ) from exc
+        except json.JSONDecodeError as exc:
+            # Ollama streams NDJSON: one JSON object per line. A truncated line used to
+            # escape as a bare JSONDecodeError naming neither the server nor the model.
+            raise ProviderError(
+                f"{self.name}: {self._base_url}/api/chat returned a malformed NDJSON line "
+                f"for model {self.model!r} — {exc}. The stream was probably truncated; "
+                "retry, or check the Ollama server log."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(
+                f"{self.name}: the connection to {self._base_url}/api/chat failed while "
+                f"streaming model {self.model!r} — {type(exc).__name__}: {exc}. The server "
+                "closed the stream early; retry, or check that 'ollama serve' is healthy."
+            ) from exc
 
         completion = Completion(
             text="".join(text_parts),

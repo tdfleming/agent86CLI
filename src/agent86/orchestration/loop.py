@@ -307,6 +307,12 @@ class Harness:
                         if delta.done and delta.completion is not None:
                             completion = delta.completion
                         yield delta
+                except Exception as exc:
+                    # A provider failure mid-stream (dropped connection, malformed SSE,
+                    # HTTP error) used to escape here with the USER message already appended
+                    # and nothing persisted: no ERROR phase, no turn_end, an unresumable
+                    # session. Close the turn out properly, THEN surface the failure.
+                    raise self._stream_failed(state, sid, exc) from exc
                 finally:
                     # Breaking out of a generator leaves it suspended; close it so the
                     # provider's own `finally` runs and the HTTP response is released.
@@ -318,8 +324,13 @@ class Harness:
                 yield from self._cancelled(state, sid, breaker.steps)
                 return
 
-            if completion is None:  # pragma: no cover
-                raise HarnessError("Provider stream ended without a final completion.")
+            if completion is None:
+                self._abort(state, sid, "provider stream ended without a final completion")
+                raise HarnessError(
+                    f"The '{self.provider.name}' provider ended its stream for model "
+                    f"{self.provider.model!r} without a final completion. The response was "
+                    "truncated; retry, or check the endpoint's streaming implementation."
+                )
 
             breaker.record_step(completion.usage)
             self.recorder.event(
@@ -462,6 +473,28 @@ class Harness:
         self.recorder.event(sid, "turn_end", status="cancelled", reason="cancelled", steps=steps)
         self._persist(state)
         yield CompletionDelta(text="\n[cancelled]\n")
+
+    def _stream_failed(self, state: AgentState, sid: str, exc: BaseException) -> Exception:
+        """Close out a turn whose model call blew up, and return the error to raise.
+
+        The turn is aborted (ERROR phase, ``turn_end status="error"``, persisted) BEFORE the
+        exception leaves ``run_turn``, so a provider failure can never leave a session with a
+        dangling user message and no record of what happened. A ``ProviderError`` already
+        carries an actionable message and is surfaced unchanged; anything else (a raw httpx
+        or JSON error a provider failed to convert) is wrapped so callers only ever have to
+        handle the harness's own error types.
+        """
+        from agent86.cognitive.base import ProviderError
+
+        detail = f"{type(exc).__name__}: {exc}"
+        self._abort(state, sid, f"provider stream failed: {detail}")
+        if isinstance(exc, ProviderError):
+            return exc
+        return ProviderError(
+            f"The '{self.provider.name}' provider failed while streaming model "
+            f"{self.provider.model!r} — {detail}. The turn was halted and the session saved; "
+            "retry the request, or check the endpoint and network."
+        )
 
     def _abort(self, state: AgentState, sid: str, reason: str) -> None:
         state.phase = AgentPhase.ERROR
