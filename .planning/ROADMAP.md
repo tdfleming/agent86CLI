@@ -139,4 +139,64 @@ live stream region, removal of the dead prompt_toolkit rich loop and spinner, th
 flake, a clean ruff run, and the v0.6.0 docs + version bump.
 
 ---
-*Roadmap created: 2026-07-19 · Milestone complete: 2026-09-19 (5/5 phases)*
+
+# Roadmap: agent86 Trustworthy Milestone (v0.7)
+
+**Created:** 2026-09-19
+**Phases:** 1 | **Requirements mapped:** 8/8 ✓
+
+| # | Phase | Goal | Requirements | Success Criteria |
+|---|-------|------|--------------|------------------|
+| 6 | Trustworthy Harness | 8/8 | Complete | 2026-09-19 |
+
+### Phase 6: Trustworthy Harness
+**Goal:** close the gap between what the harness *reports* and what is true, and between what it
+*claims* to defend and what it defends. Every item was a v0.6 review finding, not new surface.
+
+**Requirements:** REL-01, REL-02, REL-03, REL-04, REL-05, SEC-02, SEC-03, SEC-04
+
+**Success criteria:**
+1. `limits.max_cost_usd` can trip, `/cost` and the status footer show real dollars for priced
+   models, `$0.0000` only for genuinely local ones, and `cost n/a (unpriced model)` where the
+   rate is unknown.
+2. A typo in `model.router` / `sandbox.mode` / `guardrails.ingress` / `guardrails.egress` fails
+   validation with the allowed values named, instead of silently disabling the feature.
+3. A provider failure mid-stream retries when transient and, when not, aborts the turn into the
+   ERROR phase with `turn_end status="error"` persisted — never a dangling turn; `limits.max_steps`
+   is the only step budget.
+4. `egress = "redact"` redacts what is streamed, what is stored, and what is later recalled, and
+   tool-call arguments are scanned.
+5. A delegated turn is bounded by `agents.max_steps`, trims its context, and bills its usage and
+   cost to the parent turn and the cost cap.
+6. `web_fetch` refuses loopback/private/link-local/reserved targets on every hop, tool and MCP
+   subprocesses get a curated environment rather than the host's, and a timed-out command takes
+   its whole process tree (and its container) with it.
+
+**Status:** Complete (2026-09-19). Executed as a review-driven pass rather than a numbered plan
+set — see `phases/06-trustworthy-harness/SUMMARY.md` for the commit-by-commit breakdown.
+
+**Commits** (oldest-first, `b230909..`):
+
+| Commit | Workstream |
+|---|---|
+| `3b75b24` fix(tui): close six mypy type holes in the TUI app shell | TUI types |
+| `9a5aa0e` test(tui): cover the no-pending-row and None-dismissal guards | TUI types |
+| `8a0d97b` feat(security): SSRF guard, redirect re-vetting and body cap for web_fetch | SEC-02 |
+| `1d24d31` fix(loop): never leave a turn dangling when a provider stream fails | REL-03 |
+| `7b5cb63` fix(sandbox): cross-platform env allowlist, opt-in passthrough, honest tool timeout | SEC-03 |
+| `6479ad0` fix(sandbox): kill the whole process tree and the container on timeout | SEC-03 |
+| `6bddd04` feat(cognitive): retry transient provider failures with backoff | REL-03 |
+| `7c2efc2` feat(pricing): populate the price table so the cost cap is real | REL-01 |
+| `4ac84ce` fix(guardrails): make egress redact mode actually redact | REL-04 |
+| `7e65fb8` feat(config): make mode fields enums and add the v0.7 shared contract fields | REL-02 |
+| `ad56066` fix(circuit): treat max_steps=None as "use limits.max_steps", not falsy | REL-03 |
+| `a17a484` fix(mcp): scrub the environment handed to stdio servers, and accumulate notes | SEC-04 |
+| `15d62b4` feat(tools): record and log tool-name collisions at startup | Tool registry |
+| `fd02c44` fix(ui): give the status line the full provider:model ref for pricing | REL-01 |
+| `9fa1519` fix(orchestration): drop the hidden 12-step cap and make sub-agents accountable | REL-03, REL-05 |
+| `3f37105` fix(tools): tell the model its tool-call JSON was malformed | REL-03 |
+| `2ea8642` fix(router): invalidate the provider cache when config changes | REL-03 |
+
+---
+*v0.6 roadmap created: 2026-07-19 · v0.6 complete: 2026-09-19 (5/5 phases)*
+*v0.7 roadmap created: 2026-09-19 · v0.7 complete: 2026-09-19 (1/1 phase, 8/8 requirements)*

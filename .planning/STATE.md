@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.6
-milestone_name: milestone
+milestone: v0.7
+milestone_name: Trustworthy harness
 status: complete
 last_updated: "2026-09-19"
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 30
-  completed_plans: 30
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
@@ -17,26 +17,72 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-07-19)
 
-**Core value:** Run, configure, and steer the agent entirely from within an interactive terminal
-app — no hand-editing TOML, no restarts.
-**Current focus:** v0.6 milestone complete (5/5 phases) — released as v0.6.0
+**Core value:** What the harness reports is true and what it claims to defend, it defends —
+on top of v0.6's "run, configure and steer the agent entirely from the terminal app".
+**Current focus:** v0.7 milestone complete (1/1 phase) — released as v0.7.0
 
 ## Milestone
 
-**v0.6 — Interactive** (agent86 now at v0.6.0)
-5 phases | 10 v1 requirements | 5 phases complete
+**v0.7 — Trustworthy harness** (agent86 now at v0.7.0)
+1 phase | 8 requirements (REL-01…REL-05, SEC-02…SEC-04) | 1 phase complete
+
+Previous: **v0.6 — Interactive** — 5 phases, 10 requirements, complete, released as v0.6.0.
 
 ## Progress
 
 | Phase | Status | Plans | Progress |
 |-------|--------|-------|----------|
-| 1 — TUI Skeleton + Live Status | ● | 5/5 | 100% |
-| 2 — Command Palette + Menus | ● | 4/4 | 100% |
-| 3 — Secrets + Model Config | ● | 13/13 | 100% |
-| 4 — MCP Config UI | ● | 8/8 | 100% |
-| 5 — Packaging & Hardening | ● | n/a | 100% |
+| 6 — Trustworthy Harness | ● | n/a | 100% |
+
+v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette + Menus ● 4/4 ·
+3 — Secrets + Model Config ● 13/13 · 4 — MCP Config UI ● 8/8 · 5 — Packaging & Hardening ● n/a.
 
 ## Recent Activity
+
+- 2026-09-19 — **Phase 6 (Trustworthy Harness) complete; v0.7 milestone complete at 1/1 phase
+  and released as v0.7.0.** Executed as a review-driven pass rather than a numbered plan set
+  (see `phases/06-trustworthy-harness/SUMMARY.md` for the commit-by-commit breakdown grouped by
+  workstream). **REL-01 pricing:** `cognitive/pricing.py`'s `PRICES` dict was empty, so
+  `estimate_cost` always returned `0.0` — `limits.max_cost_usd` was unreachable dead code and
+  `/cost` read `$0.0000` forever. A built-in USD-per-million-tokens table (Anthropic from the
+  Claude API reference, OpenAI from developers.openai.com fetched 2026-09-19) plus
+  `[pricing.models]` overrides via a `Config` post-validation hook, full-ref → bare-id →
+  dated-snapshot lookup, `ollama`/`llamacpp` priced at a *correct* zero, Groq/OpenRouter
+  deliberately unpriced and shown as `cost n/a (unpriced model)`; the plain REPL now sets
+  `status.model_ref` so the lookup gets a full ref. **REL-02 config:** the four mode fields are
+  `StrEnum`s (a typo like `egress = "redcat"` no longer silently disables a guardrail), plus
+  `providers.*.max_retries`, `agents.max_steps`, `tools.web_allow_private`,
+  `sandbox.env_passthrough` and `limits.tool_timeout_s`; the circuit breaker reads
+  `max_steps=None` by an explicit `is None`. **REL-03 resilience:** a failed or malformed
+  provider stream aborts the turn (ERROR phase, `turn_end status="error"`, persisted) and
+  surfaces a `ProviderError` instead of leaving an unresumable session; new `cognitive/retry.py`
+  retries 429/5xx/transport failures with exponential backoff + equal jitter and `Retry-After`,
+  never after the first streamed delta, with Anthropic delegating to the SDK's `max_retries`;
+  the hidden `_MAX_TURN_STEPS = 12` is gone so `limits.max_steps` (default 40) is the only
+  budget; malformed tool-call JSON returns a precise "invalid JSON in tool arguments" error
+  instead of `{}`; the router cache invalidates on `/model`. **REL-04 egress:** redact mode
+  buffers and replays the step's deltas from the inspected text, so a secret is never streamed,
+  stored, or recalled, and tool-call arguments are scanned (`stage="egress_tool_args"`).
+  **REL-05 sub-agents:** bounded by `agents.max_steps`, context-trimmed through the parent's
+  working memory, inheriting the compiled system prompt and skills list, recording `model_call`
+  events, and folding usage/cost into the parent turn and the cost cap (cost only, never
+  `record_step`). **SEC-02/03/04:** the `web_fetch` SSRF guard (scheme check, DNS-resolved
+  private/loopback/link-local refusal including IPv4-mapped/6to4/Teredo, manually re-vetted
+  redirects capped at 5, a 2 MB pre-decode body cap, content-type check,
+  `tools.web_allow_private` escape hatch); a cross-platform sandbox env allowlist with
+  `env_passthrough` refusing credential-looking names; process-tree kill on timeout (Windows
+  `taskkill /T`, POSIX `killpg`) plus `docker kill` of the named container; and MCP stdio
+  servers receiving the scrubbed sandbox env instead of the full host environment (same commit
+  fixes the `mcp` 2.0 `input_schema` rename that would have broken mounting against any real
+  2.x server, stops approval-gating `readOnlyHint` tools, accumulates failure notes, and makes
+  the manager restartable). Also: tool-name collisions are recorded and logged instead of
+  silently dropped, and two TUI crashes closed with their mypy type holes. Release: CHANGELOG
+  `[0.7.0] - 2026-09-19`, README status block plus new "Cost tracking", "Resilience" and
+  "Security model" sections, `docs/ARCHITECTURE.md` synced to 0.7.0 (§§5–7, 9–11 updated and
+  the claims the code doesn't back — harness-side rate limits, recursive summarization, the
+  tool-emulation shim, `web_search`, pipeline/blackboard topologies — moved to a "not built"
+  table in §15), and the version bumped to 0.7.0 in `pyproject.toml` and
+  `src/agent86/__init__.py`. 678 tests collected.
 
 - 2026-09-19 — **Phase 5 (Packaging & Hardening) complete; v0.6 milestone complete at 5/5
   phases and released as v0.6.0.** Executed as a review-driven hardening pass rather than a
@@ -567,16 +613,21 @@ app — no hand-editing TOML, no restarts.
 
 ## Next Step
 
-The v0.6 "Interactive" milestone is complete and shipped as **v0.6.0** — 5/5 phases, 10/10 v1
-requirements Complete. The orchestrator tags the release after the final full-suite run.
+The v0.7 "Trustworthy harness" milestone is complete and shipped as **v0.7.0** — 1/1 phase,
+8/8 requirements (REL-01…REL-05, SEC-02…SEC-04) Complete. Every v0.7 candidate recorded at the
+close of v0.6 shipped. The orchestrator tags the release after the final full-suite run.
 
-Outstanding (non-blocking) from earlier phases: manual Windows Terminal verification per
-`03-VALIDATION.md` §Manual-Only (real keyring round-trip, real `config.toml` comment
-preservation, live OpenRouter/Groq catalog schema check, a real turn against a cloud model) and
-of the full `/config mcp` flow against a real MCP server.
+**Next milestone: v0.8 — context & cost.** v0.6 made the harness usable and v0.7 made it honest;
+v0.8 is about spending the context window and the token budget *well* rather than merely
+reporting them accurately: context compaction/summarization of the trimmed span, Anthropic
+prompt-cache breakpoints, parallel execution of a turn's independent tool calls, `max_tokens`
+continuation, and a per-turn cost line in the footer and `/cost`. Candidates are recorded in
+`PROJECT.md` under **Next milestone candidates**.
 
-Next milestone candidates are recorded in `PROJECT.md` under **Next milestone candidates** —
-v0.7 "trustworthy harness": populate the pricing table, wire egress redact, provider-stream
-error handling with retries/backoff, MCP subprocess env scrubbing, a POSIX env allowlist, a
-`web_fetch` private-address guard, removing the 12-step hard cap, config enums, and sub-agent
-usage accounting. Deferred-beyond-v0.7 items are in `docs/BACKLOG.md`.
+Outstanding (non-blocking): the v0.7 review leftovers in `docs/BACKLOG.md` § "v0.7 review
+leftovers" (status-footer wrapping below ~127 columns, `web_fetch` approval gating, the
+per-turn cost line, `test_mcp_live`), plus the older deferred list in the same file. Still
+carried from v0.6: manual Windows Terminal verification per `03-VALIDATION.md` §Manual-Only
+(real keyring round-trip, real `config.toml` comment preservation, live OpenRouter/Groq catalog
+schema check, a real turn against a cloud model) and of the full `/config mcp` flow against a
+real MCP server.
