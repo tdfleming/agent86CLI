@@ -74,6 +74,13 @@ __all__ = ["Agent86App", "run_tui"]
 #: (it would wrongly suppress the catalog branch), so keep this an exact mirror of that chain.
 _BUILTIN_PROVIDERS = frozenset({"anthropic", "openai", "openai-compatible", "ollama", "llamacpp"})
 
+#: Leads the first chunk of each response written to the transcript (harness-owned markup).
+_AGENT_LABEL = "[bold cyan]agent86[/bold cyan] "
+
+#: Hard cap on how much text the live `#stream` widget may hold before a chunk is flushed to
+#: the transcript even without a paragraph break. Purely a bound; paragraph breaks do the work.
+_STREAM_TAIL_LIMIT = 2000
+
 
 class Agent86App(App):
     """The default interactive UI: transcript + prompt + live status footer."""
@@ -94,6 +101,12 @@ class Agent86App(App):
     }
     #stream {
         height: auto;
+        /* `height: auto` alone let a long answer grow without bound and push the prompt —
+           and the status footer — clean off the screen. The widget only ever holds the tail
+           (see _drain_stream_paragraphs); this is the belt-and-braces cap for a tail that is
+           still tall on a short terminal. */
+        max-height: 40%;
+        overflow-y: auto;
     }
     #palette {
         display: none;
@@ -127,6 +140,9 @@ class Agent86App(App):
         super().__init__()
         self.repl = repl
         self._stream_buf = ""
+        # Has this turn's response already been labelled `agent86` in the transcript? The
+        # label leads the FIRST chunk only, since a long response is flushed in pieces.
+        self._stream_labelled = False
         # Turn/cancellation state. `_shutdown_event` is shared with the turn worker
         # (turn_bridge): once set, a worker parked on an approval stops waiting and denies, so
         # quitting can never hang on a modal nobody is left to answer.
@@ -792,6 +808,7 @@ class Agent86App(App):
         self.query_one("#status", StatusFooter).status = self.repl.status
         self.query_one("#prompt", Input).disabled = True
         self._stream_buf = ""
+        self._stream_labelled = False
         self._turn_running = True
         self._cancel_requested = False
         self._run_turn(line)
@@ -913,6 +930,7 @@ class Agent86App(App):
 
     def on_turn_delta(self, message: TurnDelta) -> None:
         self._stream_buf += message.text
+        self._drain_stream_paragraphs()
         # Model text is untrusted: a `Text` render means `[/path/to/file]` can neither raise
         # MarkupError nor silently vanish into a style tag.
         self.query_one("#stream", Static).update(Text(self._stream_buf))
@@ -948,7 +966,7 @@ class Agent86App(App):
         self.push_screen(ApprovalModal(message.tool_name, message.preview), _resolve)
 
     def on_turn_done(self, message: TurnDone) -> None:
-        self._flush_stream(prefix="[bold cyan]agent86[/bold cyan] ")
+        self._flush_stream()
         self._end_turn()
 
     def on_turn_error(self, message: TurnError) -> None:
@@ -963,11 +981,40 @@ class Agent86App(App):
         self.query_one("#status", StatusFooter).status = self.repl.status
         self._reenable_input()
 
-    def _flush_stream(self, prefix: str = "") -> None:
+    def _drain_stream_paragraphs(self) -> None:
+        """Move completed paragraphs out of `#stream` and into the scrollback.
+
+        `#stream` is the live tail of the response; the transcript is the scrollback. Keeping
+        the whole response in `#stream` made a long answer grow the widget until the prompt
+        was off screen, and re-rendered the entire text on every delta. Flushing at paragraph
+        boundaries bounds both.
+        """
+        head, sep, tail = self._stream_buf.rpartition("\n\n")
+        if not sep:
+            if len(self._stream_buf) <= _STREAM_TAIL_LIMIT:
+                return
+            # One runaway paragraph with no blank line: break on the last newline, or — if
+            # there isn't one either — hard-split, so the tail always stays bounded.
+            head, sep, tail = self._stream_buf.rpartition("\n")
+            if not sep:
+                head, tail = self._stream_buf, ""
+        self._write_stream_chunk(head)
+        self._stream_buf = tail
+
+    def _write_stream_chunk(self, text: str) -> None:
+        """Write one chunk of MODEL text to the transcript, labelled once per turn."""
+        body = text.rstrip("\n")
+        if not body:
+            return
+        # The label is a harness-owned string (intentional markup) and only leads the first
+        # chunk of a response; the body is model text and is always escaped.
+        prefix = "" if self._stream_labelled else _AGENT_LABEL
+        self._stream_labelled = True
+        self._write(f"{prefix}{escape(body)}")
+
+    def _flush_stream(self) -> None:
         if self._stream_buf:
-            # The prefix is a harness-owned label (intentional markup); the buffer is model
-            # text and is always escaped.
-            self._write(f"{prefix}{escape(self._stream_buf)}")
+            self._write_stream_chunk(self._stream_buf)
         self.query_one("#stream", Static).update("")
         self._stream_buf = ""
 

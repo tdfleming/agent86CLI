@@ -177,3 +177,59 @@ async def test_approval_preview_with_brackets_renders(tmp_path):
         await pilot.press("escape")
         await _wait_until(lambda: repl.status.working is False)
         assert app.is_running
+
+
+# ---- long-response layout: `#stream` only holds the tail -------------------- #
+
+
+async def test_long_response_does_not_grow_the_stream_widget(tmp_path):
+    """`#stream` used to be uncapped `height: auto` holding the WHOLE response, so a long
+    answer pushed the prompt (and the footer) off screen. Completed paragraphs now move into
+    the transcript and only the tail stays live."""
+    from agent86.tui.messages import TurnDelta
+
+    repl = _make_repl(tmp_path, _TrickyProvider(reply="ok"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        for i in range(40):
+            app.on_turn_delta(TurnDelta(f"paragraph {i} body text\n\n"))
+        await pilot.pause()
+
+        assert app._stream_buf == ""                        # nothing but the (empty) tail
+        lines = _transcript(app)
+        assert "paragraph 0 body text" in lines             # everything reached the scrollback
+        assert "paragraph 39 body text" in lines
+        # The prompt and the footer are still on screen and usable.
+        assert app.query_one("#prompt", Input).region.height > 0
+        assert app.query_one("#status").region.height > 0
+
+
+async def test_stream_tail_is_bounded_without_paragraph_breaks(tmp_path):
+    from agent86.tui.app import _STREAM_TAIL_LIMIT
+    from agent86.tui.messages import TurnDelta
+
+    repl = _make_repl(tmp_path, _TrickyProvider(reply="ok"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        for _ in range(20):
+            app.on_turn_delta(TurnDelta("x" * 500))
+        await pilot.pause()
+        assert len(app._stream_buf) <= _STREAM_TAIL_LIMIT
+
+
+async def test_response_is_labelled_once_per_turn(tmp_path):
+    repl = _make_repl(tmp_path, _TrickyProvider(reply="one\n\ntwo\n\nthree"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(100, 50)) as pilot:
+        await pilot.pause()
+        app.query_one("#prompt", Input).value = "go"
+        await pilot.press("enter")
+        await _wait_until(lambda: repl.status.working is False)
+        await pilot.pause()
+
+        lines = _transcript(app)
+        assert lines.count("agent86") == 1
+        for word in ("one", "two", "three"):
+            assert word in lines
