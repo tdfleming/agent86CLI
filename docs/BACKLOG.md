@@ -10,6 +10,18 @@ to pick up later without re-deriving the analysis.
 **Status:** Shelved (2026-07-12). Analysed, not built. Current behaviour: `num_ctx` is a fixed
 config value (`[providers.ollama] num_ctx`, default `8192`), shipped in v0.5.3.
 
+> **Updated 2026-09-19 (v0.8).** This entry now has a second consumer.
+> `cognitive.capabilities.context_window_for` reads `[providers.ollama] num_ctx` as *the* Ollama
+> context window — the server, not the model name, owns it — and the conversation budget is
+> derived from that window (§8 of `docs/ARCHITECTURE.md`). So **caveat 4 below is resolved by
+> construction**: `max_context_tokens` no longer needs to be moved in step with `num_ctx`, because
+> it is no longer the budget (it defaults to `0` = no cap, and is only an optional hard cap on
+> top). Raising `num_ctx` now widens the *input* budget automatically. That makes Option A cheaper
+> than it was — bumping the default is a one-line change whose effect propagates — and makes
+> Options B/C more valuable, since an auto-sized window is immediately spent rather than merely
+> made available. What has not changed: Ollama silently offloads to CPU rather than erroring when
+> over-asked, so any auto-sizing must target "fits *without* offload" and carry a speed-aware cap.
+
 ### Motivation
 
 Ollama defaults to a small context window (~4k), which a `web_fetch` observation can fill,
@@ -84,24 +96,47 @@ platform-specific:
 
 ---
 
-## Review findings 2026-09-19 (deferred beyond v0.7)
+## Review findings 2026-09-19 (deferred beyond v0.7; § Context & cost closed in v0.8)
 
 Raised during the v0.6.0 release review. None of these block a release; all of them are things a
-Claude-Code-like harness eventually wants. The v0.7 "trustworthy harness" items live in
-`.planning/PROJECT.md`; this list is what sits *behind* them.
+Claude-Code-like harness eventually wants. The v0.7 "trustworthy harness" items and the v0.8
+"context & cost" items are done and live in `.planning/PROJECT.md`; what remains below is the v0.9
+and v1.0 surface.
 
 ### Context & cost
 
-- **Context compaction / summarization** — working memory trims by sliding window. A long
-  session should summarize the dropped span instead of forgetting it outright.
-- **Prompt caching** — the Anthropic provider doesn't mark cache breakpoints, so a stable system
-  prompt + tool schema block is re-billed every turn.
-- **Parallel tool calls** — the loop executes a turn's tool calls one at a time; independent
-  calls could run concurrently.
-- **`max_tokens` continuation** — a response truncated at the output cap currently just ends.
-  Detect the stop reason and continue.
+**✅ Shipped in v0.8.0 (2026-09-19)** — all four original entries in this section are built; see
+`.planning/phases/07-context-and-cost/SUMMARY.md`:
+
+- ~~Context compaction / summarization~~ → `[limits] compaction = "summarize"` (CTX-02)
+- ~~Prompt caching~~ → Anthropic `cache_control` on the stable prefix (COST-01), priced apart
+  from input (COST-02)
+- ~~Parallel tool calls~~ → reads concurrent, writes sequential and in order (CTX-04)
+- ~~`max_tokens` continuation~~ → up to 3 continuations per turn, each a breaker step (CTX-03)
+
+What that work *opened*, still not built:
+
+- **A compaction-quality eval.** The summarizer is tested for shape and placement — the header,
+  the merge into the next user message, the four invariants (tool pairs never split, the last 6
+  messages and the current turn never compacted, once per step, never raises), and the drop
+  fallback. None of that asks the only question that matters in practice: **does the digest
+  actually preserve what the rest of the session needs?** The shape of an eval: a fixture set of
+  long real sessions with a known fact planted early (a path, a decision, a user constraint), a
+  compaction forced at a known point, and an assertion that a follow-up turn which depends on that
+  fact still answers correctly — scored across the cheap and frontier summarizer models, since the
+  digest is written by whichever the router picks. Worth pairing with a token-budget regression
+  check: a digest that reliably runs long is a budget bug, not a quality one.
+- **Compaction is invisible in the trace UI.** The `compaction` recorder event and
+  `TurnSummary.compactions` exist, and the transcript shows a dim notice, but `agent86 trace show`
+  has no view of *what* was summarized. The originals are archived verbatim to episodic memory
+  (`kind="compaction"`), so the data is there; what's missing is a way to read it back.
+- **See also** § "Auto-size the Ollama context window (`num_ctx`) to the hardware" above, whose
+  relationship to the context budget changed in v0.8.
 
 ### TUI
+
+*The v0.9 "coding-agent UX" candidate set — see `.planning/PROJECT.md` § "Next milestone
+candidates".*
 
 - **Markdown rendering in the transcript** — model output is written as escaped plain text; code
   fences, lists, and tables deserve real rendering.
@@ -116,11 +151,15 @@ Claude-Code-like harness eventually wants. The v0.7 "trustworthy harness" items 
 
 ### Skills & tools
 
+*Also v0.9.*
+
 - **Agent Skills convention + `allowed-tools` enforcement** — align the `SKILL.md` frontmatter
   with the wider convention, and actually enforce a skill's declared tool allowlist while it is
   loaded (today it is documentation, not a gate).
 
 ### Observability
+
+*Candidates for v1.0, the release milestone.*
 
 - **OTel exporter wiring** — spans are emitted but there is no configured exporter, so nothing
   leaves the process.
@@ -128,6 +167,8 @@ Claude-Code-like harness eventually wants. The v0.7 "trustworthy harness" items 
   unredacted; it should scrub secrets on write and roll over by size/age.
 
 ### Release
+
+*Also v1.0.*
 
 - **PyPI release workflow** — a tagged release should build and publish (trusted publishing),
   rather than the project being install-from-source only.
@@ -138,38 +179,27 @@ Claude-Code-like harness eventually wants. The v0.7 "trustworthy harness" items 
 
 Raised during the v0.7.0 release review. None of them blocked the release; each is a decision
 deferred rather than a defect left open. The older, larger deferred list is above in
-§ "Review findings 2026-09-19".
+§ "Review findings 2026-09-19". Two of the four were closed by v0.8 and are struck through below,
+with what shipped and where it departed from the analysis recorded here.
 
-### The status footer wraps below ~127 columns
+### ~~The status footer wraps below ~127 columns~~
 
-**Status:** Measured, not fixed (2026-09-19). Pre-existing — the wrap is not new in v0.7, but
-v0.7's `cost n/a (unpriced model)` label makes the widest case wider.
+**Status: ✅ Done in v0.8.0** (`607595f`, with the keyed-segment groundwork in `9222a29`).
+`fit_status_line` fits the line to the widget's own width and sheds **whole segments** in a fixed
+order — the `[Shift+Tab]` hint, then the token counts, then the ctx gauge — rather than truncating
+the line or dropping sub-parts of a field. Tests cover 80/100/120/140 columns (one row, protected
+segments present, worst-case unpriced model), the resize round-trip, and the shed order itself.
 
-`format_status_line` renders, on one line:
+Two departures from the analysis recorded here in v0.7, both deliberate:
 
-```
-<model> · ctx <n>% (<used>/<window>) · <out> out · <cost> · sbx <mode> · mode: <approval>  [Shift+Tab]
-```
+- **Whole segments, not the window denominator.** Shedding `(3.4k/8k)` out of `ctx 42% (3.4k/8k)`
+  keeps a partial field on screen for a few characters of savings and needs its own render path;
+  shedding the gauge outright is simpler and frees more width at once.
+- **`sbx <mode>` is never shed.** It was fourth on the v0.7 shed list, but it belongs with the
+  approval mode: both say what the next tool call is allowed to reach. The protected set is model,
+  cost, approval mode, and the working/phase indicator, plus the sandbox mode.
 
-Measured on the reference machine: **2 rows at 80 columns, 2 rows at 100 columns**, 1 row from
-roughly 127 columns up. A two-row footer costs a transcript line and makes the live status jitter
-as the phase label changes length during a turn.
-
-The fix is to shed fields as the terminal narrows, not to truncate the whole line. Suggested
-order to shed, widest-first:
-
-1. The window denominator — `ctx 42% (3.4k/8k)` → `ctx 42%`. The percentage is the number being
-   watched; the absolute pair is reference material.
-2. `<out> out` — output tokens are also in `/cost` and the transcript.
-3. The `[Shift+Tab]` hint — discoverability, not state; the TUI footer has its own key display.
-4. `sbx <mode>` — it changes rarely and only by explicit flag.
-
-**Never shed the approval mode.** It is the field that tells the user whether the next tool call
-will stop and ask them. A footer that silently drops `mode: auto` at 80 columns is exactly the
-kind of quiet omission v0.7 exists to remove. If only one field can survive, it is that one.
-
-Note that the *unpriced* case (`cost n/a (unpriced model)`) is ~20 characters wider than
-`$0.0000`; an abbreviated `cost n/a` at narrow widths is a cheap partial win.
+The v0.7 rule that drove it survived intact: **never shed the approval mode.**
 
 ### `web_fetch` is not approval-gated, by design
 
@@ -189,19 +219,26 @@ which would also change tracing and policy semantics for a tool that still has n
 Egress considerations argue the same way: a fetched page is untrusted *input*, already covered by
 `[guardrails] scan_observations`.
 
-### Per-turn cost in the footer and `/cost`
+### ~~Per-turn cost in the footer and `/cost`~~
 
-**Status:** Not built (2026-09-19). Small, and the natural follow-on to REL-01.
+**Status: ✅ Done in v0.8.0** (`a87a4fa`, `32b7224`) as COST-03 — with one design change worth
+recording. The v0.7 sketch was a *second figure in the footer* (`$0.0041 turn / $0.19 session`).
+That was rejected: it adds width to the line the section above was trying to narrow, and the
+per-turn number is most useful **after** the turn, not during it. What shipped instead is
+`TurnSummary` on `state.last_turn` — published at turn start so a surface can watch it fill, and
+closed at every exit — rendered as one dim line when the turn ends, on the TUI, the plain loop and
+`agent86 run`'s stderr:
 
-The footer and `/cost` show the **session** total. The number a user actually watches while
-deciding whether to hit Escape is *this turn's* spend — a session total that has been climbing
-for an hour tells them nothing about whether the current turn is running away. `Step` already
-carries usage and `run_turn` already folds sub-agent usage into it, so the data is there; what is
-missing is a per-turn accumulator reset at turn start, a second figure in the footer
-(`$0.0041 turn / $0.19 session`), and a `/cost` breakdown by turn. Worth pairing with the
-narrow-terminal work above, since it adds width to the same line.
+```
+— 3 steps · 2 tools · 4.1k in / 612 out (1.9k cached) · $0.0123 · 8.2s
+```
 
-Tracked as a v0.8 "context & cost" candidate in `.planning/PROJECT.md`.
+The footer keeps the session total (plus the cached-token parenthetical), `/cost` gained cumulative
+cache reads/writes and savings, and `run --json` carries the summary under an additive `turn` key.
+
+Still open: **a `/cost` breakdown *by turn*** — the original entry asked for one and only the
+*last* turn is retained. A per-session list would need turn summaries kept in state (or read back
+from the flight recorder, which already has the data) rather than a single `last_turn` slot.
 
 ### `test_mcp_live` status
 
