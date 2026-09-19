@@ -15,10 +15,10 @@ background event loop so the synchronous harness can call MCP tools via
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from agent86.config import Config, MCPServerConfig
@@ -38,19 +38,22 @@ class MCPTool(Tool[EmptyArgs]):
     Args = EmptyArgs  # unused: spec() and run() are overridden (schema comes from the server)
 
     def __init__(self, manager: MCPManager, server: str, tool_name: str,
-                 description: str, input_schema: dict):
+                 description: str, input_schema: dict, read_only: bool = False):
         self._manager = manager
         self._server = server
         self._tool = tool_name
         self.name = _sanitize(f"mcp__{server}__{tool_name}")
         self.description = f"{description or tool_name} (MCP: {server})"
-        self.side_effecting = True  # external side effects -> gated by the approval gate
+        # External side effects -> gated by the approval gate, unless the server's own
+        # annotations say the tool only reads (readOnlyHint). Asking the user to approve a
+        # read is noise that trains them to approve everything.
+        self.side_effecting = not read_only
         self._schema = input_schema or {"type": "object", "properties": {}}
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name=self.name, description=self.description,
-            parameters=self._schema, side_effecting=True,
+            parameters=self._schema, side_effecting=self.side_effecting,
         )
 
     def execute(self, args: EmptyArgs, ctx: ToolContext) -> ToolResult:  # pragma: no cover
@@ -82,10 +85,44 @@ def _get_client_session() -> Any:
     return _ClientSession
 
 
+def _tool_schema(tool: Any) -> dict:
+    """The tool's JSON Schema, under either SDK spelling (``input_schema`` in mcp>=2)."""
+    schema = getattr(tool, "input_schema", None)
+    if schema is None:
+        schema = getattr(tool, "inputSchema", None)
+    return schema or {}
+
+
+def _is_read_only(tool: Any) -> bool:
+    """True when the server annotates the tool with ``readOnlyHint``.
+
+    A hint from a remote server is advisory, so it can only ever *relax* the approval gate
+    for a tool the user already chose to mount — never grant anything else.
+    """
+    ann = getattr(tool, "annotations", None)
+    if ann is None:
+        return False
+    if isinstance(ann, dict):
+        value = ann.get("readOnlyHint", ann.get("read_only_hint"))
+    else:
+        value = getattr(ann, "read_only_hint", None)
+        if value is None:
+            value = getattr(ann, "readOnlyHint", None)
+    return value is True
+
+
 class MCPManager:
-    def __init__(self, servers: dict[str, MCPServerConfig]):
+    def __init__(
+        self,
+        servers: dict[str, MCPServerConfig],
+        env_passthrough: list[str] | None = None,
+    ):
         self.servers = servers
+        #: Every degradation seen since construction, oldest first. ``note`` renders them all —
+        #: with several bad servers, overwriting one string hid every failure but the last.
+        self.notes: list[str] = []
         self.note: str | None = None
+        self.env_passthrough = list(env_passthrough or [])
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._sessions: dict[str, Any] = {}
@@ -93,6 +130,12 @@ class MCPManager:
         self._close_events: dict[str, Any] = {}  # name -> asyncio.Event
         self._server_tools: dict[str, list[MCPTool]] = {}
         self._started = False
+
+    def _add_note(self, message: str) -> None:
+        """Record a degradation without erasing the previous one."""
+        if message not in self.notes:
+            self.notes.append(message)
+        self.note = "\n".join(self.notes)
 
     def _ensure_loop(self) -> None:
         """Start the background event loop, lazily importing `mcp`. Raises if it is missing.
@@ -107,10 +150,11 @@ class MCPManager:
 
             from mcp import ClientSession  # noqa: F401 - import probe
         except ImportError as exc:
-            self.note = (
+            message = (
                 'mcp package not installed; MCP tools unavailable (pip install "agent86[mcp]").'
             )
-            raise RuntimeError(self.note) from exc
+            self._add_note(message)
+            raise RuntimeError(message) from exc
         self._started = True
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -166,7 +210,9 @@ class MCPManager:
 
         try:
             async with AsyncExitStack() as stack:
-                streams = await stack.enter_async_context(_open_transport(cfg))
+                streams = await stack.enter_async_context(
+                    _open_transport(cfg, self.env_passthrough)
+                )
                 # sse/stdio yield (read, write); streamable HTTP yields a 3rd
                 # get_session_id we don't need — take the first two either way.
                 read, write = streams[0], streams[1]
@@ -174,7 +220,14 @@ class MCPManager:
                 await session.initialize()
                 listed = await session.list_tools()
                 tools = [
-                    MCPTool(self, name, t.name, t.description or "", t.inputSchema or {})
+                    MCPTool(
+                        self,
+                        name,
+                        t.name,
+                        t.description or "",
+                        _tool_schema(t),
+                        read_only=_is_read_only(t),
+                    )
                     for t in listed.tools
                 ]
                 self._sessions[name] = session
@@ -203,7 +256,7 @@ class MCPManager:
         try:
             asyncio.run_coroutine_threadsafe(_stop(), self._loop).result(timeout=timeout)
         except Exception as exc:  # noqa: BLE001 - a stuck teardown must not wedge the app
-            self.note = f"MCP server '{name}' did not shut down cleanly: {exc}"
+            self._add_note(f"MCP server '{name}' did not shut down cleanly: {exc}")
         self._sessions.pop(name, None)
 
     def tools_for(self, name: str) -> list[MCPTool]:
@@ -223,7 +276,7 @@ class MCPManager:
             try:
                 self.start_server(name, cfg)
             except Exception as exc:  # noqa: BLE001 - one bad server degrades to a note
-                self.note = f"MCP server '{name}' failed to start: {exc}"
+                self._add_note(f"MCP server '{name}' failed to start: {exc}")
 
     def _run_loop(self) -> None:
         assert self._loop is not None
@@ -242,28 +295,40 @@ class MCPManager:
         return asyncio.run_coroutine_threadsafe(_call(), self._loop).result(timeout=120)
 
     def close(self) -> None:
-        if self._loop is None:
-            return
-        for name in list(self._tasks):
-            self.stop_server(name)
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._thread:
-            self._thread.join(timeout=5)
+        """Shut every server down and return the manager to a restartable state.
+
+        ``_started`` is reset (and the loop/thread handles dropped) so a later ``start()``
+        actually reconnects — before, close() left the flag set and start() returned silently,
+        so toggling MCP off and on again ended up with no tools and no explanation.
+        """
+        if self._loop is not None:
+            for name in list(self._tasks):
+                self.stop_server(name)
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread:
+                self._thread.join(timeout=5)
         self._loop = None
+        self._thread = None
+        self._started = False
+        self._sessions.clear()
+        self._tasks.clear()
+        self._close_events.clear()
+        self._server_tools.clear()
 
 
 @asynccontextmanager
 async def _streamable_http(url: str, headers: dict[str, str]) -> Any:
     """Streamable-HTTP transport, owning the httpx client's lifecycle.
 
-    The SDK's ``streamable_http_client`` takes a caller-provided httpx client (the older
-    all-in-one ``streamablehttp_client`` is deprecated), so we create one here — carrying any
-    auth ``headers`` — and close it with the transport. Yields the transport's stream tuple.
+    The SDK's ``streamable_http_client`` takes a caller-provided client (the older all-in-one
+    ``streamablehttp_client`` is deprecated) — and in mcp>=2 that client is an
+    ``httpx2.AsyncClient``, not an ``httpx`` one. Building it with the SDK's own
+    ``create_mcp_http_client`` keeps the types honest (no cast, no ignore) and picks up the
+    recommended MCP timeouts for free. Yields the transport's stream tuple.
     """
-    import httpx
-    from mcp.client.streamable_http import streamable_http_client
+    from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
-    async with httpx.AsyncClient(headers=headers or None) as client:
+    async with create_mcp_http_client(headers=headers or None) as client:
         async with streamable_http_client(url, http_client=client) as streams:
             yield streams
 
@@ -308,7 +373,26 @@ def unresolved_var_refs(cfg: MCPServerConfig, overrides: dict[str, str] | None =
     return missing
 
 
-def _open_transport(cfg: MCPServerConfig) -> Any:
+def stdio_env(cfg: MCPServerConfig, env_passthrough: list[str] | None = None) -> dict[str, str]:
+    """The environment a stdio MCP server subprocess gets.
+
+    It used to be ``{**os.environ, **cfg.env}`` as soon as a server declared *any* env var —
+    which handed a third-party subprocess every API key on the machine. Now it is the same
+    scrubbed environment tool subprocesses get (platform allowlist + the user's
+    ``sandbox.env_passthrough``, credential-looking names refused), with the server's own
+    ``cfg.env`` layered on top. Those values have already had their ``${VAR}`` references
+    resolved by ``_resolve_server_secrets``, so a server that genuinely needs a credential
+    still gets exactly the one it asked for — and nothing else.
+    """
+    from agent86.tools.sandbox.policy import SandboxPolicy
+
+    policy = SandboxPolicy(workspace=Path.cwd(), env_passthrough=list(env_passthrough or []))
+    env = policy.scrubbed_env()
+    env.update(cfg.env)
+    return env
+
+
+def _open_transport(cfg: MCPServerConfig, env_passthrough: list[str] | None = None) -> Any:
     """Return the async transport context manager for a server's configured transport.
 
     ``cfg`` is expected to already be ``${VAR}``-resolved (see ``_resolve_server_secrets``) —
@@ -327,7 +411,7 @@ def _open_transport(cfg: MCPServerConfig) -> Any:
         params = StdioServerParameters(
             command=cfg.command,
             args=cfg.args,
-            env={**os.environ, **cfg.env} if cfg.env else None,
+            env=stdio_env(cfg, env_passthrough),
         )
         return stdio_client(params)
     assert cfg.url is not None
@@ -362,9 +446,18 @@ def build_mcp(config: Config) -> MCPManager | None:
     enabled = {name: cfg for name, cfg in config.mcp_servers.items() if cfg.enabled}
     if not enabled:
         return None
-    manager = MCPManager(enabled)
+    manager = MCPManager(
+        enabled, env_passthrough=list(getattr(config.sandbox, "env_passthrough", []) or [])
+    )
     manager.start()
     return manager
 
 
-__all__ = ["MCPManager", "MCPTool", "build_mcp", "_resolve_server_secrets", "unresolved_var_refs"]
+__all__ = [
+    "MCPManager",
+    "MCPTool",
+    "build_mcp",
+    "stdio_env",
+    "_resolve_server_secrets",
+    "unresolved_var_refs",
+]
