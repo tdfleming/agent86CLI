@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 
 from agent86.config import load_config
 from agent86.memory import embeddings as emb
-from agent86.memory.embeddings import HashingEmbedder, build_embedder
+from agent86.memory.embeddings import (
+    HashingEmbedder,
+    SentenceTransformerEmbedder,
+    build_embedder,
+)
 from agent86.memory.episodic import EpisodicMemory
 from agent86.memory.semantic import SemanticMemory
 from agent86.memory.store import MemoryStore
@@ -35,11 +41,53 @@ def test_hash_embedder_is_deterministic_and_unit_norm():
     assert abs(sum(x * x for x in a) - 1.0) < 1e-6
 
 
-def test_build_embedder_falls_back_without_torch():
+def test_build_embedder_falls_back_without_torch(monkeypatch):
+    """The fallback branch, forced — never "torch happens to be absent on this machine".
+
+    `SentenceTransformerEmbedder.__init__` does `from sentence_transformers import
+    SentenceTransformer`. Binding that name to None in `sys.modules` makes the import
+    statement raise ModuleNotFoundError (CPython treats a None entry as "this module is known
+    to be unimportable"), which is exactly what a missing torch looks like from
+    `build_embedder`'s side. monkeypatch restores the previous entry at teardown, so a machine
+    that does have the `local` extra installed keeps it for every other test.
+    """
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
     embedder, note = build_embedder("sentence-transformers:all-MiniLM-L6-v2")
-    # torch isn't installed in the test env -> hash fallback with a note
+
     assert isinstance(embedder, HashingEmbedder)
     assert note and "hash embedder" in note
+    # The note names the failure so the user can tell a missing dep from a download error.
+    assert "sentence-transformers unavailable (ModuleNotFoundError)" in note
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("sentence_transformers") is None,
+    reason="requires the 'local' extra (sentence-transformers)",
+)
+def test_build_embedder_uses_sentence_transformers_when_installed(monkeypatch):
+    """With the library importable, the spec must resolve to the real embedder, not the fallback.
+
+    The SentenceTransformer class is stubbed so the test never downloads a model or touches the
+    network; what is under test is the branch `build_embedder` takes, not the model itself.
+    """
+    import sentence_transformers
+
+    class _StubModel:
+        def __init__(self, model_name: str) -> None:
+            self.model_name = model_name
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 384
+
+    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", _StubModel)
+
+    embedder, note = build_embedder("sentence-transformers:all-MiniLM-L6-v2")
+
+    assert isinstance(embedder, SentenceTransformerEmbedder)
+    assert note is None
+    assert embedder.dim == 384
+    assert embedder.spec == "sentence-transformers:all-MiniLM-L6-v2"
 
 
 def test_build_embedder_explicit_hash():
