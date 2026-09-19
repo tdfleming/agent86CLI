@@ -8,14 +8,23 @@ subprocess* tier — pragmatic isolation on Windows; Docker (Phase 9) adds true 
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 # Environment variables safe to forward into tool subprocesses. Anything not listed
 # (notably ANTHROPIC_API_KEY / OPENAI_API_KEY and other secrets) is scrubbed.
-_ENV_ALLOWLIST = (
+_ENV_ALLOWLIST_COMMON = (
     "PATH",
+    "LANG",
+    "LC_ALL",
+    "PYTHONIOENCODING",
+    "PYTHONUTF8",
+)
+_ENV_ALLOWLIST_WINDOWS = (
     "PATHEXT",
     "SYSTEMROOT",
     "WINDIR",
@@ -30,11 +39,43 @@ _ENV_ALLOWLIST = (
     "NUMBER_OF_PROCESSORS",
     "PROCESSOR_ARCHITECTURE",
     "OS",
-    "LANG",
-    "LC_ALL",
-    "PYTHONIOENCODING",
-    "PYTHONUTF8",
 )
+# Without these, a subprocess on macOS/Linux has no home, no temp dir, no locale and no CA
+# bundle — which breaks git (config + credential lookup), pip, and npm outright.
+_ENV_ALLOWLIST_POSIX = (
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "TERM",
+    "TZ",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+)
+#: Whole families that are safe and meaningless one-by-one (locale categories, XDG dirs).
+_ENV_ALLOWLIST_PREFIXES = ("LC_", "XDG_")
+
+#: Substrings that mark a variable as a credential. These are refused even when the user
+#: names them in ``sandbox.env_passthrough`` — an allowlist entry must not become a way to
+#: hand the model's subprocesses the key that pays for the model.
+_SECRET_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "API_KEY")
+_SECRET_SUFFIXES = ("_KEY",)
+
+
+def env_allowlist() -> tuple[str, ...]:
+    """The exact-name allowlist for this platform."""
+    platform_names = _ENV_ALLOWLIST_WINDOWS if os.name == "nt" else _ENV_ALLOWLIST_POSIX
+    return _ENV_ALLOWLIST_COMMON + platform_names
+
+
+def is_secret_name(name: str) -> bool:
+    """True if ``name`` looks like it holds a credential."""
+    upper = name.upper()
+    return any(m in upper for m in _SECRET_MARKERS) or upper.endswith(_SECRET_SUFFIXES)
 
 
 class PolicyError(RuntimeError):
@@ -50,6 +91,9 @@ class SandboxPolicy:
     network: bool = True
     timeout_s: int = 30
     max_output_bytes: int = 100_000
+    #: Extra environment variable names the user opted into ([sandbox] env_passthrough).
+    #: Credential-looking names are refused here no matter what the config says.
+    env_passthrough: list[str] = field(default_factory=list)
 
     # ---- path jail ---------------------------------------------------- #
 
@@ -76,7 +120,26 @@ class SandboxPolicy:
     # ---- environment scrubbing --------------------------------------- #
 
     def scrubbed_env(self) -> dict[str, str]:
-        env = {k: os.environ[k] for k in _ENV_ALLOWLIST if k in os.environ}
+        """The environment a tool subprocess gets: allowlist + opt-in passthrough, no secrets."""
+        allowed = env_allowlist()
+        env = {k: v for k, v in os.environ.items() if k in allowed}
+        env.update(
+            {
+                k: v
+                for k, v in os.environ.items()
+                if k.startswith(_ENV_ALLOWLIST_PREFIXES) and not is_secret_name(k)
+            }
+        )
+        for name in self.env_passthrough:
+            if is_secret_name(name):
+                logger.warning(
+                    "sandbox.env_passthrough entry %r looks like a credential; refusing to "
+                    "forward it into tool subprocesses.",
+                    name,
+                )
+                continue
+            if name in os.environ:
+                env[name] = os.environ[name]
         env.setdefault("PYTHONIOENCODING", "utf-8")
         return env
 
@@ -90,13 +153,26 @@ class SandboxPolicy:
 
 
 def default_policy(config, workspace: Path | None = None) -> SandboxPolicy:
-    """Build the default policy from config and the current workspace."""
+    """Build the default policy from config and the current workspace.
+
+    ``timeout_s`` is a *per-tool* budget and comes from ``limits.tool_timeout_s``; it used to
+    be derived from the whole-run wall clock (``max_wall_clock_s`` when under 120s, else 60),
+    which silently shortened tool timeouts for anyone who lowered the run budget and was
+    impossible to configure directly.
+    """
     ws = (workspace or Path.cwd()).resolve()
     return SandboxPolicy(
         workspace=ws,
         network=True,
-        timeout_s=config.limits.max_wall_clock_s if config.limits.max_wall_clock_s < 120 else 60,
+        timeout_s=int(getattr(config.limits, "tool_timeout_s", 60)),
+        env_passthrough=list(getattr(config.sandbox, "env_passthrough", []) or []),
     )
 
 
-__all__ = ["SandboxPolicy", "PolicyError", "default_policy"]
+__all__ = [
+    "SandboxPolicy",
+    "PolicyError",
+    "default_policy",
+    "env_allowlist",
+    "is_secret_name",
+]
