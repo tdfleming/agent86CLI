@@ -30,3 +30,29 @@
   here (scope boundary) — needs a real fix (likely a `CatalogPickerModal` widget-mount race or
   shared-state leak between Pilot apps) filed against whichever plan next touches
   `provider_manager.py`.
+
+## Resolved
+
+- **RESOLVED in 67a79ca** (`fix(tui): stop CatalogPickerModal.on_mount raising NoMatches during
+  shutdown`) — both items above are the same bug. The guess recorded in plan 04-05 was right: a
+  widget-mount race, not a shared-state leak between Pilot apps.
+
+  Root cause: `CatalogPickerModal` is pushed from `Agent86App.on_catalog_ready`, i.e. off the back
+  of a catalog-fetch worker, so the push can land at any moment — the app's shutdown window
+  included. Once `App._running` flips False, `App._register` deliberately returns no widgets
+  ("prevent awaiting of the widget tasks"), so `mount_all` stops awaiting the composed children
+  and Textual dispatches `Mount` with the dialog still empty. The unguarded
+  `query_one("#catalog-filter")` in `on_mount` then raised, Textual routed it to
+  `App._handle_exception`, and `run_test()` re-raised it from whichever test's teardown happened
+  to be in flight — which is why the failure wandered between `test_provider_manager.py` and
+  `test_app.py` with collection order.
+
+  That also explains the order-dependence that made it look like a test artifact: the trigger was
+  `test_switch_is_immediate_persist_is_separate` selecting a provider that has a key on a
+  developer machine, which kicked off a *live* `fetch_catalog` network call whose result landed at
+  an unpredictable moment. 67a79ca stubs it (dropping that file from ~60s to under 4s) and makes
+  `_focus_filter` query instead of `query_one`.
+
+  Follow-up: 2854d19 applies the same guard to the five sibling modals with the same exposure
+  (`key_entry`, `connection_test`, `mcp_test`, `mcp_manager`, `save_diff`), each with a regression
+  test that reproduces the identical `NoMatches` against the unguarded code.
