@@ -28,7 +28,19 @@ def test_context_window_known_models():
     cfg = load_config()
     assert context_window_for("anthropic:claude-opus-4-8", cfg) == 200_000
     assert context_window_for("openai:gpt-4o", cfg) == 128_000
-    assert context_window_for("ollama:qwen2.5:3b", cfg) == 32_768
+
+
+def test_context_window_agrees_with_the_harness_budget():
+    """The gauge and the compaction budget must resolve the SAME window, or the bar lies.
+
+    Notably for Ollama, where the *server* owns the window (`num_ctx`) and the model name
+    says nothing about it.
+    """
+    from agent86.cognitive.capabilities import context_window_for as budget_window
+
+    cfg = load_config()
+    for ref in ("anthropic:claude-opus-4-8", "openai:gpt-4o", "ollama:qwen2.5:3b"):
+        assert context_window_for(ref, cfg) == budget_window(ref, cfg)
 
 
 def test_context_window_unknown_falls_back():

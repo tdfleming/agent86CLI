@@ -38,7 +38,19 @@ _WINDOWS: list[tuple[str, int]] = [
 
 
 def context_window_for(model_ref: str, config: Config) -> int:
-    """Resolve the context window (tokens) for a ``provider:model`` ref."""
+    """Resolve the context window (tokens) for a ``provider:model`` ref.
+
+    Delegates to ``cognitive.capabilities`` — the same resolution the harness budgets and
+    compacts against — so the gauge and the budget can never disagree (it knows, for
+    instance, that an Ollama window is whatever ``num_ctx`` asks for, not what the model
+    name suggests). The table below is the fallback for a tree without that module.
+    """
+    try:
+        from agent86.cognitive.capabilities import context_window_for as _capability_window
+    except ImportError:  # pragma: no cover - older tree
+        pass
+    else:
+        return _capability_window(model_ref, config)
     override = config.model.context_window.get(model_ref)
     if override:
         return int(override)
