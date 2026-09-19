@@ -5,14 +5,16 @@
 > implementation of the five-tier architecture and four pillars described in
 > *The Agentic Harness* (Tony Fleming, 2026).
 
-**Status:** Implemented (Phases 1–9 complete), then extended through v0.4.1. This document is
+**Status:** Implemented (Phases 1–9 complete), then extended through v0.6.0. This document is
 the contract the code was built against; the build followed §14 phase-by-phase, each phase
 verified with tests and a live run against a local model. Post-v0.1 releases added an
-interactive REPL with a persistent status line, processing spinner, and live approval-mode
-and model switching (v0.2, v0.4); memory management via `memory prune`/`forget` plus automatic
-log retention (v0.3, v0.4); and first-class OpenAI-compatible cloud providers — OpenRouter,
-Groq, and any configured `base_url` endpoint (v0.4).
-**Version:** 0.4.1
+interactive REPL with a persistent status line and live approval-mode and model switching
+(v0.2, v0.4); memory management via `memory prune`/`forget` plus automatic log retention
+(v0.3, v0.4); first-class OpenAI-compatible cloud providers — OpenRouter, Groq, and any
+configured `base_url` endpoint (v0.4); MCP over SSE and streamable HTTP (v0.5); and a
+full-screen Textual TUI as the default interactive UI, with in-app model/provider and MCP
+configuration, keyring-backed secrets, and cancellable turns (v0.6).
+**Version:** 0.6.0
 
 ---
 
@@ -105,13 +107,15 @@ agent86CLI/
 ├── src/agent86/
 │   ├── __init__.py
 │   ├── __main__.py                # python -m agent86
-│   ├── cli.py                     # Typer app: repl + `run` one-shot
-│   ├── config.py                  # layered config (defaults→file→env→flags), profiles, secrets
+│   ├── cli.py                     # Typer app: interactive entry + `run` one-shot
+│   ├── config.py                  # layered config (defaults→file→env→flags) — READ ONLY
+│   ├── config_writer.py           # the only TOML writer: tomlkit round-trip, diff, atomic write
+│   ├── secrets.py                 # env→keyring key resolution, ${VAR} refs, redaction
 │   ├── types.py                   # shared dataclasses/Pydantic: Message, Step, ToolCall, ToolResult
 │   │
 │   ├── gateway/                   # ── Tier 1 (thin) ──
 │   │   └── __init__.py            #   session lifecycle folded into orchestration/state.py + loop.py;
-│   │                             #   input sanitization lives in cli.py + guardrails/ingress.py
+│   │                             #   input sanitization lives in cli.py/tui/ + guardrails/ingress.py
 │   │
 │   ├── orchestration/             # ── Tier 2 / Pillar 1 ──
 │   │   ├── loop.py                #   ReAct execution loop (perceive→reason→act→observe)
@@ -174,14 +178,34 @@ agent86CLI/
 │   │   ├── broker.py              #   in-process message bus
 │   │   └── orchestrator.py        #   supervisor orchestrator — sub-agent fan-out
 │   │
+│   ├── tui/                       # ── Interactive UI (Textual — lazy-imported) ──
+│   │   ├── app.py                 #   Agent86App: transcript, prompt, palette, key bindings,
+│   │   │                          #   worker turns, cancellation, /config chains
+│   │   ├── commands.py            #   the one declarative COMMANDS registry (dispatch + /help
+│   │   │                          #   + palette), shared with the plain loop
+│   │   ├── messages.py            #   Textual messages posted from the turn worker
+│   │   ├── turn_bridge.py         #   sync threaded harness generator → async Textual messages
+│   │   ├── widgets/
+│   │   │   └── status_footer.py   #   live footer: model / ctx% / tokens / cost / phase
+│   │   └── screens/
+│   │       ├── approval.py        #   tool-approval modal (replaces the inline y/N)
+│   │       ├── mode_picker.py     #   arrow-key approval-mode picker
+│   │       ├── model_picker.py    #   arrow-key / type-to-filter model + catalog picker
+│   │       ├── provider_manager.py#   /config model: list, add, edit providers
+│   │       ├── key_entry.py       #   masked API-key / ${VAR} entry (never echoed)
+│   │       ├── connection_test.py #   live provider connection test (worker + timeout)
+│   │       ├── mcp_manager.py     #   /config mcp: server list + add/edit form
+│   │       ├── mcp_test.py        #   MCP connection test with tool enumeration
+│   │       └── save_diff.py       #   scope radio + TOML diff preview before any write
+│   │
 │   └── ui/
-│       ├── repl.py                #   Rich/prompt_toolkit interactive loop, streaming render
-│       ├── status.py              #   status-line model (context %, tokens, cost, modes)
-│       └── spinner.py             #   threaded processing spinner
+│       ├── repl.py                #   harness construction, TUI/plain routing, plain input() loop
+│       └── status.py              #   status-line model (context %, tokens, cost, modes)
 │
 └── tests/
     ├── unit/                      # prompt templates, schema validators, state transitions
-    └── integration/               # simulated-world trajectory tests
+    ├── integration/               # simulated-world trajectory tests
+    └── tui/                       # headless Textual `Pilot` tests of the screens and flows
 ```
 
 ---
@@ -342,6 +366,18 @@ Layered resolution (later overrides earlier): **built-in defaults → `~/.agent8
 → project `./.agent86/config.toml` → env vars → CLI flags**. Secrets (API keys) come from
 env or the OS keyring, never written to config files.
 
+`config.py` is **read-only** — it resolves and validates, and never writes. Every write goes
+through **`config_writer.py`**, the single writer: a tomlkit round-trip so existing comments and
+formatting survive, a scope choice (user by default, project opt-in), a rendered diff the user
+confirms before anything lands, and an atomic replace. It also carries the **SEC-01 guard** that
+refuses secret-looking leaf keys, so an in-app flow physically cannot write a plaintext key.
+
+**Secret resolution** (`secrets.py`) is: **environment variable first, then the OS keyring**
+(`keyring`, lazy-imported). Existing env-var setups keep working unchanged, and a headless or
+backend-less machine falls through silently rather than failing. Config never names a secret,
+only the env var that holds it (`api_key_env`); MCP entries may hold a `${VAR}` reference, which
+is expanded at connect time, at the transport boundary.
+
 ```toml
 [model]
 default   = "anthropic:claude-opus-4-8"
@@ -355,26 +391,30 @@ frontier  = "anthropic:claude-opus-4-8"
 [providers.ollama]     base_url = "http://localhost:11434"
 [providers.llamacpp]   base_url = "http://localhost:8080"
 
+[ui]          tui = true             # false → the plain input() loop (pre-v0.6: `status_line`)
+
 [sandbox]     mode = "subprocess"    # subprocess | docker
 [guardrails]  approval = "ask"       # auto | ask | deny  (per-category overrides allowed)
 [memory]      path = "~/.agent86/memory.db"  embeddings = "sentence-transformers:all-MiniLM-L6-v2"
 [limits]      max_steps = 40  max_cost_usd = 5.0  max_wall_clock_s = 900
 
 [mcp.servers.example]  command = "npx"  args = ["-y", "some-mcp-server"]   # stdio (local subprocess)
-[mcp.servers.remote]   url = "https://mcp.example.com/mcp"                  # streamable HTTP (transport inferred)
+[mcp.servers.remote]   url = "https://mcp.example.com/mcp"  enabled = true  # streamable HTTP (transport inferred)
 [mcp.servers.remote.headers]  Authorization = "Bearer ${TOKEN}"           # optional auth headers
 ```
 
 An MCP server is reached over one of three transports: **stdio** (default — set `command`),
 **streamable HTTP** (default when `url` is set), or **SSE** (`url` + `transport = "sse"`). Exactly
 one of `command`/`url` is required; the transport is inferred but can be set explicitly.
+`enabled = false` keeps a server configured but unmounted.
 
 ---
 
 ## 12. CLI surface
 
 ```
-agent86                          # interactive REPL
+agent86                          # interactive: the full-screen Textual TUI
+agent86 --plain                  # interactive: the plain input() loop
 agent86 run "goal"               # one-shot; prints result, exits (scriptable/pipeable)
 agent86 run "goal" --json        # structured output for automation
 agent86 --model ollama:llama3.1  # override model
@@ -386,7 +426,34 @@ agent86 trace [show|tail]        # inspect the flight recorder
 agent86 models                   # list configured/available models across providers
 ```
 
-In-REPL: `/help`, `/model`, `/tools`, `/skills`, `/memory`, `/cost`, `/approve`, `/clear`, `/exit`.
+**Two interactive surfaces, one command registry.** The default is the **TUI** (`tui/app.py`):
+a scrollable transcript, a prompt input, a live status footer (model · ctx% · tokens · cost ·
+phase, updating *while* a turn runs), a `/`-triggered command palette with autocomplete,
+arrow-key pickers for commands that need a choice, and a modal approval dialog. The harness is
+built once, in `ui/repl.py`, and handed to `run_tui`.
+
+The **plain loop** (stdlib `input()`) runs when `[ui] tui = false`, `--plain`, `AGENT86_PLAIN`,
+a non-TTY stdin/stdout, or Textual can't be imported or started. Both surfaces dispatch through
+the same declarative `COMMANDS` registry in `tui/commands.py`, which also backs `/help` and the
+palette, so the two can't drift; commands that need a modal return a plain-mode explanation.
+Textual is imported only on the TUI path, so `run` and `--plain` never pay for it.
+
+In-app commands: `/help`, `/config`, **`/config model`**, **`/config mcp`**, `/models`,
+`/model`, `/tools`, `/skills`, `/memory`, `/mode [ask|auto|deny]`, `/cost`, `/clear`, `/exit`.
+
+- **`/config model`** — provider manager → catalog picker (live models endpoint, type-to-filter,
+  free-text fallback) → masked key entry (stored in the OS keyring) → live connection test →
+  TOML diff preview → `config_writer` write → the new model takes effect on the next turn.
+- **`/config mcp`** — server list → add/edit form (stdio · SSE · HTTP) → `${VAR}` resolution
+  through the same masked entry → connection test that starts the server and enumerates its
+  tools → diff preview → write → **live mount** of the tested server's tools into the running
+  session. Remove and enable/disable go through the identical diff-and-confirm gate.
+
+**Cancellation.** `Escape` (when no palette or modal owns it) and `Ctrl+C` cancel a running turn
+and return to the prompt; `Ctrl+C` with no turn running — or a second press — quits, as does
+`Ctrl+Q`. `Shift+Tab` cycles the approval mode live. Shutdown tears the workers down and
+releases any pending approval with a bounded wait, so quitting can never hang on a modal nobody
+is left to answer.
 
 ---
 
@@ -395,7 +462,9 @@ In-REPL: `/help`, `/model`, `/tools`, `/skills`, `/memory`, `/cost`, `/approve`,
 | Purpose | Package |
 |---|---|
 | CLI framework | `typer` |
-| Terminal UI | `rich`, `prompt_toolkit` |
+| Terminal UI | `rich`, `textual` (lazy-imported) |
+| Config write-back | `tomlkit` (lazy-imported) |
+| Secrets | `keyring` (lazy-imported, optional at runtime) |
 | Validation | `pydantic` v2 |
 | HTTP | `httpx` |
 | Anthropic | `anthropic` |
