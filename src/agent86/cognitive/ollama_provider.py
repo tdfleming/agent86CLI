@@ -23,12 +23,36 @@ from agent86.types import (
     CompletionRequest,
     Message,
     Role,
+    StopReason,
     ToolCall,
     ToolSpec,
     Usage,
 )
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
+
+#: Ollama `done_reason` -> the shared normalized vocabulary. `load`/`unload` are lifecycle
+#: events rather than a finished answer, so they map to `other` rather than `end_turn`.
+_STOP_REASONS: dict[str, str] = {
+    "stop": StopReason.END_TURN.value,
+    "length": StopReason.MAX_TOKENS.value,
+    "load": StopReason.OTHER.value,
+    "unload": StopReason.OTHER.value,
+}
+
+
+def normalize_stop_reason(raw: Any, *, has_tool_calls: bool = False) -> str | None:
+    """Map an Ollama ``done_reason`` onto the shared :class:`StopReason` vocabulary.
+
+    Ollama reports ``stop`` even on a turn that emitted tool calls, so ``has_tool_calls``
+    corrects that to ``tool_use``: the turn is not over, a tool is about to run.
+    """
+    if raw is None:
+        return StopReason.TOOL_USE.value if has_tool_calls else None
+    mapped = _STOP_REASONS.get(str(raw), StopReason.OTHER.value)
+    if has_tool_calls and mapped == StopReason.END_TURN.value:
+        return StopReason.TOOL_USE.value
+    return mapped
 
 
 class OllamaProvider(ModelProvider):
@@ -37,10 +61,22 @@ class OllamaProvider(ModelProvider):
 
     def __init__(self, model: str, config: ProviderConfig):
         self.model = model
+        self._config = config
         self._base_url = (config.base_url or _DEFAULT_BASE_URL).rstrip("/")
         self._num_ctx = config.num_ctx
         self._timeout = stream_timeout(config)
         self._max_retries = max_retries_for(config)
+
+    def _max_tokens(self, request: CompletionRequest) -> int | None:
+        """The output cap for this call (Ollama's ``options.num_predict``), or ``None``.
+
+        ``None`` leaves Ollama's own default (unlimited) in place: this is the user's own
+        hardware, where an invented ceiling costs nothing but a truncated answer.
+        """
+        if request.max_tokens:
+            return int(request.max_tokens)
+        configured = getattr(self._config, "max_tokens", None)
+        return int(configured) if configured else None
 
     # ------------------------------------------------------------------ #
     # Conversion helpers
@@ -86,6 +122,10 @@ class OllamaProvider(ModelProvider):
             # Give the model room for the prompt AND its answer; Ollama's small default window
             # otherwise gets filled by tool observations, truncating the response mid-sentence.
             options["num_ctx"] = self._num_ctx
+        if max_tokens := self._max_tokens(request):
+            # Ollama's name for max_tokens. Its default is -1 (generate until the model
+            # stops), so this is only ever sent when a cap was actually asked for.
+            options["num_predict"] = max_tokens
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": self._to_messages(request.messages),
@@ -181,8 +221,13 @@ class OllamaProvider(ModelProvider):
             completion = Completion(
                 text="".join(text_parts),
                 tool_calls=tool_calls,
+                # prompt_eval_count / eval_count are Ollama's prompt and generated token
+                # counts. Local inference is free, so the cost is genuinely 0.0 — not a
+                # missing price (see pricing.py's local/unknown distinction).
                 usage=Usage(input_tokens=prompt_tokens, output_tokens=eval_tokens, cost_usd=0.0),
-                stop_reason=stop_reason,
+                stop_reason=normalize_stop_reason(
+                    stop_reason, has_tool_calls=bool(tool_calls)
+                ),
                 model=self.model,
             )
             yield CompletionDelta(done=True, completion=completion)
@@ -204,4 +249,4 @@ def _as_dict(arguments: Any) -> dict[str, Any]:
     return {}
 
 
-__all__ = ["OllamaProvider"]
+__all__ = ["OllamaProvider", "normalize_stop_reason"]

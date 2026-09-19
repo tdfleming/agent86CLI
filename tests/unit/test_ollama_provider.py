@@ -66,6 +66,93 @@ def test_default_config_gives_ollama_a_context_window():
     assert load_config().providers["ollama"].num_ctx == 8192
 
 
+# --------------------------------------------------------------------------- #
+# v0.8 — max_tokens (num_predict), usage, and the normalized stop_reason
+# --------------------------------------------------------------------------- #
+
+
+def test_request_max_tokens_becomes_num_predict(monkeypatch):
+    provider = OllamaProvider("qwen3.5:4b", ProviderConfig())
+    captured: dict = {}
+    _patch_stream(monkeypatch, captured)
+    provider.complete(
+        CompletionRequest(model=provider.model, messages=[], max_tokens=256)
+    )
+    assert captured["json"]["options"]["num_predict"] == 256
+
+
+def test_provider_config_max_tokens_used_when_request_is_silent(monkeypatch):
+    config = ProviderConfig()
+    if not hasattr(config, "max_tokens"):
+        pytest.skip("config.py has not grown ProviderConfig.max_tokens yet")
+    config.max_tokens = 999
+    provider = OllamaProvider("qwen3.5:4b", config)
+    payload = _run(provider, monkeypatch)
+    assert payload["options"]["num_predict"] == 999
+
+
+def test_request_max_tokens_beats_provider_config(monkeypatch):
+    config = ProviderConfig()
+    if not hasattr(config, "max_tokens"):
+        pytest.skip("config.py has not grown ProviderConfig.max_tokens yet")
+    config.max_tokens = 999
+    provider = OllamaProvider("qwen3.5:4b", config)
+    captured: dict = {}
+    _patch_stream(monkeypatch, captured)
+    provider.complete(CompletionRequest(model=provider.model, messages=[], max_tokens=32))
+    assert captured["json"]["options"]["num_predict"] == 32
+
+
+def test_num_predict_omitted_when_no_cap_is_asked_for(monkeypatch):
+    # Ollama's own default is "generate until the model stops"; inventing a ceiling for
+    # someone's local hardware would truncate answers that run free today.
+    provider = OllamaProvider("qwen3.5:4b", ProviderConfig())
+    payload = _run(provider, monkeypatch)
+    assert "num_predict" not in payload["options"]
+
+
+def test_token_counts_land_in_usage(monkeypatch):
+    provider = OllamaProvider("qwen3.5:4b", ProviderConfig())
+    _patch_stream(monkeypatch, {})
+    completion = provider.complete(
+        CompletionRequest(model=provider.model, messages=[Message(role=Role.USER, content="hi")])
+    )
+    assert completion.usage.input_tokens == 3  # prompt_eval_count
+    assert completion.usage.output_tokens == 1  # eval_count
+    assert completion.usage.cost_usd == 0.0  # local inference really is free
+    assert completion.usage.cache_read_tokens == 0
+    assert completion.usage.cache_creation_tokens == 0
+
+
+def test_done_reason_stop_normalizes_to_end_turn(monkeypatch):
+    provider = OllamaProvider("qwen3.5:4b", ProviderConfig())
+    _patch_stream(monkeypatch, {})
+    completion = provider.complete(CompletionRequest(model=provider.model, messages=[]))
+    assert completion.stop_reason == "end_turn"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("stop", "end_turn"),
+        ("length", "max_tokens"),
+        ("load", "other"),
+        ("something-new", "other"),
+        (None, None),
+    ],
+)
+def test_done_reason_normalization_table(raw, expected):
+    assert mod.normalize_stop_reason(raw) == expected
+
+
+def test_tool_calls_override_a_plain_stop():
+    # Ollama says "stop" even when it emitted tool calls; the turn is not over.
+    assert mod.normalize_stop_reason("stop", has_tool_calls=True) == "tool_use"
+    assert mod.normalize_stop_reason(None, has_tool_calls=True) == "tool_use"
+    # ...but a truncated turn is still truncated, whatever it emitted.
+    assert mod.normalize_stop_reason("length", has_tool_calls=True) == "max_tokens"
+
+
 def _patch_lines(monkeypatch, lines, error=None):
     class Resp:
         status_code = 200

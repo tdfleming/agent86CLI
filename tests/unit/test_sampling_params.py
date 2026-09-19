@@ -318,6 +318,9 @@ def test_openai_payload_other_keys_unchanged(monkeypatch):
     assert payload["model"] == "gpt-4o"
     assert payload["stream"] is True
     assert payload["stream_options"] == {"include_usage": True}
-    assert payload["max_tokens"] == 50
+    # v0.8: the output cap goes out under OpenAI's current name; the legacy `max_tokens`
+    # spelling is only used after an endpoint has refused the new one.
+    assert payload["max_completion_tokens"] == 50
+    assert "max_tokens" not in payload
     assert payload["tool_choice"] == "auto"
     assert payload["tools"][0]["function"]["name"] == "t"

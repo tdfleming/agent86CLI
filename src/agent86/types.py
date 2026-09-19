@@ -51,6 +51,27 @@ class ApprovalMode(StrEnum):
     DENY = "deny"  # never run
 
 
+class StopReason(StrEnum):
+    """Why a model stopped generating, normalized across providers.
+
+    Each provider speaks its own dialect — Anthropic says ``end_turn``/``tool_use``, OpenAI
+    says ``stop``/``tool_calls``/``length``, Ollama says ``stop``/``length`` — so every
+    adapter maps onto this vocabulary before the value leaves the Cognitive Tier. Without
+    that, "was this answer truncated?" would need a different test per provider.
+
+    ``OTHER`` is the honest answer for a value no adapter recognises (a content filter, a
+    provider-specific pause): better a known unknown than a value silently read as
+    ``end_turn``. ``Completion.stop_reason`` stays ``str | None`` — ``None`` means the
+    provider said nothing at all — and providers emit these as plain strings.
+    """
+
+    END_TURN = "end_turn"  # the model finished on its own
+    TOOL_USE = "tool_use"  # the model wants a tool run before continuing
+    MAX_TOKENS = "max_tokens"  # truncated against the output cap
+    STOP_SEQUENCE = "stop_sequence"  # hit a caller-supplied stop sequence
+    OTHER = "other"  # recognised as a stop, but not one of the above
+
+
 # --------------------------------------------------------------------------- #
 # Model references
 # --------------------------------------------------------------------------- #
@@ -213,7 +234,11 @@ class CompletionRequest(BaseModel):
 
 
 class Completion(BaseModel):
-    """A model's proposed next step: free text and/or tool calls."""
+    """A model's proposed next step: free text and/or tool calls.
+
+    ``stop_reason`` carries a :class:`StopReason` value (as a plain string) once a provider
+    adapter has normalized it, or ``None`` when the provider reported nothing.
+    """
 
     text: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
@@ -256,6 +281,7 @@ __all__ = [
     "Role",
     "AgentPhase",
     "ApprovalMode",
+    "StopReason",
     "ModelRef",
     "invalid_arguments_result",
     "ToolSpec",
