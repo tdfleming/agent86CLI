@@ -5,7 +5,7 @@
 > implementation of the five-tier architecture and four pillars described in
 > *The Agentic Harness* (Tony Fleming, 2026).
 
-**Status:** Implemented (Phases 1–9 complete), then extended through v0.7.0. This document is
+**Status:** Implemented (Phases 1–9 complete), then extended through v0.8.0. This document is
 the contract the code was built against; the build followed §14 phase-by-phase, each phase
 verified with tests and a live run against a local model. Post-v0.1 releases added an
 interactive REPL with a persistent status line and live approval-mode and model switching
@@ -16,8 +16,12 @@ full-screen Textual TUI as the default interactive UI, with in-app model/provide
 configuration, keyring-backed secrets, and cancellable turns (v0.6); and the "trustworthy"
 pass — a real price table behind the cost cap, provider retries with backoff, a clean error
 path for a failed stream, egress redaction on the output path, sub-agent accounting, and the
-`web_fetch` / sandbox-environment / MCP-environment / process-tree security fixes (v0.7).
-**Version:** 0.7.0
+`web_fetch` / sandbox-environment / MCP-environment / process-tree security fixes (v0.7); and
+the "context & cost" pass — the conversation budgeted against the model's real context window,
+summarizing compaction of the oldest span, `max_tokens` continuation, parallel read-only tool
+calls, Anthropic prompt caching with cache-aware pricing, a normalized `StopReason`, and a
+per-turn cost read-out on every surface (v0.8).
+**Version:** 0.8.0
 
 ---
 
@@ -230,11 +234,17 @@ load session state  ────────────────────
 [ROUTER]  pick model by complexity/cost           │
         │                                         │
         ▼                                         │
-[PROMPT COMPILE]  system + skills + history        │  ReAct
-   + tool schemas + budget-trimmed context         │  loop
-        │                                         │  (until DONE or
-        ▼                                         │   circuit trips)
+[CONTEXT BUDGET]  real window − system prompt      │  ReAct
+   − tool schemas − reserve − the output cap;      │  loop
+   compact the oldest span if still over           │  (until DONE or
+        │                                         │   circuit trips)
+        ▼                                         │
+[PROMPT COMPILE]  system + skills + history        │
+   + tool schemas + budget-trimmed context         │
+        │                                         │
+        ▼                                         │
 [COGNITIVE]  model proposes: text | tool_call(s)   │
+   stopped at the output cap? continue, ≤3 times   │
         │                                         │
         ▼                                         │
 [EGRESS GUARDRAIL]  validate proposal / schema     │
@@ -242,14 +252,15 @@ load session state  ────────────────────
    has tool call? ──no──► emit answer ─► VERIFY ──►┘ done
         │yes                                       │
         ▼                                         │
-[POLICY / HITL]  approve side-effectful calls      │
+[POLICY / HITL]  approve every call up front       │
         │                                         │
         ▼                                         │
-[SANDBOX]  execute tool (subprocess|docker|mcp)    │
+[SANDBOX]  reads in parallel (≤4), then writes     │
+   in order (subprocess | docker | mcp)            │
         │                                         │
         ▼                                         │
-[OBSERVE]  append ToolResult, persist state,       │
-   record trace, increment cost/step counters ────┘
+[OBSERVE]  append ToolResults in CALL order,       │
+   persist state, record trace, update counters ──┘
 ```
 
 Every arrow crosses the deterministic harness. The model only ever sits in the `[COGNITIVE]`
@@ -263,6 +274,56 @@ explicit cap (a sub-agent passes `[agents] max_steps`), which is clamped with `m
 delegated task can *tighten* the bound but never widen it; `None` means "the configured budget
 is the budget", resolved by an explicit `is None` check so an explicit `0` trips immediately
 instead of being read as "unset".
+
+**The context budget is recomputed before every request**, not once per session:
+`Harness._context_budget` asks `capabilities.context_window_for` for the model's real window and
+subtracts the compiled system prompt, the tool schemas, `limits.context_reserve_tokens`, and the
+output cap the call will ask for (§8 for the derivation, §11 for the fields). Skills, MCP servers
+and the episodic recall note all change the overhead mid-session, so a figure computed at startup
+would be wrong by the second step. The result is published on the shared `WorkingMemory`, so
+sub-agents trim to the same number.
+
+**Compaction is a hook on that budget, before the request is built** — the model call must see the
+compacted history, not a copy trimmed afterwards. It runs at most once per step, never
+re-entrantly, and never raises: a failed summary degrades to the pre-v0.8 drop. See §8.
+
+**Parallel tool dispatch.** A step's tool calls execute under one rule, deliberately the simplest
+one that is safe:
+
+1. **Approvals for the whole step are resolved first, sequentially, on the orchestrator's thread.**
+   The gate may prompt a human, and it must be asked exactly once per call.
+2. **Read-only calls then run concurrently** in a `ThreadPoolExecutor(max_workers=min(4, n))`.
+3. **Side-effecting calls run afterwards, one at a time, in the order the model asked for them.**
+   Two writes racing could interleave edits to one file, and a write racing a read could hand the
+   model a half-written file; ordering them buys determinism for a little latency.
+
+Results are observed in **call** order regardless of completion order, so the `TOOL` messages line
+up with the assistant's `tool_calls` for every provider, and the `[tool] name(...)` start lines are
+emitted for the whole batch up front rather than claiming an ordering that isn't real. A cancel
+landing mid-batch skips the calls that have not started and gives them a `Not executed: cancelled`
+result, so the history never keeps a `tool_use` that no `tool_result` answers. `Tool.parallel_safe`
+(default `True`) is the per-tool opt-out — `delegate` sets it, because a nested agent loop has
+approval prompts of its own and two racing for one terminal is not something the gate can untangle.
+A single-call step and `[limits] parallel_tools = false` take the unchanged sequential path. What a
+concurrent read touches is safe by construction: `ToolContext` is read-only for every built-in, the
+sandbox executor holds no per-call state, and `MCPManager.call_tool` marshals onto its own
+background loop.
+
+**Continuation is a step, not a retry.** A completion whose `stop_reason` is `max_tokens` with no
+tool calls is a *truncated* answer, not a finished one. The harness appends the partial assistant
+text, asks the model to continue exactly where it left off, and calls again — up to **3** times per
+turn, each one a full step the circuit breaker counts and budgets. The pieces stream as they arrive
+and are stitched into one assistant message, so neither the partials nor the harness's own
+continuation prompts survive into the history to be imitated next turn. A truncated step that then
+calls a tool abandons the stitching: those tool results have to attach to the assistant message
+that actually requested them.
+
+**`TurnSummary` is published at the start of a turn, not the end** (`orchestration/state.py`;
+deliberately not in `types.py` — it is an orchestration record, not part of the provider-agnostic
+lingua franca). A UI can watch it fill, and its duration is stamped at *every* exit — done,
+cancelled, blocked, aborted — so the per-turn read-out is written on the error path too. It carries
+input/output/cache tokens, cost, steps, tool calls, duration, compactions, and continuations, and
+`run --json` serialises it under an additive `turn` key.
 
 **The error path is part of the loop.** A turn appends the user message before it calls the
 model, so a failure in the model-call stream must not simply escape: any exception —
@@ -317,6 +378,58 @@ class ModelProvider(ABC):
   provider — actually reaches the next call instead of the session continuing against the old
   endpoint.
 
+**Per-model facts** (`capabilities.py`) — the seam every provider and the loop ask, so a per-model
+quirk lives in one declarative table rather than scattered conditionals. It answers three
+questions: whether a model still accepts `temperature`/`top_p`/`top_k` (some families removed them
+and return 400), `context_window_for(model_ref, config)` (§8), and
+`max_output_tokens_for(model_ref, config)` — `[providers.<name>] max_tokens`, else
+`[limits] max_output_tokens`.
+
+**Output caps.** `CompletionRequest.max_tokens` is the per-call cap and every adapter honours it:
+
+| Adapter | Parameter | No cap requested |
+|---|---|---|
+| Anthropic | `max_tokens` | request → `[providers.anthropic] max_tokens` → **8192** (the API requires the parameter, so a number always goes out) |
+| OpenAI-compatible | `max_completion_tokens`, with **one** fallback swap to `max_tokens` | nothing sent |
+| Ollama | `options.num_predict` | nothing sent |
+
+The OpenAI fallback exists because most compatible endpoints (Groq, OpenRouter, vLLM, llama.cpp)
+only know the older name and nothing in the base URL says which — so a 400 naming the parameter
+triggers one swap, memoised **per endpoint** for the session. That retry is a deterministic
+correction rather than a flaky endpoint, so it deliberately does not come out of the
+transient-failure budget and still works with `max_retries = 0`. Adapters that front *local*
+servers send no cap when nobody asked for one: a guessed ceiling truncates a generation that runs
+free today, and the loop supplies `limits.max_output_tokens` when a default is wanted.
+
+**`StopReason`** (`types.py`) — the normalized vocabulary `end_turn | tool_use | max_tokens |
+stop_sequence | other`, so "was this answer truncated?" is one question the loop can ask
+generically (it is what drives continuation in §5) instead of a different test per provider.
+`Completion.stop_reason` stays `str | None`, so this is additive and `None` still means "the
+provider said nothing". Anything unrecognised — Anthropic's `pause_turn`, `refusal`, whatever is
+added next — maps to `other` rather than being read as a finished turn; and a compatible server
+reporting a plain `stop` on a turn that emitted tool calls maps to `tool_use`, because the turn is
+not over, a tool is about to run.
+
+**Prompt caching** (Anthropic) — caching is a prefix match over **tools → system → messages**, so a
+breakpoint on the *last tool* caches the whole tool list and one on the *system block* caches
+tools + system. Both are stable while the conversation after them is not, which is the split
+caching pays for; at most two of the four available breakpoints are used, leaving room for a caller
+that marks message content. A marker is placed only when the prefix it closes clears that model's
+minimum cacheable length — below it the API silently ignores the marker and returns
+`cache_creation_input_tokens: 0`, spending a breakpoint for nothing — and that minimum is **not**
+monotonic across generations (512 on the newest models, 4096 on Opus 4.6/4.5 and Haiku 4.5), so it
+is a per-family table with a conservative 4096 fallback for a model released after it was written.
+Length is estimated at ~4 chars/token rather than spending a `count_tokens` round trip per turn on
+a decision whose only cost when wrong is an ignored marker. The system string is converted to the
+block-list form only when it is being marked, so an unmarked request goes out byte-identical to
+before. `[providers.<name>] prompt_cache` is the off switch.
+
+`Usage.cache_read_tokens` / `Usage.cache_creation_tokens` carry the two classes across the seam.
+**`input_tokens` is the whole prompt, with the cache fields a breakdown of it** — Anthropic reports
+`input_tokens` as the uncached *remainder*, so the adapter sums them, otherwise a well-cached turn
+would look like it barely used any context. OpenAI's `prompt_tokens_details.cached_tokens` follows
+the same convention.
+
 **Retry policy** (`retry.py`) — one module decides whether a provider failure is worth another
 attempt and how long to wait, so the four adapters can't drift:
 
@@ -338,6 +451,15 @@ id, then a dated-snapshot prefix. Three outcomes stay distinct — **priced**, *
 (`ollama`/`llamacpp`: zero is correct), and **unknown** (`None`, rendered as
 `cost n/a (unpriced model)`) — so a cost meter never reports a paid call as free. This is what
 makes `[limits] max_cost_usd` a real circuit breaker rather than dead code.
+
+`Price.cost()` bills the three token classes apart: **cache reads at 0.1×** the input rate,
+**5-minute cache writes at 1.25×**, and the uncached remainder at the input rate, with a per-model
+override table where a model prices reads differently and optional explicit
+`cache_read_per_mtok` / `cache_write_per_mtok` so a config override can state a rate instead of
+inheriting the multiplier. Passing zeros reduces exactly to the pre-cache arithmetic. Billing every
+prompt token at the input rate made the cap wrong in *both* directions — a fully-cached turn is a
+tenth of the price, a cache write a 25% premium — which is precisely the kind of quietly-wrong
+number v0.7 existed to remove.
 
 ---
 
@@ -410,7 +532,7 @@ Single embedded store: **SQLite** for relational state + **`sqlite-vec`** for ve
 
 | Layer | What | Backing |
 |---|---|---|
-| **Working** | Current context window; token-budgeted sliding window (the system prompt is held out of the trim) | in-memory, budget-managed |
+| **Working** | Current context window; budgeted against the model's *real* window, compacted by summary when it overflows (the system prompt is held out of the trim) | in-memory, budget-managed |
 | **Episodic** | Append-only trace of every past step/run ("flight data recorder"); similar-task lookup injects warnings on new tasks | SQLite tables + vec index |
 | **Semantic** | User/domain knowledge; RAG retrieval | SQLite + vec index |
 
@@ -425,10 +547,51 @@ for millions. Retention caps bound the episode/session log automatically; curate
 never auto-pruned. If scale ever demands it, sqlite-vec's `vec0` virtual table would add a
 true vector index — an intentional, isolated upgrade behind the same `MemoryStore` API.
 
-**Not yet built.** Working memory *drops* the oldest span when the budget is exceeded; it does
-not summarize it. Recursive/rolling summarization of the trimmed span, and Anthropic prompt-cache
-breakpoints for the stable system + tool-schema block, are tracked in `docs/BACKLOG.md`
-§ "Context & cost" (see also §15).
+**The conversation budget** (`memory/working.py`, `cognitive/capabilities.py`). Before v0.8 working
+memory was constructed with `limits.max_context_tokens` — a flat 8000 for every model, which wasted
+~96% of a 200k window and overspent a 4k local one, and which ignored the two things in every
+request before any history. The budget is now derived:
+
+```
+window            = context_window_for(model_ref, config)
+conversation      = window − (system prompt + tool schemas)
+                           − limits.context_reserve_tokens
+                           − max_output_tokens_for(model_ref, config)
+                    …clamped by limits.max_context_tokens when one is set
+```
+
+The **window** resolves in priority order: a `[model.context_window]` override (full
+`provider:model` ref, then bare id) → the *provider* where the server rather than the model owns
+the window (Ollama serves `[providers.ollama] num_ctx`; llama.cpp's `-c` is a launch flag not
+discoverable over the API, so 8192 is the only honest answer) → a built-in family table (Claude
+4.x/5.x 200k; `gpt-5` 400k, `gpt-4.1` 1,047,576, `gpt-4o` 128k, o-series 200k; common open-weights
+ids) → 8192. The **reserve** is headroom for the provider's token counting differing from ours — an
+error the model call otherwise pays for with a hard 400 — and is clamped to half the window so a
+small local model is not starved; the result is floored at a minimum and only *then* clamped by
+`limits.max_context_tokens`, so an explicitly typed hard cap is never overruled by the floor.
+`ModelProvider.count_tokens` counts tool-call arguments and tool names, because a step whose entire
+payload was a large tool argument used to measure as zero.
+
+**Compaction** (`[limits] compaction`). When the conversation exceeds the budget, the oldest prefix
+is replaced by a model-written digest — GOAL / DECISIONS / FACTS / OPEN, instructed to reproduce
+paths, identifiers and numbers verbatim, ~600 tokens — written by the cheap route model when
+routing is on and the current provider otherwise. The digest rides on a **USER** message headed
+`[Conversation summary — earlier turns compacted]`: no new `Role`, nothing for a provider adapter
+to learn, and it is *merged* into the following turn when that is also a USER message, because
+consecutive user messages are a shape some providers reject (Anthropic's `_to_messages` renders
+`TOOL` results as `user` as well). Invariants:
+
+- an assistant `tool_calls` message is never separated from its `TOOL` results — the cut walks back
+  off any `TOOL` message it lands on;
+- the last 6 messages and the whole current user turn are never compacted;
+- compaction runs at most once per step and never re-entrantly;
+- it **never raises** — a failed or empty summary falls back to the pre-v0.8 drop and records
+  `compaction status="failed"|"empty" fallback="drop"` in the trace.
+
+The compacted `state.messages` is persisted immediately so a resume sees the compacted history, and
+the originals are archived verbatim to episodic memory (`record_compaction`, `kind="compaction"`),
+held out of `recall` so a new turn is never handed a raw transcript. `compaction = "drop"` restores
+the sliding window exactly.
 
 ---
 
@@ -528,7 +691,11 @@ router    = "triage"                 # off | triage                      (enum)
 cheap     = "ollama:llama3.1"
 frontier  = "anthropic:claude-opus-4-8"
 
+[model.context_window]."ollama:qwen2.5:3b" = 16384   # override the resolved context window
+
 [providers.anthropic]  api_key_env = "ANTHROPIC_API_KEY"  max_retries = 2
+                       max_tokens = 8192     # per-provider output cap (None = provider default)
+                       prompt_cache = true   # Anthropic only: mark the stable prefix cacheable
 [providers.openai]     api_key_env = "OPENAI_API_KEY"  base_url = "https://api.openai.com/v1"
 [providers.ollama]     base_url = "http://localhost:11434"
 [providers.llamacpp]   base_url = "http://localhost:8080"
@@ -546,6 +713,11 @@ input_per_mtok = 3.0  output_per_mtok = 15.0
               egress  = "warn"       # off | warn | redact               (enum)
 [memory]      path = "~/.agent86/memory.db"  embeddings = "sentence-transformers:all-MiniLM-L6-v2"
 [limits]      max_steps = 40  max_cost_usd = 5.0  max_wall_clock_s = 900  tool_timeout_s = 60
+              max_context_tokens = 0        # optional HARD cap on conversation tokens; 0 = none
+              max_output_tokens = 8192      # per-call generation cap when no provider names one
+              context_reserve_tokens = 4096 # headroom kept free inside the window
+              compaction = "summarize"      # summarize | drop                    (enum)
+              parallel_tools = true         # run a step's read-only tool calls concurrently
 [agents]      max_steps = 8          # per-sub-agent cap, clamped by limits.max_steps
 
 [mcp.servers.example]  command = "npx"  args = ["-y", "some-mcp-server"]   # stdio (local subprocess)
@@ -560,6 +732,14 @@ read from the parent environment at spawn time, so the "no secrets in config" ru
 and the `config_writer` guard) still holds. `[limits] tool_timeout_s` replaces the old derived
 per-tool timeout (`max_wall_clock_s if under 120 else 60`), which silently shortened every tool
 timeout for anyone who lowered their run budget.
+
+Fields added in v0.8: `providers.<name>.max_tokens` (`None`), `providers.<name>.prompt_cache`
+(`true`), `limits.max_output_tokens` (8192), `limits.context_reserve_tokens` (4096),
+`limits.compaction` (`"summarize"`), `limits.parallel_tools` (`true`), and the
+`[model.context_window]` override table. **`limits.max_context_tokens` changed meaning**: it was a
+flat `8000` that *was* the conversation budget; it now defaults to `0` = "no cap" and, when set, is
+an optional hard cap applied on top of the derived budget (§8). Anyone who had deliberately chosen
+a value keeps exactly that value.
 
 An MCP server is reached over one of three transports: **stdio** (default — set `command`),
 **streamable HTTP** (default when `url` is set), or **SSE** (`url` + `transport = "sse"`). Exactly
@@ -658,7 +838,7 @@ Heavy/optional deps (`sentence-transformers`, `docker`) live behind extras:
 
 ## 15. Non-goals, and design intent not yet built
 
-**Non-goals (still, as of v0.7):**
+**Non-goals (still, as of v0.8):**
 
 - Distributed/networked multi-host agents (in-process MAS only).
 - gVisor / WASM sandboxes (subprocess + Docker only; WASM is a later option).
@@ -669,13 +849,15 @@ Heavy/optional deps (`sentence-transformers`, `docker`) live behind extras:
 **Described above as design intent, deliberately not implemented yet.** Each is marked *not
 built* at its section; the full list with analysis is in `docs/BACKLOG.md`.
 
+> Four rows left this table in v0.8, all of them the "Context & cost" set: summarization of the
+> compacted span (§8), Anthropic prompt-cache breakpoints (§6), parallel execution of a step's
+> read-only tool calls (§5), and `max_tokens` continuation (§5).
+
 | Not built | Area | Tracked |
 |---|---|---|
-| Recursive/rolling summarization of the trimmed context span | §8 memory | BACKLOG § Context & cost |
-| Anthropic prompt-cache breakpoints for the stable prompt + tool-schema block | §6 cognitive | BACKLOG § Context & cost |
-| Parallel execution of a turn's independent tool calls | §5 loop | BACKLOG § Context & cost |
-| `max_tokens` continuation after a truncated response | §5 loop | BACKLOG § Context & cost |
 | Prompt-level tool-emulation shim for models without native tool calling | §6 cognitive | — (swap the model) |
+| An eval for compaction *quality* — the summary is tested for shape, not for what it preserves | §8 memory | BACKLOG § Context & cost |
+| Auto-sizing Ollama's `num_ctx` to the hardware (now the input to `context_window_for`) | §8 memory | BACKLOG § Ollama `num_ctx` |
 | A `web_search` built-in tool | §7 tools | — (use an MCP search server) |
 | Pipeline / blackboard topologies; state-oscillation detection and gated locks | §10 MAS | BACKLOG |
 | `SKILL.md` `allowed-tools` enforced as a gate rather than documentation | §7 skills | BACKLOG § Skills & tools |
