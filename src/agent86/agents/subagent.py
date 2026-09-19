@@ -25,6 +25,7 @@ from agent86.types import (
     ToolCall,
     ToolResult,
     Usage,
+    invalid_arguments_result,
 )
 
 if TYPE_CHECKING:
@@ -145,6 +146,10 @@ class SubAgent:
                     return f"[sub-agent '{self.role}' halted: {exc}]", spent
 
     def _run_tool(self, call: ToolCall) -> ToolResult:
+        # Same interception as the main loop: unparseable arguments never reach a tool.
+        invalid = call.invalid_arguments
+        if invalid is not None:
+            return invalid_arguments_result(call, invalid)
         tool = self.h.registry.get(call.name)
         if tool is None:
             return self.h.registry.dispatch(call, self.ctx)

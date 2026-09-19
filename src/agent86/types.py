@@ -98,12 +98,25 @@ class ToolSpec(BaseModel):
     side_effecting: bool = False
 
 
+#: Sentinel key under which a provider carries tool arguments it could not parse as JSON.
+#: Substituting ``{}`` instead made the schema validator report "field required", pointing the
+#: model at a missing argument rather than at its own malformed JSON. The orchestrator
+#: intercepts calls carrying this key before dispatch, so no tool ever sees it.
+INVALID_TOOL_ARGS_KEY = "__invalid_json__"
+
+
 class ToolCall(BaseModel):
     """The model's *intent* to invoke a tool — an untrusted request, not a command."""
 
     id: str
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def invalid_arguments(self) -> str | None:
+        """The raw argument text when the provider could not parse it as JSON, else None."""
+        raw = self.arguments.get(INVALID_TOOL_ARGS_KEY)
+        return raw if isinstance(raw, str) else None
 
 
 class ToolResult(BaseModel):
@@ -115,6 +128,24 @@ class ToolResult(BaseModel):
     content: str = ""
     error: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+def invalid_arguments_result(call: ToolCall, raw: str) -> ToolResult:
+    """The observation for a tool call whose arguments were not valid JSON.
+
+    Returned by the orchestrator *instead of* dispatching, so the model is told exactly what
+    went wrong — its own JSON — rather than being sent chasing a phantom missing field.
+    """
+    preview = raw if len(raw) <= 200 else raw[:200] + " ..."
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        ok=False,
+        error=(
+            f"invalid JSON in tool arguments: {preview!r} could not be parsed. "
+            "Call the tool again with its arguments as a single valid JSON object."
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -200,10 +231,12 @@ class Step(BaseModel):
 
 
 __all__ = [
+    "INVALID_TOOL_ARGS_KEY",
     "Role",
     "AgentPhase",
     "ApprovalMode",
     "ModelRef",
+    "invalid_arguments_result",
     "ToolSpec",
     "ToolCall",
     "ToolResult",

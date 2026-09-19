@@ -17,6 +17,7 @@ from agent86.cognitive.http_timeouts import stream_timeout, timeout_error
 from agent86.cognitive.retry import RetryPolicy, max_retries_for, retry_after_header
 from agent86.config import ProviderConfig
 from agent86.types import (
+    INVALID_TOOL_ARGS_KEY,
     Completion,
     CompletionDelta,
     CompletionRequest,
@@ -197,7 +198,9 @@ def _as_dict(arguments: Any) -> dict[str, Any]:
             parsed = json.loads(arguments)
             return parsed if isinstance(parsed, dict) else {"value": parsed}
         except json.JSONDecodeError:
-            return {"value": arguments}
+            # Carry the raw text so the loop can say "invalid JSON in tool arguments"
+            # rather than handing the tool a bogus {"value": ...} to reject.
+            return {INVALID_TOOL_ARGS_KEY: arguments}
     return {}
 
 

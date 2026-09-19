@@ -47,6 +47,7 @@ from agent86.types import (
     Step,
     ToolResult,
     Usage,
+    invalid_arguments_result,
 )
 
 # Sentinel so an explicitly-passed memory=None means "no memory", not "auto-build".
@@ -441,8 +442,13 @@ class Harness:
     # ---- helpers ------------------------------------------------------- #
 
     def _execute_tool(self, call, sid: str) -> ToolResult:
-        tool = self.registry.get(call.name)
-        if tool is None:
+        # Arguments the provider could not parse are answered here, before the registry,
+        # the approval gate, or any tool sees them: the model's mistake is its JSON, and
+        # only the harness can say so — a tool handed `{}` reports a missing field instead.
+        invalid = call.invalid_arguments
+        if invalid is not None:
+            result = invalid_arguments_result(call, invalid)
+        elif (tool := self.registry.get(call.name)) is None:
             result = self.registry.dispatch(call, self.context)
         else:
             decision = self.gate.decide(tool, call)

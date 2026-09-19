@@ -11,7 +11,13 @@ from agent86.cognitive import openai_provider as mod
 from agent86.cognitive.base import ProviderError
 from agent86.cognitive.openai_provider import OpenAIProvider
 from agent86.config import ProviderConfig
-from agent86.types import CompletionRequest, Message, Role, ToolCall
+from agent86.types import (
+    INVALID_TOOL_ARGS_KEY,
+    CompletionRequest,
+    Message,
+    Role,
+    ToolCall,
+)
 
 
 def _provider() -> OpenAIProvider:
@@ -83,6 +89,38 @@ def test_tool_call_accumulation_across_chunks(monkeypatch):
     assert tc.name == "get_sum"
     assert tc.arguments == {"a": 21, "b": 21}
     assert tc.id == "call_1"
+
+
+def test_unparseable_tool_arguments_carry_the_raw_string(monkeypatch):
+    # `{}` used to be substituted here, so the model was told a required field was missing
+    # when the real problem was its own JSON.
+    lines = [
+        _sse({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_1", "function": {"name": "write_file",
+                                                      "arguments": '{"path": "a.txt", '}}
+        ]}}]}),
+        _sse({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+        "data: [DONE]",
+    ]
+    _patch_stream(monkeypatch, lines)
+    completion = _provider().complete(CompletionRequest(model="test-model", messages=[]))
+
+    tc = completion.tool_calls[0]
+    assert tc.invalid_arguments == '{"path": "a.txt", '
+    assert tc.arguments == {INVALID_TOOL_ARGS_KEY: '{"path": "a.txt", '}
+
+
+def test_non_object_tool_arguments_are_treated_as_invalid(monkeypatch):
+    # Valid JSON, but not an arguments object — a tool cannot be called with a bare string.
+    lines = [
+        _sse({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "c1", "function": {"name": "t", "arguments": '"just a string"'}}
+        ]}}]}),
+        "data: [DONE]",
+    ]
+    _patch_stream(monkeypatch, lines)
+    completion = _provider().complete(CompletionRequest(model="test-model", messages=[]))
+    assert completion.tool_calls[0].invalid_arguments == '"just a string"'
 
 
 def test_message_conversion():

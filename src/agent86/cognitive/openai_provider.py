@@ -21,6 +21,7 @@ from agent86.cognitive.pricing import priced_usage
 from agent86.cognitive.retry import RetryPolicy, max_retries_for, retry_after_header
 from agent86.config import ProviderConfig
 from agent86.types import (
+    INVALID_TOOL_ARGS_KEY,
     Completion,
     CompletionDelta,
     CompletionRequest,
@@ -250,7 +251,12 @@ class OpenAIProvider(ModelProvider):
             try:
                 args = json.loads(slot["args"]) if slot["args"].strip() else {}
             except json.JSONDecodeError:
-                args = {}
+                # Carry the raw text instead of {}: an empty object makes the schema
+                # validator report a missing required field, sending the model to fix an
+                # argument when the actual bug is its own JSON. The loop intercepts this.
+                args = {INVALID_TOOL_ARGS_KEY: slot["args"]}
+            if not isinstance(args, dict):  # a bare string / array / number is not arguments
+                args = {INVALID_TOOL_ARGS_KEY: slot["args"]}
             calls.append(
                 ToolCall(id=slot["id"] or f"call_{idx}", name=slot["name"], arguments=args)
             )
