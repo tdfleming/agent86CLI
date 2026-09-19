@@ -71,7 +71,9 @@ to the scripting contract: `run`, `run --json`, and `--plain` are unchanged.
   nothing to explain it. Bulk registration now keeps the first registration, appends the loser to
   `registry.collisions`, and warns through the module logger (naming the 64-character truncation
   when the clash is a truncation artefact). The strict `register()` still raises, so an explicit
-  `add_mcp_server` keeps reporting collisions.
+  `add_mcp_server` keeps reporting collisions. Collisions also get their own **startup note**
+  naming the lost tools, in the REPL banner and the TUI transcript — a tool dropped in silence
+  looks exactly like the server failing to connect.
 
 ### Changed
 
@@ -97,10 +99,12 @@ to the scripting contract: `run`, `run --json`, and `--plain` are unchanged.
 - **Read-only MCP tools no longer ask for approval.** A tool whose annotations carry
   `readOnlyHint` is mounted with `side_effecting = False`, so reading through an MCP server stops
   prompting the user to approve a read.
-- **MCP failure notes accumulate and the manager restarts.** `start()` used to overwrite its
-  notes, reporting only the last failing server; it now reports all of them. `close()` resets the
-  started flag and the session/task maps, so a later `start()` actually reconnects instead of
-  silently doing nothing.
+- **MCP failure notes accumulate, surface one per line, and the manager restarts.** `start()`
+  used to overwrite its notes, reporting only the last failing server; it now reports all of
+  them, and the startup notes and `agent86 mcp tools` render one line per degradation instead of
+  a single newline-joined blob in which only the last failure read as *the* failure. `close()`
+  resets the started flag and the session/task maps, so a later `start()` actually reconnects
+  instead of silently doing nothing.
 - **The streamable-HTTP MCP transport builds its client with the SDK's own
   `create_mcp_http_client`**, matching what `mcp>=2` expects rather than casting an httpx client
   at the call site.
