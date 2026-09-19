@@ -16,7 +16,7 @@ import pytest
 from agent86.cognitive.base import ProviderError
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
-from agent86.types import ApprovalMode, ToolCall
+from agent86.types import ApprovalMode, CompletionDelta, ToolCall
 from agent86.ui.repl import _Repl
 from tests.support import ToolThenTextProvider, make_text_provider
 
@@ -117,6 +117,42 @@ def test_dispatch_slash_commands_do_not_run_turns(tmp_path, capsys):
     assert repl.dispatch("/cost") == "handled"
     assert repl.dispatch("/memory") == "handled"
     assert repl.dispatch("hello") == "turn"  # non-command routes to a turn
+
+
+# ---- harness notices (v0.8) --------------------------------------------- #
+
+
+def test_plain_loop_sets_harness_notices_apart_from_the_answer(tmp_path, capsys, monkeypatch):
+    repl, harness = _repl(tmp_path)
+
+    def _run(line, state):  # noqa: ANN001
+        yield CompletionDelta(text="\n[compacted 12 messages]\n")
+        yield CompletionDelta(text="partial answer")
+        yield CompletionDelta(text="\n[continuing after 40 steps]\n")
+
+    monkeypatch.setattr(harness, "run_turn", _run)
+    _feed(monkeypatch, "go", "/exit")
+
+    repl.plain_loop()
+
+    out = capsys.readouterr().out
+    assert "[compacted 12 messages]" in out
+    assert "[continuing after 40 steps]" in out
+    # each notice gets its own line: never glued onto the model's sentence
+    assert "partial answer[continuing" not in out
+    for line in out.splitlines():
+        if "compacted 12 messages" in line:
+            assert line.strip() == "[compacted 12 messages]"
+
+
+def test_plain_loop_does_not_treat_model_brackets_as_a_notice(tmp_path, capsys, monkeypatch):
+    repl, _ = _repl(tmp_path, reply="[see docs/ARCHITECTURE.md] for more")
+    _feed(monkeypatch, "where?", "/exit")
+
+    repl.plain_loop()
+
+    out = capsys.readouterr().out
+    assert "[see docs/ARCHITECTURE.md] for more" in out
 
 
 # ---- per-turn cost line (v0.8) ----------------------------------------- #

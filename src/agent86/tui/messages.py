@@ -29,6 +29,14 @@ class ToolAnnounce(Message):
         super().__init__()
 
 
+class TurnNotice(Message):
+    """A harness notice delta — context compaction, continuation — not model speech."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text  # already stripped; the app renders it dim and escaped
+        super().__init__()
+
+
 class ApprovalRequest(Message):
     """A tool-approval prompt; the worker blocks on `event` until the app resolves it."""
 
@@ -77,6 +85,7 @@ class CatalogReady(Message):
 
 __all__ = [
     "TurnDelta",
+    "TurnNotice",
     "ToolAnnounce",
     "ApprovalRequest",
     "TurnDone",

@@ -17,8 +17,15 @@ from collections.abc import Callable
 
 from textual.message import Message
 
-from agent86.tui.messages import ApprovalRequest, ToolAnnounce, TurnDelta, TurnDone, TurnError
-from agent86.ui.repl import _tool_label
+from agent86.tui.messages import (
+    ApprovalRequest,
+    ToolAnnounce,
+    TurnDelta,
+    TurnDone,
+    TurnError,
+    TurnNotice,
+)
+from agent86.ui.repl import _tool_label, notice_text
 
 #: ``App.post_message`` (thread-safe). Accepts a Textual ``Message``; the return value is
 #: ignored here, so it is typed ``object`` — Textual's own ``bool`` return satisfies that,
@@ -70,8 +77,11 @@ def run_turn_worker(
             if not text:
                 continue
             label = _tool_label(text)
+            notice = None if label else notice_text(text)
             if label:
                 post(ToolAnnounce(label, text))
+            elif notice is not None:
+                post(TurnNotice(notice))
             else:
                 post(TurnDelta(text))
         post(TurnDone())

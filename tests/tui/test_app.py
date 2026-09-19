@@ -63,6 +63,33 @@ class _SlowTextProvider(ModelProvider):
         )
 
 
+class _NoticeProvider(ModelProvider):
+    """Emits a harness-style `[compacted …]` notice delta ahead of the answer.
+
+    Stands in for the loop's own compaction/continuation notices, which reach the UI as
+    ordinary text deltas — the surfaces tell them apart by prefix, not by delta type.
+    """
+
+    name = "noticetext"
+
+    def __init__(self, notice: str, reply: str) -> None:
+        self.model = "fake:noticetext"
+        self._notice = notice
+        self._reply = reply
+
+    def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+        yield CompletionDelta(text=f"\n{self._notice}\n")
+        yield CompletionDelta(text=self._reply)
+        yield CompletionDelta(
+            done=True,
+            completion=Completion(
+                text=self._reply,
+                usage=Usage(input_tokens=3, output_tokens=2),
+                model=self.model,
+            ),
+        )
+
+
 def _make_repl(tmp_path, provider, approval=ApprovalMode.AUTO):
     cfg = load_config()
     cfg.guardrails.approval = approval
@@ -158,6 +185,65 @@ async def test_per_turn_cost_line_is_skipped_without_a_summary(tmp_path):
         lines = "\n".join(str(line) for line in transcript.lines)
         assert "hello world" in lines
         assert "—" not in lines
+
+
+async def test_compaction_notice_renders_dim_and_not_as_model_speech(tmp_path):
+    repl = _make_repl(tmp_path, _NoticeProvider("[compacted 12 messages]", "hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "hi there"
+        await pilot.press("enter")
+        await _wait_until(lambda: repl.status.working is False)
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", RichLog)
+        notice = next(
+            (str(line) for line in transcript.lines if "compacted 12 messages" in str(line)), ""
+        )
+        assert notice, "the compaction notice never reached the transcript"
+        assert "dim=True" in notice
+        # and it did not get glued onto the model's answer
+        answer = next((str(line) for line in transcript.lines if "hello world" in str(line)), "")
+        assert "compacted" not in answer
+
+
+async def test_continuation_notice_renders_dim(tmp_path):
+    repl = _make_repl(tmp_path, _NoticeProvider("[continuing after 40 steps]", "carrying on"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "keep going"
+        await pilot.press("enter")
+        await _wait_until(lambda: repl.status.working is False)
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", RichLog)
+        notice = next(
+            (str(line) for line in transcript.lines if "continuing after 40" in str(line)), ""
+        )
+        assert notice and "dim=True" in notice
+
+
+async def test_model_text_that_merely_starts_with_a_bracket_is_not_dimmed(tmp_path):
+    """`[see docs/x.md]` is the model talking — it must render as the answer, escaped."""
+    repl = _make_repl(tmp_path, make_text_provider("[see docs/ARCHITECTURE.md] for more"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "where?"
+        await pilot.press("enter")
+        await _wait_until(lambda: repl.status.working is False)
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", RichLog)
+        line = next(
+            (str(line) for line in transcript.lines if "ARCHITECTURE.md" in str(line)), ""
+        )
+        assert line and "dim=True" not in line
 
 
 async def _run_approval_case(tmp_path, approve: bool):

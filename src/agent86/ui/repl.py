@@ -53,6 +53,30 @@ def _banner(cfg: Config) -> Panel:
     return Panel(body, title="agentic harness", border_style="cyan", expand=False)
 
 
+#: Prefixes of the harness's own mid-turn notices. The loop yields these as ordinary text
+#: deltas (``[compacted 12 messages]``, ``[continuing …]``), but they are the HARNESS
+#: talking about the conversation, not the model answering — so both surfaces set them
+#: apart (dim, on their own line) instead of letting them read as model speech.
+NOTICE_PREFIXES: tuple[str, ...] = (
+    "[compacted",
+    "[compacting",
+    "[continuation",
+    "[continuing",
+)
+
+
+def notice_text(text: str) -> str | None:
+    """The notice carried by this delta, stripped — or None if it isn't one.
+
+    Shared by the plain loop and ``agent86.tui.turn_bridge`` so the two surfaces classify
+    deltas identically.
+    """
+    stripped = text.strip()
+    if stripped.startswith(NOTICE_PREFIXES):
+        return stripped
+    return None
+
+
 def _tool_label(text: str) -> str | None:
     """Derive a progress label from a tool-announce line like '\\n[tool] name({...})'.
 
@@ -215,10 +239,22 @@ class _Repl:
             console.print()  # blank line separating the question from the response
             console.print("[bold cyan]agent86[/bold cyan] ", end="")
             printed = False
+            # The `agent86` label above was printed with end="": the cursor is mid-line.
+            at_line_start = False
             try:
                 for delta in self.harness.run_turn(line, self.state):
                     if delta.text:
+                        notice = notice_text(delta.text)
+                        if notice is not None:
+                            # Harness chatter, not the answer: break the stream's current
+                            # line first so it can't be glued onto the model's sentence.
+                            if not at_line_start:
+                                console.print()
+                                at_line_start = True
+                            console.print(f"[dim]{escape(notice)}[/dim]")
+                            continue
                         _emit(delta.text)
+                        at_line_start = delta.text.endswith("\n")
                         printed = True
                 if not printed:
                     console.print("[dim](no response)[/dim]", end="")

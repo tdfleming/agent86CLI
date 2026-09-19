@@ -5,7 +5,14 @@ from __future__ import annotations
 import threading
 import time
 
-from agent86.tui.messages import ApprovalRequest, ToolAnnounce, TurnDelta, TurnDone, TurnError
+from agent86.tui.messages import (
+    ApprovalRequest,
+    ToolAnnounce,
+    TurnDelta,
+    TurnDone,
+    TurnError,
+    TurnNotice,
+)
 from agent86.tui.turn_bridge import run_turn_worker
 
 
@@ -155,3 +162,71 @@ def test_worker_cancels_the_harness_when_closing_mid_turn():
 
     assert harness.cancelled is True
     assert isinstance(posts[-1], TurnDone)
+
+
+# ---- harness notices (v0.8) --------------------------------------------- #
+
+
+class _NoticeHarness:
+    """A harness that emits the loop's mid-turn notices around ordinary text."""
+
+    def __init__(self) -> None:
+        from agent86.guardrails.policy import ApprovalGate
+        from agent86.types import ApprovalMode
+
+        self.gate = ApprovalGate(ApprovalMode.AUTO)
+
+    def run_turn(self, line, state):  # noqa: ANN001
+        from agent86.types import CompletionDelta
+
+        yield CompletionDelta(text="\n[compacted 12 messages]\n")
+        yield CompletionDelta(text="hello ")
+        yield CompletionDelta(text="\n[continuing after 40 steps]\n")
+
+
+def _drain(harness) -> list[object]:  # noqa: ANN001
+    posts: list[object] = []
+    thread = threading.Thread(
+        target=run_turn_worker, args=(harness, "go", None, posts.append), daemon=True
+    )
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    return posts
+
+
+def test_notice_deltas_become_turn_notices():
+    posts = _drain(_NoticeHarness())
+
+    assert [type(m) for m in posts] == [TurnNotice, TurnDelta, TurnNotice, TurnDone]
+    assert posts[0].text == "[compacted 12 messages]"  # stripped, ready to render
+    assert posts[2].text == "[continuing after 40 steps]"
+
+
+def test_tool_lines_are_still_tool_announces_not_notices(fake_harness, fake_state):
+    """The `[tool]` prefix must keep winning: it carries a status-footer label."""
+    posts: list[object] = []
+    thread = threading.Thread(
+        target=run_turn_worker,
+        args=(fake_harness, "go", fake_state, posts.append),
+        daemon=True,
+    )
+    thread.start()
+    _poll_until(lambda: any(isinstance(m, ApprovalRequest) for m in posts))
+    approval = next(m for m in posts if isinstance(m, ApprovalRequest))
+    approval.box["ok"] = True
+    approval.event.set()
+    thread.join(timeout=5)
+
+    assert not any(isinstance(m, TurnNotice) for m in posts)
+
+
+def test_notice_text_only_matches_harness_notices():
+    from agent86.ui.repl import notice_text
+
+    assert notice_text("\n[compacted 12 messages]\n") == "[compacted 12 messages]"
+    assert notice_text("[continuing after 40 steps]") == "[continuing after 40 steps]"
+    assert notice_text("[continuation 2 of 3]") == "[continuation 2 of 3]"
+    # model prose that merely opens with a bracket is NOT a notice
+    assert notice_text("[see docs/ARCHITECTURE.md]") is None
+    assert notice_text("hello") is None

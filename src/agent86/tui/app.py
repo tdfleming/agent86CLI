@@ -35,6 +35,7 @@ from agent86.tui.messages import (
     TurnDelta,
     TurnDone,
     TurnError,
+    TurnNotice,
 )
 from agent86.tui.screens.approval import ApprovalModal
 from agent86.tui.screens.connection_test import ConnectionTestModal, TestOutcome
@@ -974,6 +975,16 @@ class Agent86App(App):
         self.repl.status.working = True
         self.repl.status.phase = message.label
         self.query_one("#status", StatusFooter).status = self.repl.status
+
+    def on_turn_notice(self, message: TurnNotice) -> None:
+        """A `[compacted …]` / `[continuing …]` notice: the harness, not the model.
+
+        Flushed like a tool announce so it lands in the transcript in stream order, and
+        escaped because the notice quotes harness-formatted counts and model names.
+        """
+        self._flush_stream()
+        self._write(f"[dim]{escape(message.text)}[/dim]")
+        self.query_one("#transcript", RichLog).scroll_end(animate=False)
 
     def on_approval_request(self, message: ApprovalRequest) -> None:
         if self._shutdown_event.is_set():
