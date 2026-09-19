@@ -170,6 +170,28 @@ def test_status_line_reflects_state(tmp_path):
     assert "mode:" in line and "sbx" in line
 
 
+def test_status_carries_the_full_model_ref_for_price_lookup(tmp_path):
+    """`model` is the short display label; price lookup needs `provider:model`.
+
+    Without the ref a local model is indistinguishable from an unpriced one, so an Ollama
+    user would read "cost n/a" where $0.0000 is the truth.
+    """
+    from agent86.ui.status import UNPRICED_LABEL
+
+    repl, harness = _repl(tmp_path)
+    repl.dispatch("/model ollama:llama3.1")  # keyless local provider
+
+    assert repl.status.model == "llama3.1"  # display label stays bare
+    assert repl.status.model_ref == "ollama:llama3.1"  # lookup ref is fully qualified
+    assert UNPRICED_LABEL not in repl.status_line()
+    assert "$0.0000" in repl.status_line()
+
+    # and it is set at construction too, not only after a /model switch
+    fresh = _Repl(repl.cfg, resume=None, harness=harness)
+    p = harness.provider
+    assert fresh.status.model_ref == f"{p.name}:{p.model}"
+
+
 def test_unknown_command_echo_is_markup_escaped(tmp_path, capsys):
     """The plain loop must not blow up on an unknown command that looks like Rich markup.
 

@@ -85,6 +85,7 @@ class _Repl:
         p = self.harness.provider
         self.status = StatusState(
             model=p.model,
+            model_ref=f"{p.name}:{p.model}",
             used_tokens=0,
             window=context_window_for(f"{p.name}:{p.model}", cfg),
             output_tokens=0,
@@ -108,6 +109,7 @@ class _Repl:
     def _refresh_status(self) -> None:
         p = self.harness.provider
         self.status.model = p.model
+        self.status.model_ref = f"{p.name}:{p.model}"
         self.status.window = context_window_for(f"{p.name}:{p.model}", self.cfg)
         self.status.used_tokens = self.state.steps[-1].usage.input_tokens if self.state.steps else 0
         self.status.output_tokens = self.state.usage.output_tokens
