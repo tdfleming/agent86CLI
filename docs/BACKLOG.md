@@ -81,3 +81,53 @@ platform-specific:
 - **C — `context = "auto"`.** The memory-aware formula with platform detection + a speed cap +
   `/api/ps` validation. Most capable, most moving parts (cross-platform memory detection is the
   fragile bit). Pays off mainly on machines with real GPUs and large headroom.
+
+---
+
+## Review findings 2026-09-19 (deferred beyond v0.7)
+
+Raised during the v0.6.0 release review. None of these block a release; all of them are things a
+Claude-Code-like harness eventually wants. The v0.7 "trustworthy harness" items live in
+`.planning/PROJECT.md`; this list is what sits *behind* them.
+
+### Context & cost
+
+- **Context compaction / summarization** — working memory trims by sliding window. A long
+  session should summarize the dropped span instead of forgetting it outright.
+- **Prompt caching** — the Anthropic provider doesn't mark cache breakpoints, so a stable system
+  prompt + tool schema block is re-billed every turn.
+- **Parallel tool calls** — the loop executes a turn's tool calls one at a time; independent
+  calls could run concurrently.
+- **`max_tokens` continuation** — a response truncated at the output cap currently just ends.
+  Detect the stop reason and continue.
+
+### TUI
+
+- **Markdown rendering in the transcript** — model output is written as escaped plain text; code
+  fences, lists, and tables deserve real rendering.
+- **Diff preview in the approval modal** — approving a `write_file`/`edit_file` should show the
+  diff being approved, not just the tool name and arguments.
+- **Prompt history and multi-line input** — up-arrow recall and a soft-wrap multi-line composer.
+- **`@file` mentions** — path autocomplete in the prompt that inlines a file's content.
+- **Session picker** — sessions persist and resume, but only by id on the command line; the app
+  should list and pick them.
+- **Tool-call collapsing** — long tool observations should fold to a one-line summary that can be
+  expanded.
+
+### Skills & tools
+
+- **Agent Skills convention + `allowed-tools` enforcement** — align the `SKILL.md` frontmatter
+  with the wider convention, and actually enforce a skill's declared tool allowlist while it is
+  loaded (today it is documentation, not a gate).
+
+### Observability
+
+- **OTel exporter wiring** — spans are emitted but there is no configured exporter, so nothing
+  leaves the process.
+- **Trace redaction and rotation** — the flight recorder is append-only, unbounded, and
+  unredacted; it should scrub secrets on write and roll over by size/age.
+
+### Release
+
+- **PyPI release workflow** — a tagged release should build and publish (trusted publishing),
+  rather than the project being install-from-source only.
