@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -31,7 +32,7 @@ from agent86.observability.recorder import Recorder, build_recorder
 from agent86.observability.tracing import Tracer, build_tracer
 from agent86.orchestration.circuit import CircuitBreaker, CircuitTripped
 from agent86.orchestration.router import ModelRouter
-from agent86.orchestration.state import AgentState
+from agent86.orchestration.state import AgentState, TurnSummary
 from agent86.skills.loader import discover_skills
 from agent86.tools.base import ToolContext
 from agent86.tools.mcp_client import MCPManager, build_mcp
@@ -116,6 +117,10 @@ class Harness:
         # is `str -> str`, so a spawned agent's cost cannot ride back on its return value;
         # it lands here and `run_turn` folds it into the turn after each tool call.
         self._subagent_usage = Usage()
+        # Per-turn read-out for the UI, live from the first model call of the turn. Published
+        # on `state.last_turn`; see `_begin_turn_summary` / `_close_turn_summary`.
+        self._summary: TurnSummary | None = None
+        self._turn_started = 0.0
         self._enforce_retention()
 
     def cancel(self) -> None:
@@ -261,6 +266,7 @@ class Harness:
         sid = state.session_id
         # A cancel requested while no turn was running must not kill the next one.
         self._cancel.clear()
+        summary = self._begin_turn_summary(state)
         self.recorder.event(sid, "turn_start", task=user_text)
 
         # Ingress guardrail on the user's input.
@@ -274,6 +280,7 @@ class Harness:
                 state.add_message(Message(role=Role.USER, content=user_text))
                 state.add_message(Message(role=Role.ASSISTANT, content=msg))
                 state.phase = AgentPhase.ERROR
+                self._close_turn_summary(state)
                 self.recorder.event(sid, "turn_end", status="blocked")
                 self._persist(state)
                 yield CompletionDelta(text=msg)
@@ -363,6 +370,8 @@ class Harness:
                 )
 
             breaker.record_step(completion.usage)
+            summary.steps = breaker.steps
+            summary.add_usage(completion.usage)
             self.recorder.event(
                 sid,
                 "model_call",
@@ -427,7 +436,10 @@ class Harness:
                     result = self._execute_tool(call, sid)
 
                 content = self._observe(result, call.name, sid)
-                step.usage = step.usage + self._take_subagent_usage(breaker)
+                summary.tool_calls += 1
+                sub_usage = self._take_subagent_usage(breaker)
+                summary.add_usage(sub_usage)
+                step.usage = step.usage + sub_usage
                 step.results.append(result)
                 state.add_message(
                     Message(role=Role.TOOL, content=content, tool_call_id=call.id, name=call.name)
@@ -544,7 +556,31 @@ class Harness:
         breaker.cost_usd += usage.cost_usd
         return usage
 
+    # ---- per-turn summary ---------------------------------------------- #
+
+    def _begin_turn_summary(self, state: AgentState) -> TurnSummary:
+        """Start (and publish) the turn's read-out, so a UI can watch it fill."""
+        summary = TurnSummary()
+        self._summary = summary
+        self._turn_started = time.monotonic()
+        state.last_turn = summary
+        return summary
+
+    def _close_turn_summary(self, state: AgentState) -> None:
+        """Stamp the duration and leave the summary on ``state.last_turn``.
+
+        Called from every exit from a turn — done, cancelled, aborted — so the UI never shows
+        a stale turn or a turn that never ends. Idempotent: closing twice is harmless.
+        """
+        summary = self._summary
+        if summary is None:
+            return
+        summary.duration_s = round(time.monotonic() - self._turn_started, 3)
+        state.last_turn = summary
+        self._summary = None
+
     def _finish_turn(self, state: AgentState, task: str, outcome: str) -> None:
+        self._close_turn_summary(state)
         if self.memory:
             self.memory.episodic.record_turn(state.session_id, task, outcome)
         self._persist(state)
@@ -558,6 +594,7 @@ class Harness:
         "cancelled" is carried by the recorder's `status`/`reason` (greppable in the trace).
         """
         state.phase = AgentPhase.ERROR
+        self._close_turn_summary(state)
         self.recorder.event(sid, "turn_end", status="cancelled", reason="cancelled", steps=steps)
         self._persist(state)
         yield CompletionDelta(text="\n[cancelled]\n")
@@ -586,6 +623,7 @@ class Harness:
 
     def _abort(self, state: AgentState, sid: str, reason: str) -> None:
         state.phase = AgentPhase.ERROR
+        self._close_turn_summary(state)
         self.recorder.event(sid, "turn_end", status="error", reason=reason)
         self._persist(state)
 

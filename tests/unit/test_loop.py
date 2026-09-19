@@ -616,3 +616,58 @@ def test_cancel_at_idle_does_not_poison_the_next_turn():
     assert "hello there" in streamed
     assert "[cancelled]" not in streamed
     assert state.phase is AgentPhase.DONE
+
+
+# ---- per-turn summary (state.last_turn) ------------------------------------ #
+
+
+def test_turn_summary_is_recorded_on_a_completed_turn():
+    harness = Harness(_config(), provider=FakeProvider(), memory=None)
+    state = harness.new_session()
+    assert state.last_turn is None
+
+    list(harness.run_turn("hi", state))
+
+    summary = state.last_turn
+    assert summary is not None
+    assert summary.input_tokens == 11
+    assert summary.output_tokens == 5
+    assert summary.steps == 1
+    assert summary.tool_calls == 0
+    assert summary.compactions == 0
+    assert summary.continuations == 0
+    assert summary.duration_s >= 0.0
+    # Providers without cache accounting leave these at zero rather than crashing.
+    assert summary.cache_read_tokens == 0
+    assert summary.cache_creation_tokens == 0
+
+
+def test_turn_summary_counts_tool_calls_and_survives_cancellation():
+    from agent86.tools.registry import ToolRegistry
+
+    box: dict = {}
+    registry = ToolRegistry()
+    registry.register(_RecordingTool("stopper", harness_box=box))
+
+    provider = _TwoToolCallProvider([ToolCall(id="a", name="stopper", arguments={})])
+    harness = Harness(_config(), provider=provider, memory=None, registry=registry)
+    box["harness"] = harness
+    state = harness.new_session()
+
+    list(harness.run_turn("go", state))
+
+    assert state.last_turn is not None
+    assert state.last_turn.tool_calls == 1
+    assert state.last_turn.steps == 1
+
+
+def test_turn_summary_survives_a_json_round_trip():
+    from agent86.orchestration.state import AgentState
+
+    harness = Harness(_config(), provider=FakeProvider(), memory=None)
+    state = harness.new_session()
+    list(harness.run_turn("hi", state))
+
+    revived = AgentState.model_validate_json(state.model_dump_json())
+    assert revived.last_turn is not None
+    assert revived.last_turn.output_tokens == 5

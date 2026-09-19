@@ -75,6 +75,14 @@ class EgressMode(StrEnum):
     REDACT = "redact"  # additionally rewrite secrets/PII out of the text
 
 
+class CompactionMode(StrEnum):
+    """What happens to the oldest turns when the conversation outgrows its budget
+    (``[limits] compaction``)."""
+
+    SUMMARIZE = "summarize"  # replace the dropped prefix with a model-written summary
+    DROP = "drop"  # silently discard the oldest span (pre-v0.8 behaviour)
+
+
 # --------------------------------------------------------------------------- #
 # Config schema
 # --------------------------------------------------------------------------- #
@@ -120,6 +128,16 @@ class ProviderConfig(BaseModel):
     # How many times a transient provider failure (429, 5xx, connection error) is retried
     # before the call is surfaced to the loop as an error. 0 disables retrying.
     max_retries: int = 2
+    # Hard cap on tokens the model may generate in one call, for THIS provider. None means
+    # "use the provider's own default" (which for Anthropic is a required parameter the
+    # adapter fills in, and for OpenAI-compatible endpoints is the server's default).
+    # The context budget subtracts this, so raising it leaves less room for conversation.
+    max_tokens: int | None = None
+    # Anthropic only: mark the stable system prompt + tool-schema block as cacheable
+    # (`cache_control`). A cache read is ~10x cheaper than fresh input tokens and the block
+    # is byte-identical across every step of a turn, so this is on by default; turn it off
+    # for an endpoint that proxies Anthropic and rejects the field.
+    prompt_cache: bool = True
 
 
 def _default_user_agent() -> str:
@@ -184,7 +202,23 @@ class LimitsConfig(BaseModel):
     max_cost_usd: float = 5.0
     max_wall_clock_s: int = 900
     max_consecutive_errors: int = 3
-    max_context_tokens: int = 8000
+    #: Optional HARD CAP on conversation tokens, for anyone who wants to spend less than the
+    #: model's window allows. ``0`` (the default) means "no cap": the budget is derived from
+    #: the real context window minus the system prompt, the tool schemas, the reserve, and the
+    #: output cap. Before v0.8 this was a flat 8000 that ignored all of those and silently
+    #: wasted ~96% of a 200k window.
+    max_context_tokens: int = 0
+    #: Tokens the model may generate per call when the provider names no ``max_tokens``.
+    max_output_tokens: int = 8192
+    #: Headroom kept free inside the window on top of the output cap — slack for the
+    #: provider's own token counting differing from ours, which is an error the model call
+    #: pays for with a hard 400.
+    context_reserve_tokens: int = 4096
+    #: What to do with the oldest turns when the conversation outgrows the budget.
+    compaction: CompactionMode = CompactionMode.SUMMARIZE
+    #: Run a step's read-only tool calls concurrently. Side-effecting calls always run
+    #: sequentially, in order, after the reads. False restores strict sequential execution.
+    parallel_tools: bool = True
     #: Seconds a single sandboxed tool may run before it is killed (``SandboxPolicy.timeout_s``).
     #: A *per-tool* budget, deliberately separate from ``max_wall_clock_s`` (the whole-run
     #: budget): the tool timeout used to be derived from the run budget, which silently
@@ -469,6 +503,7 @@ def config_paths() -> dict[str, str]:
 
 
 __all__ = [
+    "CompactionMode",
     "Config",
     "ModelConfig",
     "ModelPrice",

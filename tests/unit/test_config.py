@@ -298,3 +298,61 @@ def test_limits_tool_timeout_s_is_configurable(monkeypatch, tmp_path):
     cfg = load_config()
     assert cfg.limits.tool_timeout_s == 5
     assert cfg.limits.max_wall_clock_s == 900  # untouched by the per-tool budget
+
+
+def test_context_and_cost_limit_defaults(monkeypatch, tmp_path):
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", tmp_path / "none.toml")
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none2.toml")
+    cfg = load_config()
+    # 0 = "no cap": the budget comes from the model's real window, not a flat number.
+    assert cfg.limits.max_context_tokens == 0
+    assert cfg.limits.max_output_tokens == 8192
+    assert cfg.limits.context_reserve_tokens == 4096
+    assert cfg.limits.compaction == "summarize"
+    assert cfg.limits.parallel_tools is True
+    # Per-provider output cap and prompt-cache switch.
+    assert cfg.providers["anthropic"].max_tokens is None
+    assert cfg.providers["anthropic"].prompt_cache is True
+
+
+def test_context_and_cost_limits_are_configurable(monkeypatch, tmp_path):
+    user = tmp_path / "config.toml"
+    user.write_text(
+        textwrap.dedent(
+            """
+            [limits]
+            max_context_tokens = 20000
+            max_output_tokens = 2048
+            context_reserve_tokens = 512
+            compaction = "drop"
+            parallel_tools = false
+
+            [providers.anthropic]
+            max_tokens = 4096
+            prompt_cache = false
+            """
+        )
+    )
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", user)
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none.toml")
+    cfg = load_config()
+    assert cfg.limits.max_context_tokens == 20000
+    assert cfg.limits.max_output_tokens == 2048
+    assert cfg.limits.context_reserve_tokens == 512
+    assert cfg.limits.compaction == "drop"
+    assert cfg.limits.parallel_tools is False
+    assert cfg.providers["anthropic"].max_tokens == 4096
+    assert cfg.providers["anthropic"].prompt_cache is False
+    # A partial provider override must not wipe the rest of that provider's block.
+    assert cfg.providers["anthropic"].api_key_env == "ANTHROPIC_API_KEY"
+
+
+def test_unknown_compaction_mode_is_rejected(monkeypatch, tmp_path):
+    import pydantic
+
+    user = tmp_path / "config.toml"
+    user.write_text('[limits]\ncompaction = "forget-everything"\n')
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", user)
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none.toml")
+    with pytest.raises(pydantic.ValidationError):
+        load_config()
