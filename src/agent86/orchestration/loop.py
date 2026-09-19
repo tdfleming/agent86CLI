@@ -159,6 +159,10 @@ class Harness:
         from agent86.cognitive.base import provider_for_model
 
         provider = provider_for_model(model_str, self.config)  # may raise; caught by caller
+        # Switching models often follows a config edit (a new key, a new base_url), and the
+        # router caches a provider per model string — so drop the cache before pinning, or a
+        # later switch back to a previous model would resurrect the pre-edit provider.
+        self.router.invalidate()
         self.router.set_forced(provider)
         self.provider = provider
         return provider

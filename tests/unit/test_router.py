@@ -94,6 +94,53 @@ def test_set_forced_pins_router_over_triage(monkeypatch):
     assert router.provider_for(router.select_model("say hi")) is prov
 
 
+def test_invalidate_drops_cached_providers(monkeypatch):
+    """A provider built before a config edit must not survive it."""
+    cfg = load_config()
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    router = ModelRouter(cfg)
+
+    first = router.provider_for("openai:gpt-4o")
+    assert router.provider_for("openai:gpt-4o") is first  # cached between turns
+
+    cfg.providers["openai"] = ProviderConfig(
+        api_key_env="OPENAI_API_KEY", base_url="https://new.example/v1"
+    )
+    router.invalidate()
+
+    rebuilt = router.provider_for("openai:gpt-4o")
+    assert rebuilt is not first
+    assert "new.example" in rebuilt._url  # the edited config actually took effect
+
+
+def test_invalidate_keeps_the_pinned_provider(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    cfg = load_config()
+    router = ModelRouter(cfg)
+    pinned = provider_for_model("openai:gpt-4o", cfg)
+    router.set_forced(pinned)
+
+    router.invalidate()
+
+    assert router.forced is pinned  # the pin is the current choice, not a stale entry
+    assert router.provider_for("openai:gpt-4o") is pinned
+
+
+def test_set_model_invalidates_the_router_cache(monkeypatch, tmp_path):
+    from agent86.orchestration.loop import Harness
+    from tests.support import make_text_provider
+
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    cfg = load_config()
+    harness = Harness(cfg, provider=make_text_provider("hi"), memory=None, workspace=tmp_path)
+    harness.router._cache["openai:gpt-4o"] = object()  # a stale, pre-edit provider
+
+    harness.set_model("openai:gpt-4o")
+
+    assert harness.provider is harness.router.forced
+    assert isinstance(harness.router.provider_for("openai:gpt-4o"), OpenAIProvider)
+
+
 def test_unknown_provider_without_base_url_raises():
     cfg = load_config()
     with pytest.raises(ProviderError, match="Unknown provider"):

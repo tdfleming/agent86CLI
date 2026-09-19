@@ -55,6 +55,19 @@ class ModelRouter:
         self.forced = provider
         self._cache[provider.model] = provider
 
+    def invalidate(self) -> None:
+        """Drop cached providers so the next turn rebuilds them from current config.
+
+        Providers are built once per model string and reused, which is right within a stable
+        config — but the config is editable at runtime (``/config model``, the provider
+        manager, a new API key). Without this, a cached provider kept using the old base_url
+        or the old key for the rest of the session and the change appeared to do nothing.
+        The pinned provider is kept: it IS the current choice, not a stale cache entry.
+        """
+        self._cache.clear()
+        if self.forced is not None:
+            self._cache[self.forced.model] = self.forced
+
     def provider_for(self, model_str: str) -> ModelProvider:
         if self.forced is not None:
             return self.forced
