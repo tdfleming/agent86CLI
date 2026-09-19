@@ -12,10 +12,11 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**v0.6.0 — the full harness, a full-screen interactive TUI, cloud providers, and remote MCP.** A
-five-tier agentic harness that runs on remote or local models and uses tools, skills, MCP servers,
-and sub-agents. Every pillar and tier from *The Agentic Harness* is implemented, tested
-(532 tests), and verified live against a local model.
+**v0.7.0 — the full harness, a full-screen interactive TUI, cloud providers, remote MCP, and a
+cost meter and security posture you can trust.** A five-tier agentic harness that runs on remote
+or local models and uses tools, skills, MCP servers, and sub-agents. Every pillar and tier from
+*The Agentic Harness* is implemented, tested (670+ tests), and verified live against a local
+model.
 
 | Tier / Pillar | What's there |
 |---|---|
@@ -27,12 +28,20 @@ and sub-agents. Every pillar and tier from *The Agentic Harness* is implemented,
 | **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence, automatic retention/pruning |
 | **Multi-agent** | sub-agents via `delegate`, message envelopes, broker, supervisor orchestrator |
 | **Interactive TUI** | full-screen Textual app: scrollable transcript, live status footer, slash-command palette, arrow-key pickers, approval modal, in-app `/config model` + `/config mcp`; plain fallback for any terminal |
+| **Cost & resilience** | real per-model price table + `[pricing.models]` overrides (`limits.max_cost_usd` actually trips), retries with backoff on transient provider failures, sub-agent spend rolled into the session total |
+| **Security** | `web_fetch` SSRF guard, cross-platform sandbox env allowlist, MCP stdio env scrubbing, process-tree kill on timeout |
 
-New in v0.6: the full-screen TUI is the default interactive UI, with in-app model/provider and
-MCP configuration (keyring-backed keys, live connection tests, comment-preserving config writes)
-and cancellable turns. Since v0.2: first-class cloud providers (OpenRouter/Groq built in, any
-OpenAI-compatible endpoint via config), live mid-session `/model` switching, automatic memory
-retention/pruning, and cleaner `web_fetch` (main-content extraction, model-friendly sizing).
+New in v0.7 — the **trustworthy** pass: the cost meter is backed by a real price table (and says
+`n/a` rather than `$0.00` when it doesn't know), transient provider failures retry with backoff
+instead of killing the turn, `guardrails.egress = "redact"` actually redacts what is streamed and
+stored, `[limits] max_steps` is the only step budget, delegated sub-agents trim their context and
+bill their spend to the parent turn, and four security holes are closed (see
+[Security model](#security-model)). New in v0.6: the full-screen TUI is the default interactive
+UI, with in-app model/provider and MCP configuration (keyring-backed keys, live connection tests,
+comment-preserving config writes) and cancellable turns. Since v0.2: first-class cloud providers
+(OpenRouter/Groq built in, any OpenAI-compatible endpoint via config), live mid-session `/model`
+switching, automatic memory retention/pruning, and cleaner `web_fetch` (main-content extraction,
+model-friendly sizing).
 
 Optional heavy deps degrade gracefully: no torch → hash-embedder memory; no Docker → subprocess
 sandbox; no `mcp` → MCP disabled. Install extras as needed: `pip install -e ".[all]"`.
@@ -143,6 +152,7 @@ keyless local server):
 [providers.together]
 base_url    = "https://api.together.xyz/v1"
 api_key_env = "TOGETHER_API_KEY"
+max_retries = 2                          # transient 429/5xx/connection failures (0 = off)
 
 [providers.localvllm]
 base_url = "http://localhost:8000/v1"    # keyless local endpoint
@@ -189,6 +199,136 @@ Set exactly one of `command` (stdio) or `url` (sse/http); `transport` is inferre
 given explicitly (`stdio` | `sse` | `http`). Add `enabled = false` to keep a server configured but
 unmounted. Inspect with `agent86 mcp list` and `agent86 mcp tools`. Requires the `mcp` extra
 (`pip install -e ".[mcp]"`).
+
+## Cost tracking
+
+The status footer and `/cost` report what a session actually spent, and `[limits] max_cost_usd`
+is a real circuit breaker that trips on it. Both read `cognitive/pricing.py`, which ships a
+built-in price table in **USD per million tokens**:
+
+| Provider | Priced from | Notes |
+|---|---|---|
+| `anthropic` | the Claude API model/pricing reference | dated snapshots resolve by prefix |
+| `openai` | developers.openai.com pricing, fetched 2026-09-19 | `gpt-*`, `o*` families |
+| `ollama`, `llamacpp` | — | **free**: they run on your hardware, so `$0.0000` is the truth |
+| `groq`, `openrouter` | — | deliberately **unpriced** (see below) |
+
+A lookup tries the full `provider:model` ref, then the bare model id, then a dated-snapshot
+prefix — so `anthropic:claude-sonnet-5-20260101` resolves to the `claude-sonnet-5` entry. (Only a
+dated suffix is stripped: a loose longest-prefix rule would happily price `gpt-5.6-sol` off the
+`gpt-5` row.)
+
+**Unknown is not zero.** Groq's rates change often and OpenRouter ids are `vendor/model` with
+per-route pricing that can't be derived from the id, so neither is in the table. A model with no
+known rate reads **`cost n/a (unpriced model)`** in the status line rather than `$0.0000` —
+showing a free call for a paid one is the one mistake a cost meter must not make. Local models are
+a separate, *correct* zero.
+
+Override or add a rate with `[pricing.models]`. Keys are a `provider:model` ref (which wins) or a
+bare model id, and overrides beat the built-in table:
+
+```toml
+[pricing.models."anthropic:claude-sonnet-5"]
+input_per_mtok  = 3.0
+output_per_mtok = 15.0
+
+[pricing.models."my-finetune"]          # bare id: matches any provider
+input_per_mtok  = 0.5
+output_per_mtok = 1.5
+
+[limits]
+max_cost_usd = 5.0                      # trips the circuit breaker for real now
+```
+
+Delegated work counts too: a sub-agent's usage and cost roll up into the parent turn's totals and
+against the same cap.
+
+## Resilience
+
+A transient provider failure no longer ends a turn you've already paid the prompt for.
+`cognitive/retry.py` retries **429 / 500 / 502 / 503 / 504** and transport errors (connect
+failures, connect timeouts, protocol errors) with exponential backoff plus equal jitter, honouring
+`Retry-After` as either delta-seconds or an HTTP-date:
+
+```toml
+[providers.anthropic]
+max_retries = 2        # per-provider retry budget; 0 disables retrying
+```
+
+Two rules keep it honest. **Nothing is retried once the first delta has been streamed** — a second
+attempt would duplicate text you've already read, so that failure surfaces as a `ProviderError`
+instead. And the Anthropic provider hands `max_retries` to the SDK client rather than wrapping a
+client that already retries.
+
+Whatever isn't retryable fails *cleanly*: the turn aborts into the ERROR phase, a
+`turn_end status="error"` lands in the flight recorder, the session is persisted and resumable,
+and you get a `ProviderError` naming the provider and model — instead of a half-written turn and
+a raw decode error.
+
+**Egress redaction is on the output path.** With `[guardrails] egress = "redact"`, the step's text
+deltas are buffered and replayed from the *inspected* text, so a leaked secret is never shown,
+never stored in the transcript or episodic memory, and never recalled later (a cancelled turn
+still gets its buffered partial, redacted). `warn` and `off` stream live as before. In both `warn`
+and `redact`, tool-call **arguments** are scanned as well — a model that reads a key from a file
+and posts it to a URL never puts it in its prose. Findings are recorded, not blocked: the approval
+gate is what stops side effects.
+
+## Security model
+
+The model is untrusted, so the harness — not the model — decides what a tool may reach.
+
+- **Sandbox environment allowlist.** Tool subprocesses get a curated environment, never yours.
+  `PATH`, the locale and encoding vars, plus the platform set (Windows: `SYSTEMROOT`, `COMSPEC`,
+  `APPDATA`, `TEMP`, …; POSIX: `HOME`, `USER`, `SHELL`, `TMPDIR`, `TERM`, `TZ`, the `LC_*` and
+  `XDG_*` families, and the CA-bundle vars so git/pip/npm still work). Everything else — every
+  API key on the machine included — is scrubbed.
+- **`[sandbox] env_passthrough`** forwards extra variables **by name** when a tool genuinely needs
+  one. Values are read from the parent environment at spawn time, so no secret is written to
+  config. Credential-looking names (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`, `*_KEY`) are
+  refused even when named explicitly, with a logged warning: the allowlist must not become a way
+  to hand the model's subprocesses the key that pays for the model.
+- **MCP stdio servers get the same scrubbed environment**, plus whatever that server's own `env`
+  block asks for. A third-party MCP subprocess no longer inherits the whole host environment; a
+  server that needs one token gets exactly that token via `${VAR}`.
+- **`web_fetch` SSRF guard.** Every hop is vetted before a connection: `http`/`https` only; all
+  A/AAAA answers resolved and refused when loopback, private, link-local, multicast, reserved, or
+  unspecified (IPv4-mapped, 6to4, and Teredo forms unwrapped first); redirects followed manually
+  with a bound of 5 hops so a public host can't bounce the fetch into your intranet; the body
+  streamed and stopped at 2 MB before any decoding; and a textual content type required. Cloud
+  metadata (`169.254.169.254`), your local Ollama, and RFC1918 hosts are all off-limits.
+- **`[tools] web_allow_private`** is the escape hatch for local development targets — off by
+  default, and named in every refusal message.
+- **Process-tree kill on timeout.** A timed-out command takes its children with it: each runs in
+  its own process group (`CREATE_NEW_PROCESS_GROUP` on Windows, `start_new_session` on POSIX) and
+  the whole group is killed (`taskkill /T /F` or `killpg`). Under Docker, each run gets a unique
+  `--name` and a timeout follows up with `docker kill`, so the container dies with the client.
+  stdin is closed (EOF) rather than inherited, so a command that reads stdin fails fast.
+- **API keys are never written to config**, in any flow. Config names only the *env var*
+  (`api_key_env`) or holds a `${VAR}` reference resolved at connect time; keys live in the
+  environment or the OS keyring, and `config_writer.py` refuses secret-looking leaf keys outright.
+
+```toml
+[sandbox]
+mode            = "subprocess"          # subprocess | docker  (validated enum)
+env_passthrough = ["GIT_SSH_COMMAND"]   # names only; secret-looking names are refused
+
+[tools]
+web_allow_private = false               # true lets web_fetch reach localhost/RFC1918
+
+[guardrails]
+ingress = "warn"                        # off | warn | block
+egress  = "redact"                      # off | warn | redact
+
+[limits]
+tool_timeout_s = 60                     # per-tool budget (was derived from max_wall_clock_s)
+max_steps      = 40                     # the only step cap — no hidden 12-step ceiling
+
+[agents]
+max_steps = 8                           # per-sub-agent cap, clamped by limits.max_steps
+```
+
+A typo in any of the enum fields (`egress = "redcat"`) now fails validation with the allowed
+values named, rather than silently turning the guardrail off.
 
 ## Install (development)
 
