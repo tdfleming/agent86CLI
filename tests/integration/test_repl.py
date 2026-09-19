@@ -140,6 +140,28 @@ def test_model_command_rejects_bad_ref_and_missing_key(tmp_path, monkeypatch, ca
     assert harness.provider.model == before
 
 
+def test_startup_notes_are_collected_not_printed(tmp_path, capsys):
+    """Constructing the REPL must stay silent — the TUI hides stdout behind its screen."""
+    repl, _ = _repl(tmp_path)
+    assert capsys.readouterr().out == ""
+    assert any(n.startswith("session ") for n in repl.startup_notes)
+
+    repl.print_notes()
+    out = capsys.readouterr().out
+    assert repl.state.session_id in out
+
+
+def test_resume_miss_is_recorded_as_a_startup_note(tmp_path, capsys):
+    cfg = load_config()
+    harness = Harness(cfg, provider=make_text_provider("hi"), memory=None, workspace=tmp_path)
+    repl = _Repl(cfg, resume="no-such-session", harness=harness)
+
+    assert capsys.readouterr().out == ""
+    assert repl.resume_notes == ["no session 'no-such-session' found; starting fresh"]
+    # and it leads the notes the TUI transcript / plain banner area shows
+    assert repl.startup_notes[0] == repl.resume_notes[0]
+
+
 def test_status_line_reflects_state(tmp_path):
     repl, harness = _repl(tmp_path)
     repl._refresh_status()

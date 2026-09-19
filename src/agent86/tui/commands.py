@@ -364,7 +364,9 @@ def startup_notes(repl) -> list[str]:
     """
     from rich.markup import escape
 
-    notes: list[str] = []
+    # `_Repl.__init__` records what `--resume` did here rather than printing it, so it
+    # reaches the TUI transcript instead of being swallowed by the alternate screen.
+    notes: list[str] = [escape(n) for n in getattr(repl, "resume_notes", ())]
     if repl.harness.memory_note:
         notes.append(f"memory: {escape(repl.harness.memory_note)}")
     if repl.harness.mcp_note:

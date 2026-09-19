@@ -66,15 +66,17 @@ class _Repl:
 
         self.cfg = cfg
         self.harness = harness if harness is not None else Harness(cfg)
+        # Collected, not printed: under the TUI stdout is behind the alternate screen, so
+        # anything printed here would surface only after the user quits.
+        self.resume_notes: list[str] = []
         state: AgentState | None = None
         if resume:
             state = self.harness.resume(resume)
             if state is None:
-                console.print(f"[yellow]No session '{resume}' found; starting fresh.[/yellow]")
+                self.resume_notes.append(f"no session '{resume}' found; starting fresh")
             else:
-                console.print(
-                    f"[dim]resumed session {state.session_id} "
-                    f"({len(state.messages)} messages)[/dim]"
+                self.resume_notes.append(
+                    f"resumed session {state.session_id} ({len(state.messages)} messages)"
                 )
         # Past this point state is always an AgentState (never None) — annotate it so, which
         # removes the union-attr / arg-type mypy errors on every self.state access below.
@@ -90,6 +92,13 @@ class _Repl:
             sandbox=cfg.sandbox.mode,
             approval=self.harness.gate.mode.value,
         )
+
+        from agent86.tui.commands import startup_notes  # textual-free; see module docstring
+
+        #: Launch notes — resume, memory/mcp/sandbox/skills, session id — already
+        #: markup-escaped. The plain path prints these (``print_notes``); the TUI renders
+        #: them into its transcript on mount.
+        self.startup_notes: list[str] = startup_notes(self)
 
     # ---- status ------------------------------------------------------- #
 
@@ -111,17 +120,14 @@ class _Repl:
         self.status.approval = self.harness.gate.mode.value
 
     def print_notes(self) -> None:
-        from rich.markup import escape
+        """Print ``startup_notes`` to the console — plain path only.
 
-        if self.harness.memory_note:
-            console.print(f"[dim]memory: {escape(self.harness.memory_note)}[/dim]")
-        if self.harness.mcp_note:
-            console.print(f"[dim]mcp: {escape(self.harness.mcp_note)}[/dim]")
-        if self.harness.sandbox_note:
-            console.print(f"[yellow]sandbox: {escape(self.harness.sandbox_note)}[/yellow]")
-        if self.harness.skills:
-            console.print(f"[dim]skills: {', '.join(self.harness.skills)}[/dim]")
-        console.print(f"[dim]session {self.state.session_id}[/dim]")
+        Under the TUI these go into the transcript instead; printing them here would put
+        them behind the alternate screen, where they'd appear only on quit.
+        """
+        for note in self.startup_notes:
+            style = "yellow" if note.startswith("sandbox:") else "dim"
+            console.print(f"[{style}]{note}[/{style}]")
 
     # ---- command dispatch --------------------------------------------- #
 
@@ -198,7 +204,6 @@ def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> Non
     """Entry point: build the harness once, then run the TUI or the plain loop on it."""
     from agent86.cognitive.base import ProviderError
 
-    console.print(_banner(cfg))
     try:
         repl = _Repl(cfg, resume)
     except ProviderError as exc:
@@ -208,8 +213,6 @@ def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> Non
             "`agent86 --model provider:model`, then retry.[/dim]"
         )
         return
-
-    repl.print_notes()
 
     if _use_tui(cfg, plain):
         try:
@@ -224,6 +227,11 @@ def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> Non
                 console.print(
                     f"[dim]TUI could not start ({type(exc).__name__}); using plain REPL.[/dim]"
                 )
+    # Plain path only. Printed before the TUI launches, the banner and notes would be
+    # painted onto the terminal's normal screen and then hidden by the alternate screen,
+    # only flashing past on quit — so the TUI renders `repl.startup_notes` itself instead.
+    console.print(_banner(cfg))
+    repl.print_notes()
     repl.plain_loop()
 
 

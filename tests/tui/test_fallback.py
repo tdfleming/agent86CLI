@@ -18,14 +18,15 @@ from agent86.config import load_config
 
 
 class _PlainLoopSpy:
-    """Stand-in for ``_Repl`` that records whether ``plain_loop`` ran."""
+    """Stand-in for ``_Repl`` that records whether ``plain_loop`` / ``print_notes`` ran."""
 
     def __init__(self, cfg, resume, harness=None):  # noqa: ANN001
         self.ran_plain_loop = False
-        self.startup_notes: list[str] = []
+        self.printed_notes = False
+        self.startup_notes: list[str] = ["session abc123"]
 
     def print_notes(self) -> None:
-        pass
+        self.printed_notes = True
 
     def plain_loop(self) -> None:
         self.ran_plain_loop = True
@@ -85,6 +86,42 @@ def test_tui_receives_the_already_built_repl(monkeypatch, cfg):
 
     assert seen["repl"] is holder["spy"]
     assert holder["spy"].ran_plain_loop is False  # the TUI ran; no fallback
+
+
+def test_tui_path_prints_no_banner_or_notes(monkeypatch, cfg, capsys):
+    """They'd land behind the alternate screen; the TUI renders `startup_notes` instead."""
+    holder = _patch_repl(monkeypatch)
+    monkeypatch.setattr(repl_mod, "_use_tui", lambda cfg, plain: True)
+    _install_fake_tui(monkeypatch, lambda repl: None)  # noqa: ARG005
+
+    repl_mod.run_repl(cfg)
+
+    assert capsys.readouterr().out.strip() == ""
+    assert holder["spy"].printed_notes is False
+
+
+def test_plain_path_prints_banner_and_notes(monkeypatch, cfg, capsys):
+    holder = _patch_repl(monkeypatch)
+
+    repl_mod.run_repl(cfg, plain=True)
+
+    assert "agent86" in capsys.readouterr().out  # the banner panel
+    assert holder["spy"].printed_notes is True
+
+
+def test_tui_failure_fallback_still_prints_banner_and_notes(monkeypatch, cfg, capsys):
+    holder = _patch_repl(monkeypatch)
+
+    def _raising_run_tui(repl):  # noqa: ANN001
+        raise RuntimeError("no tty")
+
+    monkeypatch.setattr(repl_mod, "_use_tui", lambda cfg, plain: True)
+    _install_fake_tui(monkeypatch, _raising_run_tui)
+
+    repl_mod.run_repl(cfg)
+
+    assert "agent86" in capsys.readouterr().out
+    assert holder["spy"].printed_notes is True
 
 
 def test_tui_start_failure_falls_back(monkeypatch, cfg):
