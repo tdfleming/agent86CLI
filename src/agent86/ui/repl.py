@@ -8,7 +8,10 @@ One entry point, two surfaces:
   ``AGENT86_PLAIN``, piped stdin, or when the TUI can't be imported/started.
 
 Both surfaces share the same ``_Repl`` (harness, session state, status), so ``run_repl``
-builds it once and hands it to whichever loop runs.
+builds it once and hands it to whichever loop runs, and both dispatch slash commands through
+the one registry in ``agent86.tui.commands``. Only the presentation differs: the plain loop
+prints each ``CommandResult.render`` to a Rich ``Console``, the TUI writes it to its
+transcript.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from rich.panel import Panel
 
 from agent86 import __version__
 from agent86.config import Config
-from agent86.guardrails.policy import cycle_mode, parse_mode
+from agent86.guardrails.policy import cycle_mode
 from agent86.ui.status import StatusState, context_window_for, format_status_line
 
 console = Console()
@@ -123,104 +126,25 @@ class _Repl:
     # ---- command dispatch --------------------------------------------- #
 
     def dispatch(self, line: str) -> str:
-        """Return 'exit', 'handled', or 'turn'."""
-        if not line:
-            return "handled"
-        if line in ("/exit", "/quit"):
+        """Dispatch one input line; returns 'exit', 'handled', or 'turn'.
+
+        Every slash-command implementation lives in the shared registry
+        (``agent86.tui.commands``) so the plain loop and the TUI can't drift. This method
+        only turns the returned :class:`~agent86.tui.commands.CommandResult` into console
+        output: ``render`` is a Rich renderable or a markup string, which ``Console.print``
+        handles either way. Commands that need a TUI surface (``/config model``,
+        ``/config mcp``) already return a plain-mode explanation from the registry.
+        """
+        from agent86.tui.commands import handle_command
+
+        result = handle_command(self, line)
+        if result.action == "exit":
             console.print("[dim]bye[/dim]")
             return "exit"
-        if line == "/help":
-            _print_help()
-            return "handled"
-        if line == "/config":
-            from agent86.cli import _show_config
-
-            _show_config(self.cfg)
-            return "handled"
-        if line == "/models":
-            from agent86.cli import _list_models
-
-            _list_models(self.cfg)
-            return "handled"
-        if line == "/tools":
-            console.print("[dim]tools:[/dim] " + ", ".join(self.harness.registry.names()))
-            return "handled"
-        if line == "/skills":
-            if self.harness.skills:
-                for s in self.harness.skills.values():
-                    console.print(f"  [cyan]{s.name}[/cyan] - {s.description}")
-            else:
-                console.print("[dim]no skills discovered[/dim]")
-            return "handled"
-        if line == "/memory":
-            self._show_memory()
-            return "handled"
-        if line == "/cost":
-            self._show_cost()
-            return "handled"
-        if line == "/clear":
-            self.state = self.harness.new_session()
-            console.print("[dim]conversation cleared[/dim]")
-            return "handled"
-        if line == "/mode" or line.startswith("/mode "):
-            self._set_mode(line[5:].strip())
-            return "handled"
-        if line == "/model" or line.startswith("/model "):
-            self._set_model(line[6:].strip())
-            return "handled"
-        if line.startswith("/"):
-            console.print(f"[dim]unknown command {line}[/dim]")
-            return "handled"
-        return "turn"
-
-    def _set_mode(self, arg: str) -> None:
-        if not arg:
-            self._cycle_approval()
-        else:
-            mode = parse_mode(arg)
-            if mode is None:
-                console.print(f"[red]unknown mode '{arg}'[/red] (ask|auto|deny)")
-                return
-            self.harness.gate.mode = mode
-            self.status.approval = mode.value
-        console.print(f"[dim]approval mode: {self.harness.gate.mode.value}[/dim]")
-
-    def _set_model(self, arg: str) -> None:
-        p = self.harness.provider
-        if not arg:
-            console.print(f"[dim]current model:[/dim] {p.name}:{p.model}")
-            console.print(
-                "[dim]usage: /model <provider:model>  "
-                "e.g. /model openrouter:anthropic/claude-3.7-sonnet[/dim]"
-            )
-            return
-        from agent86.cognitive.base import ProviderError
-
-        try:
-            new = self.harness.set_model(arg)
-        except (ProviderError, ValueError) as exc:
-            console.print(f"[red]{exc}[/red]")
-            return
-        self._refresh_status()
-        console.print(f"[dim]model:[/dim] [cyan]{new.name}:{new.model}[/cyan]")
-
-    def _show_cost(self) -> None:
-        u = self.state.usage
-        console.print(
-            f"[dim]steps[/dim] {self.state.step_count}  "
-            f"[dim]in[/dim] {u.input_tokens}  [dim]out[/dim] {u.output_tokens} tok  "
-            f"[dim]cost[/dim] ${u.cost_usd:.4f}"
-        )
-
-    def _show_memory(self) -> None:
-        if self.harness.memory:
-            c = self.harness.memory.store.counts()
-            console.print(
-                f"[dim]memory[/dim] sessions {c['sessions']}  episodes {c['episodes']}  "
-                f"facts {c['memories']}  [dim]session[/dim] {self.state.session_id}"
-            )
-        else:
-            console.print("[dim]memory is disabled[/dim]")
+        if result.render is not None:
+            console.print(result.render)
+        # "noop" (an empty line) is nothing to run and nothing to say.
+        return "turn" if result.action == "turn" else "handled"
 
     # ---- loop --------------------------------------------------------- #
 
@@ -261,26 +185,6 @@ class _Repl:
                 console.print("\n[dim]interrupted[/dim]")
             console.print()  # blank line separating the response from the next prompt
             self._refresh_status()
-
-
-def _print_help() -> None:
-    from rich.table import Table
-
-    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
-    table.add_row("[cyan]/help[/cyan]", "Show this help")
-    table.add_row("[cyan]/config[/cyan]", "Show the resolved configuration")
-    table.add_row("[cyan]/models[/cyan]", "List configured models")
-    table.add_row(
-        "[cyan]/model <provider:model>[/cyan]", "Switch the active model for this session"
-    )
-    table.add_row("[cyan]/tools[/cyan]", "List available tools")
-    table.add_row("[cyan]/skills[/cyan]", "List available skills")
-    table.add_row("[cyan]/memory[/cyan]", "Show memory stats and session id")
-    table.add_row("[cyan]/mode [ask|auto|deny][/cyan]", "Show/set approval mode (Shift+Tab cycles)")
-    table.add_row("[cyan]/cost[/cyan]", "Show token usage and cost this session")
-    table.add_row("[cyan]/clear[/cyan]", "Start a fresh conversation")
-    table.add_row("[cyan]/exit[/cyan]", "Quit")
-    console.print(table)
 
 
 def _use_tui(cfg: Config, plain: bool) -> bool:

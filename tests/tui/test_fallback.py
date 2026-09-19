@@ -144,3 +144,18 @@ def test_repl_module_import_is_textual_free():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_command_registry_import_is_textual_free():
+    """The plain loop dispatches through `agent86.tui.commands`; it must stay Textual-free."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, agent86.tui.commands; "
+            "assert 'textual' not in sys.modules, 'textual imported eagerly'",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
