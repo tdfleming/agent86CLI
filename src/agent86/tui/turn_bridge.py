@@ -15,10 +15,15 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 
+from textual.message import Message
+
 from agent86.tui.messages import ApprovalRequest, ToolAnnounce, TurnDelta, TurnDone, TurnError
 from agent86.ui.repl import _tool_label
 
-Poster = Callable[[object], object]  # app.post_message (thread-safe); returns bool in Textual
+#: ``App.post_message`` (thread-safe). Accepts a Textual ``Message``; the return value is
+#: ignored here, so it is typed ``object`` — Textual's own ``bool`` return satisfies that,
+#: and a test double may return anything.
+Poster = Callable[[Message], object]
 
 #: How often a blocked approval re-checks the closing flag. Short enough that quitting feels
 #: instant, long enough that the wait is effectively free.

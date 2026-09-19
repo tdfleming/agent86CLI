@@ -56,6 +56,7 @@ from agent86.tui.screens.model_picker import (
 from agent86.tui.screens.provider_manager import (
     CatalogPickerModal,
     ProviderManagerModal,
+    ProviderRow,
     provider_rows,
 )
 from agent86.tui.screens.save_diff import SaveDiffModal
@@ -166,7 +167,7 @@ class Agent86App(App):
         # Providers with a model_fallback catalog fetch outstanding — one fetch per provider
         # per burst.
         self._model_fetch_inflight: set[str] = set()
-        self._pending_row = None  # ProviderRow being configured
+        self._pending_row: ProviderRow | None = None  # ProviderRow being configured
         self._pending_key: str | None = None  # entered key, in memory only until the test passes
         self._pending_ref: str | None = None  # chosen provider:model ref
         # /config mcp chain state — reset by _open_mcp_manager on every entry.
@@ -423,6 +424,8 @@ class Agent86App(App):
         palette.display = False
         prompt = self.query_one("#prompt", Input)
         prompt.value = ""
+        if name is None:  # an Option built without an id is not a command row
+            return
         entry = find_command(name)
         if entry is not None:
             self._run_or_chain(entry)
@@ -504,6 +507,12 @@ class Agent86App(App):
     def _on_key_entered(self, key: str | None) -> None:
         if not key:
             return
+        if self._pending_row is None:
+            # No provider row is in flight — the chain was reset (or torn down) while the key
+            # modal was open. Dropping the key is the only safe answer: there is no provider to
+            # test it against, and keeping it would let it leak into an unrelated later save.
+            self._write("[dim]no provider selected; the key was discarded[/dim]")
+            return
         # D-14: held in memory only; written to the keyring after the test passes.
         self._pending_key = key
         self._request_catalog(self._pending_row.name, key, "manager")
@@ -529,7 +538,14 @@ class Agent86App(App):
             ConnectionTestModal(self.repl.cfg, parsed, api_key), self._on_test_done
         )
 
-    def _on_test_done(self, outcome: TestOutcome) -> None:
+    def _on_test_done(self, outcome: TestOutcome | None) -> None:
+        if outcome is None:
+            # Textual hands the callback None when the modal is dismissed without a result —
+            # e.g. the app is shutting down mid-test. Treat it exactly as a cancel: the typed
+            # key stays in memory only and nothing is written.
+            self._pending_key = None
+            self._write("[dim]connection test cancelled[/dim]")
+            return
         if not outcome.ok and not outcome.override:
             self._write(f"[red]connection test failed:[/red] {escape(str(outcome.error))}")
             return
@@ -655,8 +671,15 @@ class Agent86App(App):
             self._on_mcp_test_done,
         )
 
-    def _on_mcp_test_done(self, outcome: MCPTestOutcome) -> None:
+    def _on_mcp_test_done(self, outcome: MCPTestOutcome | None) -> None:
         draft = self._mcp_draft
+        if outcome is None:
+            # Dismissed without a result (shutdown / cancel): abandon the add, and drop any
+            # secrets typed this pass rather than persisting them untested.
+            self._mcp_draft = None
+            self._mcp_overrides = {}
+            self._write("[dim]mcp: cancelled[/dim]")
+            return
         if draft is None:
             return
         if outcome.ok:
@@ -773,6 +796,10 @@ class Agent86App(App):
             return
         self._mcp_action = kind
         self._mcp_unmount = name
+        # `object` (not the inferred `_Delete`): config_writer's change list is heterogeneous —
+        # the DELETE sentinel and plain scalars share one list shape (see plan_edit's
+        # `list[tuple[list[str], Any]]`), and `_persist_changes` already uses this annotation.
+        changes: list[tuple[list[str], object]]
         if kind == "remove":
             changes = [(["mcp", "servers", name], DELETE)]
         else:
