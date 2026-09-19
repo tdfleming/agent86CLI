@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -20,11 +21,81 @@ from agent86.types import (
     CompletionRequest,
     Message,
     Role,
+    StopReason,
     ToolCall,
     ToolSpec,
 )
 
-_DEFAULT_MAX_TOKENS = 4096
+#: Used when neither the request nor the provider config names an output cap. The Messages
+#: API *requires* max_tokens, so unlike the OpenAI-compatible adapters this one always sends
+#: a number. 8192 matches `limits.max_output_tokens`'s own fallback, so the floor is the same
+#: whichever layer ends up supplying it.
+_DEFAULT_MAX_TOKENS = 8192
+
+#: Minimum cacheable prefix, in tokens, per model family (claude-api skill, cached 2026-06-24).
+#: A `cache_control` marker on a shorter prefix is not an error — it is silently ignored and
+#: `cache_creation_input_tokens` comes back 0 — so marking below the floor buys nothing and
+#: spends one of the four breakpoints. The floor is NOT monotonic across generations: 512 on
+#: the newest models but 4096 on Opus 4.6/4.5 and Haiku 4.5, so it is matched by prefix.
+_CACHE_MINIMUM_TOKENS: tuple[tuple[str, int], ...] = (
+    ("claude-opus-5", 512),
+    ("claude-fable-5-1", 512),
+    ("claude-mythos-5-1", 512),
+    ("claude-fable-5", 512),
+    ("claude-mythos-5", 512),
+    ("claude-opus-4-8", 1024),
+    ("claude-sonnet-5", 1024),
+    ("claude-sonnet-4-6", 1024),
+    ("claude-sonnet-4-5", 1024),
+    ("claude-sonnet-4", 1024),
+    ("claude-opus-4-1", 1024),
+    ("claude-opus-4", 1024),
+    ("claude-opus-4-7", 2048),
+    ("claude-haiku-3-5", 2048),
+    ("claude-opus-4-6", 4096),
+    ("claude-opus-4-5", 4096),
+    ("claude-haiku-4-5", 4096),
+)
+
+#: Conservative floor for a model this table does not know. Over-estimating the minimum only
+#: skips a marker that might have cached; under-estimating spends a breakpoint for nothing.
+_CACHE_MINIMUM_FALLBACK = 4096
+
+#: Anthropic stop reasons that already match the normalized vocabulary pass straight through;
+#: anything else (`pause_turn`, `refusal`, a value added after this was written) is `other`.
+_STOP_REASONS: dict[str, str] = {
+    "end_turn": StopReason.END_TURN.value,
+    "tool_use": StopReason.TOOL_USE.value,
+    "max_tokens": StopReason.MAX_TOKENS.value,
+    "stop_sequence": StopReason.STOP_SEQUENCE.value,
+}
+
+
+def _cache_minimum_tokens(model: str) -> int:
+    """The minimum cacheable prefix length for ``model``, longest-prefix match."""
+    ident = model.split(":", 1)[-1].strip().lower()
+    best: tuple[int, int] | None = None
+    for family, minimum in _CACHE_MINIMUM_TOKENS:
+        if ident.startswith(family) and (best is None or len(family) > best[0]):
+            best = (len(family), minimum)
+    return best[1] if best else _CACHE_MINIMUM_FALLBACK
+
+
+def _normalize_stop_reason(raw: Any) -> str | None:
+    """Map an Anthropic ``stop_reason`` onto the shared :class:`StopReason` vocabulary."""
+    if raw is None:
+        return None
+    return _STOP_REASONS.get(str(raw), StopReason.OTHER.value)
+
+
+def _approx_tokens(text: str) -> int:
+    """Rough token count for a cacheability decision (~4 characters per token).
+
+    Deliberately an estimate: asking the token-counting endpoint would add a network round
+    trip to every turn to decide something whose only cost when wrong is a marker the API
+    ignores. The estimate is only ever compared against the minimum-prefix floor.
+    """
+    return len(text) // 4
 
 #: Must match the floor declared in pyproject.toml's `anthropic` extra. Versions below 0.28
 #: pass `proxies=` to httpx.Client, which httpx removed in 0.28 — the failure surfaces as an
@@ -114,6 +185,59 @@ class AnthropicProvider(ModelProvider):
             for t in tools
         ]
 
+    # ------------------------------------------------------------------ #
+    # Request shaping
+    # ------------------------------------------------------------------ #
+
+    def _max_tokens(self, request: CompletionRequest) -> int:
+        """The output cap for this call: request, then provider config, then the floor.
+
+        The request wins because it is the per-turn decision (the loop derives it from
+        ``limits.max_output_tokens``); the provider config is the standing preference for
+        this endpoint.
+        """
+        if request.max_tokens:
+            return int(request.max_tokens)
+        configured = getattr(self._config, "max_tokens", None)
+        if configured:
+            return int(configured)
+        return _DEFAULT_MAX_TOKENS
+
+    @property
+    def _prompt_cache_enabled(self) -> bool:
+        """``prompt_cache`` from the provider config, defaulting on for configs without it."""
+        return bool(getattr(self._config, "prompt_cache", True))
+
+    def _apply_prompt_cache(
+        self, kwargs: dict[str, Any], system: str | None, tools: list[dict[str, Any]]
+    ) -> None:
+        """Mark the stable prefix — tool definitions, then the system prompt — as cacheable.
+
+        The API renders ``tools`` -> ``system`` -> ``messages`` and caching is a *prefix*
+        match, so a marker on the LAST tool caches the whole tool list, and a marker on the
+        system block caches tools + system. Both are stable across a session while the
+        conversation after them is not, which is exactly the split caching pays for.
+
+        Each marker is placed only when the prefix it closes is long enough to actually
+        cache (see :data:`_CACHE_MINIMUM_TOKENS`); two of the four breakpoints are used at
+        most, leaving room for callers that mark message content.
+        """
+        minimum = _cache_minimum_tokens(self.model)
+        # The tool list is rendered as JSON, so its serialized length is what the model reads.
+        tools_tokens = _approx_tokens(json.dumps(tools)) if tools else 0
+        if tools and tools_tokens >= minimum:
+            # Mutating the last tool dict is safe: _to_tools built these for this request.
+            tools[-1]["cache_control"] = {"type": "ephemeral"}
+
+        if not system:
+            return
+        # The system block closes the tools+system prefix, so both count toward the floor.
+        if tools_tokens + _approx_tokens(system) < minimum:
+            return
+        kwargs["system"] = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
+
     @staticmethod
     def _to_messages(messages: list[Message]) -> tuple[str | None, list[dict[str, Any]]]:
         """Split out the system prompt and convert the rest to Anthropic format."""
@@ -161,12 +285,15 @@ class AnthropicProvider(ModelProvider):
         base_kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": request.max_tokens or _DEFAULT_MAX_TOKENS,
+            "max_tokens": self._max_tokens(request),
         }
         if system:
             base_kwargs["system"] = system
-        if request.tools:
-            base_kwargs["tools"] = self._to_tools(request.tools)
+        tools = self._to_tools(request.tools) if request.tools else []
+        if tools:
+            base_kwargs["tools"] = tools
+        if self._prompt_cache_enabled:
+            self._apply_prompt_cache(base_kwargs, system, tools)
 
         # temperature/top_p/top_k were REMOVED on Opus 5, Opus 4.8, Opus 4.7, Sonnet 5 and
         # Fable 5 — sending any of them is a 400 with no replacement value, so they must be
@@ -206,16 +333,27 @@ class AnthropicProvider(ModelProvider):
                 tool_calls.append(
                     ToolCall(id=block.id, name=block.name, arguments=dict(block.input or {}))
                 )
+        raw_usage = getattr(message, "usage", None)
+        cache_read = int(getattr(raw_usage, "cache_read_input_tokens", 0) or 0)
+        cache_creation = int(getattr(raw_usage, "cache_creation_input_tokens", 0) or 0)
+        # Anthropic reports `input_tokens` as the *uncached* remainder, with the cached
+        # portions counted separately. The harness's contract is that `Usage.input_tokens`
+        # is the whole prompt and the cache fields are a breakdown of it — otherwise a
+        # well-cached turn would look like it barely used any context. Normalise here, and
+        # let pricing.py subtract the breakdown back out to bill each part at its own rate.
+        uncached = int(getattr(raw_usage, "input_tokens", 0) or 0)
         usage = priced_usage(
             self.model,
-            input_tokens=getattr(message.usage, "input_tokens", 0),
-            output_tokens=getattr(message.usage, "output_tokens", 0),
+            input_tokens=uncached + cache_read + cache_creation,
+            output_tokens=int(getattr(raw_usage, "output_tokens", 0) or 0),
+            cache_read_tokens=cache_read,
+            cache_creation_tokens=cache_creation,
         )
         return Completion(
             text="".join(text_parts),
             tool_calls=tool_calls,
             usage=usage,
-            stop_reason=message.stop_reason,
+            stop_reason=_normalize_stop_reason(getattr(message, "stop_reason", None)),
             model=self.model,
         )
 
