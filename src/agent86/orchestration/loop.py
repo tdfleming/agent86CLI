@@ -296,6 +296,13 @@ class Harness:
                 raise HarnessError(f"Circuit tripped: {exc}") from None
 
             completion = None
+            # Redact mode cannot stream: text inspected only after it has been shown to the
+            # user has already leaked. So the step's text deltas (and the terminal `done`
+            # delta, whose order matters to consumers) are withheld here and replayed below
+            # from the INSPECTED text. warn/off keep live streaming — they change nothing.
+            buffering = self.egress.mode == "redact"
+            buffered: list[str] = []
+            final_delta: CompletionDelta | None = None
             with self.tracer.span("model_call", step=breaker.steps + 1, model=self.provider.model):
                 stream = self.provider.stream(self._build_request(state, recall_note))
                 try:
@@ -306,6 +313,12 @@ class Harness:
                             break
                         if delta.done and delta.completion is not None:
                             completion = delta.completion
+                        if buffering:
+                            if delta.text:
+                                buffered.append(delta.text)
+                            if delta.done:
+                                final_delta = delta
+                            continue
                         yield delta
                 except Exception as exc:
                     # A provider failure mid-stream (dropped connection, malformed SSE,
@@ -321,6 +334,11 @@ class Harness:
                         close()
 
             if self._cancel.is_set():
+                # Whatever was buffered still belongs to the user — redacted, then shown.
+                if buffered:
+                    partial = self.egress.inspect("".join(buffered))
+                    if partial.text:
+                        yield CompletionDelta(text=partial.text)
                 yield from self._cancelled(state, sid, breaker.steps)
                 return
 
@@ -345,23 +363,35 @@ class Harness:
                 tool_calls=[tc.name for tc in completion.tool_calls],
             )
 
-            # Egress guardrail on the model's text.
+            # Egress guardrail on the model's text. In redact mode `eg.text` is the redacted
+            # copy and it is what everything downstream sees: the stream, the ASSISTANT
+            # message, the step trace, and the episodic outcome. Persisting the raw text
+            # while showing a redacted one would just move the leak into the session store.
             eg = self.egress.inspect(completion.text)
+            text = eg.text if buffering else completion.text
             if eg.report.flagged:
                 self.recorder.event(sid, "guardrail", stage="egress", findings=eg.report.summary())
+            if buffering:
+                if text:
+                    yield CompletionDelta(text=text)
+                if final_delta is not None:
+                    yield final_delta
+            if eg.report.flagged:
                 yield CompletionDelta(text=f"\n[guardrail] output flagged: {eg.report.summary()}\n")
+
+            self._scan_tool_arguments(completion.tool_calls, sid)
 
             step = Step(
                 index=state.step_count + 1,
                 phase=AgentPhase.EXECUTE,
-                thought=completion.text,
+                thought=text,
                 tool_calls=completion.tool_calls,
                 usage=completion.usage,
             )
             state.add_message(
                 Message(
                     role=Role.ASSISTANT,
-                    content=completion.text,
+                    content=text,
                     tool_calls=completion.tool_calls,
                 )
             )
@@ -370,7 +400,7 @@ class Harness:
                 state.record_step(step)
                 state.phase = AgentPhase.DONE
                 self.recorder.event(sid, "turn_end", status="done", steps=breaker.steps)
-                self._finish_turn(state, user_text, completion.text)
+                self._finish_turn(state, user_text, text)
                 return
 
             for call in completion.tool_calls:
@@ -420,6 +450,29 @@ class Harness:
             arguments=call.arguments, error=result.error,
         )
         return result
+
+    def _scan_tool_arguments(self, calls: list, sid: str) -> None:
+        """Egress-scan tool-call arguments — the other way a secret leaves the harness.
+
+        A model that reads a key out of a file and then posts it to a URL never puts it in
+        its text, so scanning only the prose misses it entirely. The call is NOT blocked (the
+        approval gate is what stops side effects, and silently rewriting arguments would hand
+        the tool something the model did not ask for) — the finding is recorded so the leak is
+        visible in the trace. Skipped in ``off`` mode, like every other egress check.
+        """
+        if not calls or self.egress.mode == "off":
+            return
+        for call in calls:
+            try:
+                payload = json.dumps(call.arguments, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                payload = str(call.arguments)
+            report = self.egress.inspect(payload).report
+            if report.flagged:
+                self.recorder.event(
+                    sid, "guardrail", stage="egress_tool_args",
+                    tool=call.name, findings=report.summary(),
+                )
 
     def _observe(self, result: ToolResult, tool_name: str, sid: str) -> str:
         """Return the observation text, wrapping suspicious tool output as untrusted."""
