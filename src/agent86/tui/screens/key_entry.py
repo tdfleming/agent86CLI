@@ -17,6 +17,8 @@ from textual.containers import Container
 from textual.screen import ModalScreen
 from textual.widgets import Input, Label
 
+from ._shutdown import maybe_one
+
 
 class KeyEntryModal(ModalScreen[str | None]):
     """Collect one API key for `provider_name`. Dismisses with the key, or None to cancel."""
@@ -27,6 +29,7 @@ class KeyEntryModal(ModalScreen[str | None]):
         super().__init__()
         self._provider_name = provider_name
         self._keyring_ok = keyring_ok
+        self._focus_retried = False
 
     def compose(self) -> ComposeResult:
         with Container(id="key-entry-dialog"):
@@ -40,7 +43,22 @@ class KeyEntryModal(ModalScreen[str | None]):
             )
 
     def on_mount(self) -> None:
-        self.query_one("#key-input", Input).focus()
+        self._focus_input()
+
+    def _focus_input(self) -> None:
+        """Focus the key field, tolerating a dialog whose children are not mounted yet.
+
+        This modal is pushed from the provider flow, which itself can be driven off a worker
+        result, so it can be mounted inside the app's shutdown window with no children — see
+        `_shutdown.maybe_one`. Focus it when it is there, retry once after a refresh (ample for
+        a normal mount), then let it go: a screen being torn down needs no focus.
+        """
+        key_input = maybe_one(self, "#key-input", Input)
+        if key_input is not None:
+            key_input.focus()
+        elif not self._focus_retried and self.is_running:
+            self._focus_retried = True
+            self.call_after_refresh(self._focus_input)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         # D-10: consume the event here. If it bubbles past this dismissed modal, the App's

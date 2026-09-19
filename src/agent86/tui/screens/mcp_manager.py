@@ -34,6 +34,8 @@ from textual.widgets.option_list import Option
 
 from agent86.config import Config, MCPServerConfig
 
+from ._shutdown import maybe_one
+
 ADD_JSON_ID = "__add_json__"
 ADD_MANUAL_ID = "__add_manual__"
 
@@ -260,7 +262,9 @@ class MCPManagerModal(ModalScreen[MCPManagerAction | None]):
             self.dismiss(MCPManagerAction("edit", option_id))
 
     def _highlighted_server_name(self) -> str | None:
-        option_list = self.query_one("#mcp-server-list", OptionList)
+        option_list = maybe_one(self, "#mcp-server-list", OptionList)
+        if option_list is None:
+            return None  # no children -> app tearing down; see `_shutdown.maybe_one`
         highlighted = option_list.highlighted
         if highlighted is None:
             return None
@@ -337,8 +341,16 @@ class MCPServerFormModal(ModalScreen[MCPServerDraft | None]):
                 yield Button("Cancel", id="mcp-form-cancel")
 
     def on_mount(self) -> None:
+        name_input = maybe_one(self, "#mcp-name", Input)
+        if name_input is None:
+            # No children, so mounting was skipped wholesale: the app is tearing down (see
+            # `_shutdown.maybe_one`). Every lookup below would raise `NoMatches` out of
+            # `on_mount`, which Textual turns into an app-level crash. Mounting is
+            # all-or-nothing, and `#mcp-name` is composed in both modes, so this one sentinel
+            # covers the whole body. Nothing to prefill for a form nobody will see.
+            return
         if self._draft is not None:
-            self.query_one("#mcp-name", Input).value = self._draft.name
+            name_input.value = self._draft.name
             cfg = self._draft.cfg
             if self._mode == "manual":
                 self.query_one("#mcp-command", Input).value = " ".join(
@@ -371,7 +383,7 @@ class MCPServerFormModal(ModalScreen[MCPServerDraft | None]):
         elif self._mode == "manual":
             self.query_one("#mcp-transport", RadioSet).display = False
 
-        self.query_one("#mcp-name", Input).focus()
+        name_input.focus()
         self._revalidate()
 
     def on_input_changed(self, event: Input.Changed) -> None:

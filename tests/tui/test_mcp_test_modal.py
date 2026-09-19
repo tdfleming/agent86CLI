@@ -27,7 +27,9 @@ class _PickerHost(App):
         yield from ()
 
     def on_mount(self) -> None:
-        self.push_screen(self._screen, self._store)
+        # `None` means "bare host": the test pushes its own screen when it wants to.
+        if self._screen is not None:
+            self.push_screen(self._screen, self._store)
 
     def _store(self, value) -> None:
         self.result = value
@@ -172,3 +174,54 @@ async def test_mcp_test_modal_passes_overrides_to_start_server():
             await pilot.pause(0.1)
     assert manager.calls
     assert manager.calls[0]["overrides"] == {"GITHUB_TOKEN": "typed"}
+
+
+# ---- shutdown-window guards (regression for the 67a79ca mount race) ----
+
+
+async def test_mcp_test_pushed_during_shutdown_starts_no_server():
+    """Mounted into the shutdown window, the modal must not raise — and must not start a server.
+
+    Same race as the `#catalog-filter` flake fixed in 67a79ca: once `App._running` is False,
+    `App._register` returns no widgets, so `mount_all` stops awaiting the composed children and
+    `Mount` arrives with an empty dialog. Starting a real MCP server here would be worse than an
+    exception: the caller only learns the name to `stop_server` from this modal's outcome, so a
+    server started for a screen nobody sees is leaked for the rest of the session.
+    """
+    from agent86.tui.screens.mcp_test import MCPTestModal
+
+    class _Exploding:
+        def start_server(self, *args, **kwargs):
+            raise AssertionError("no server may be started for a screen mounted during shutdown")
+
+    cfg = MCPServerConfig(command="npx", args=["-y", "srv"])
+    host = _PickerHost(None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        host.push_screen(MCPTestModal(_Exploding(), "alpha", cfg))
+        # Deliberately no pause: shutdown starts while the modal is still composing.
+
+
+async def test_finish_after_dismiss_is_a_no_op():
+    """A worker result landing after the screen is gone must not raise.
+
+    `_finish`/`_timeout` are handed to `call_from_thread`, so they run at a moment the worker
+    picked. If the user pressed Escape first, `dismiss` raises `ScreenError` and every widget
+    lookup misses. Calling them on a dismissed screen is that situation without the timing race.
+    """
+    from agent86.tui.screens.mcp_test import MCPTestModal
+
+    block = threading.Event()
+    manager = _FakeManager(tools=[_FakeTool("search", "find things")], block_event=block)
+    cfg = MCPServerConfig(command="npx", args=["-y", "srv"])
+    modal = MCPTestModal(manager, "alpha", cfg)
+    host = _PickerHost(modal)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")  # user gives up while the connect is in flight
+        await pilot.pause()
+        assert host.result.ok is False
+        modal._finish([_FakeTool("search", "find things")], None)
+        modal._finish(None, "boom")
+        modal._timeout("Timed out after 30s — no response.")
+        block.set()

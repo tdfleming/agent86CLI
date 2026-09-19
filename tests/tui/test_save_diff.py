@@ -23,7 +23,9 @@ class _PickerHost(App):
         yield from ()
 
     def on_mount(self) -> None:
-        self.push_screen(self._screen, self._store)
+        # `None` means "bare host": the test pushes its own screen when it wants to.
+        if self._screen is not None:
+            self.push_screen(self._screen, self._store)
 
     def _store(self, value) -> None:
         self.result = value
@@ -182,3 +184,26 @@ async def test_malformed_existing_config_disables_save(tmp_path, monkeypatch):
         await pilot.pause()
     assert host.result is None
     assert target.read_text() == before
+
+
+async def test_save_diff_pushed_during_shutdown_does_not_raise(tmp_path, monkeypatch):
+    """`SaveDiffModal.on_mount` must survive being mounted with no children.
+
+    Same race as the `#catalog-filter` flake fixed in 67a79ca: once `App._running` is False,
+    `App._register` returns no widgets, `mount_all` stops awaiting the composed children, and
+    `Mount` arrives with the dialog empty. This modal ends the provider and MCP chains, both of
+    which are driven off worker results, so a push can land in that window. `run_test.__aexit__`
+    re-raises `app._exception`, so an unguarded `query_one` in `_refresh` fails this test.
+    """
+    from agent86.tui.screens.save_diff import SaveDiffModal
+
+    _patch_user_scope(monkeypatch, tmp_path)
+    modal = SaveDiffModal([(["model", "default"], "openai:gpt-4o")])
+    host = _PickerHost(None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        host.push_screen(modal)
+        # Deliberately no pause: shutdown starts while the modal is still composing.
+
+    # Nothing was planned, so Save could not have committed anything either.
+    assert modal._edit is None

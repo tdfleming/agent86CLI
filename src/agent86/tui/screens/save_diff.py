@@ -28,6 +28,8 @@ from agent86.config_writer import (
     plan_edit,
 )
 
+from ._shutdown import maybe_one
+
 
 class SaveDiffModal(ModalScreen[ConfigEdit | None]):
     """Preview `changes` against the chosen scope; dismiss with the ConfigEdit or None."""
@@ -72,18 +74,27 @@ class SaveDiffModal(ModalScreen[ConfigEdit | None]):
 
     def _refresh(self, scope: str) -> None:
         self._scope = scope
-        confirm = self.query_one("#save-confirm", Button)
-        body = self.query_one("#save-diff-body", Static)
+        confirm = maybe_one(self, "#save-confirm", Button)
+        body = maybe_one(self, "#save-diff-body", Static)
+        target = maybe_one(self, "#save-target", Static)
+        if confirm is None or body is None:
+            # No children: this modal is reached from the provider/MCP flows, which are driven
+            # off worker results, so `on_mount` can land in the app's shutdown window with the
+            # dialog still empty (see `_shutdown.maybe_one`). Planning an edit nobody can see or
+            # confirm is wasted work, and `self._edit` staying None keeps Save inert regardless.
+            return
         try:
             self._edit = plan_edit(scope, self._changes)
         except (ConfigWriteError, ValueError) as exc:
             self._edit = None
             confirm.disabled = True
-            self.query_one("#save-target", Static).update("")
+            if target is not None:
+                target.update("")
             body.update(str(exc))
             return
         confirm.disabled = False
-        self.query_one("#save-target", Static).update(f"target: {self._edit.path}")
+        if target is not None:
+            target.update(f"target: {self._edit.path}")
         body.update("No changes." if self._edit.is_noop else self._edit.diff)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

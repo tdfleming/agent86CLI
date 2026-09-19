@@ -33,6 +33,8 @@ from agent86.cognitive.base import UNRESOLVED, provider_for_ref
 from agent86.config import Config
 from agent86.types import CompletionRequest, Message, ModelRef, Role
 
+from ._shutdown import maybe_one
+
 
 @dataclass(frozen=True)
 class TestOutcome:
@@ -71,7 +73,13 @@ class ConnectionTestModal(ModalScreen[TestOutcome]):
                 yield Button("Cancel", id="test-cancel")
 
     def on_mount(self) -> None:
-        self.query_one("#test-buttons").display = False
+        buttons = maybe_one(self, "#test-buttons", Horizontal)
+        if buttons is None:
+            # No children: the app is tearing down (see `_shutdown.maybe_one`). Firing a live
+            # network probe for a screen nobody will ever see is worse than pointless — the
+            # worker would outlive the app and its `call_from_thread` would have nowhere to go.
+            return
+        buttons.display = False
         self._run_test()
 
     # ---- worker (off the UI thread) ------------------------------------- #
@@ -110,22 +118,43 @@ class ConnectionTestModal(ModalScreen[TestOutcome]):
 
     # ---- main thread ---------------------------------------------------- #
 
+    # Both of these run on the main thread via `call_from_thread`, i.e. at a moment the worker
+    # chose, not one the UI chose. The screen may have been dismissed or the app torn down in
+    # between, in which case `dismiss` raises (`ScreenError`: not active) and the widget lookups
+    # find nothing. `is_running` is the check for "still a live screen"; it is True for the whole
+    # normal lifetime, so the alive path below is unchanged.
+
     def _timeout(self, message: str) -> None:
         # A timeout resolves immediately (D-12: no cancel button for the in-flight request, so
         # there is nothing for the user to act on) rather than waiting on Save-anyway.
         self._error = message
+        if not self.is_running:
+            return
         self.dismiss(TestOutcome(ok=False, error=message, override=False))
 
     def _finish(self, ok: bool, error: str | None) -> None:
-        self.query_one("#test-spinner").display = False
+        if not ok:
+            self._error = error
+        if not self.is_running:
+            return
+        spinner = maybe_one(self, "#test-spinner", LoadingIndicator)
+        if spinner is None:
+            return  # torn down mid-flight; nothing to show and nobody to show it to
+        spinner.display = False
+        status = maybe_one(self, "#test-status", Static)
         if ok:
-            self.query_one("#test-status", Static).update("Connection ok.")
+            if status is not None:
+                status.update("Connection ok.")
             self.dismiss(TestOutcome(ok=True))
             return
-        self._error = error
-        self.query_one("#test-status", Static).update(f"Test failed:\n{error}")
-        self.query_one("#test-buttons").display = True
-        self.query_one("#save-anyway", Button).focus()
+        if status is not None:
+            status.update(f"Test failed:\n{error}")
+        buttons = maybe_one(self, "#test-buttons", Horizontal)
+        if buttons is not None:
+            buttons.display = True
+        save_anyway = maybe_one(self, "#save-anyway", Button)
+        if save_anyway is not None:
+            save_anyway.focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         override = event.button.id == "save-anyway"

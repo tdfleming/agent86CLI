@@ -20,6 +20,8 @@ from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label, LoadingIndicator, Static
 
+from ._shutdown import maybe_one
+
 
 @dataclass(frozen=True)
 class MCPTestOutcome:
@@ -69,7 +71,13 @@ class MCPTestModal(ModalScreen[MCPTestOutcome]):
                 yield Button("Cancel", id="mcp-test-cancel")
 
     def on_mount(self) -> None:
-        self.query_one("#mcp-test-buttons").display = False
+        buttons = maybe_one(self, "#mcp-test-buttons", Horizontal)
+        if buttons is None:
+            # No children: the app is tearing down (see `_shutdown.maybe_one`). Don't start a
+            # real MCP server for a screen nobody will see — that one would leak, since the
+            # caller only learns a name to `stop_server` from this modal's outcome.
+            return
+        buttons.display = False
         self._run_test()
 
     # ---- worker (off the UI thread) ------------------------------------- #
@@ -101,41 +109,68 @@ class MCPTestModal(ModalScreen[MCPTestOutcome]):
 
     # ---- main thread ---------------------------------------------------- #
 
+    # Both of these are handed to `call_from_thread` by the worker, so they run at a moment the
+    # worker chose. The screen may have been dismissed, or the app torn down, in between — then
+    # `dismiss` raises (`ScreenError`: not active) and the widget lookups find nothing.
+    # `is_running` is True for the screen's whole normal lifetime, so the alive path is unchanged.
+
     def _timeout(self, message: str) -> None:
         # A timeout resolves immediately (no cancel button for the in-flight connect, so there is
         # nothing for the user to act on) — mirrors ConnectionTestModal._timeout.
         self._error = message
+        if not self.is_running:
+            return
         self.dismiss(MCPTestOutcome(ok=False, error=message, override=False))
 
     def _finish(self, tools: list | None, error: str | None) -> None:
         from agent86.secrets import redact
 
-        self.query_one("#mcp-test-spinner").display = False
-        buttons = self.query_one("#mcp-test-buttons")
         if error:
             self._error = error
-            self.query_one("#mcp-test-status", Static).update(f"Test failed:\n{redact(error)}")
-            self.query_one("#mcp-test-continue").display = False
-            buttons.display = True
-            self.query_one("#mcp-save-anyway", Button).focus()
+        else:
+            self._tools = tuple((t.name, t.description) for t in (tools or []))
+        if not self.is_running:
             return
-        pairs = tuple((t.name, t.description) for t in (tools or []))
-        self._tools = pairs
+        spinner = maybe_one(self, "#mcp-test-spinner", LoadingIndicator)
+        buttons = maybe_one(self, "#mcp-test-buttons", Horizontal)
+        if spinner is None or buttons is None:
+            return  # torn down mid-connect; nothing to show and nobody to show it to
+        spinner.display = False
+        status = maybe_one(self, "#mcp-test-status", Static)
+        if error:
+            if status is not None:
+                status.update(f"Test failed:\n{redact(error)}")
+            self._hide("#mcp-test-continue")
+            buttons.display = True
+            self._focus("#mcp-save-anyway")
+            return
+        pairs = self._tools
         count = len(pairs)
         headline = (
             "Connected. No tools exposed."
             if count == 0
             else f"Connected. {count} tool{'s' if count != 1 else ''}:"
         )
-        self.query_one("#mcp-test-status", Static).update(headline)
+        if status is not None:
+            status.update(headline)
         tool_lines = "\n".join(f"{name}  —  {desc}" for name, desc in pairs)
-        self.query_one("#mcp-test-tools", Static).update(
-            redact(f"{headline}\n{tool_lines}" if tool_lines else headline)
-        )
-        self.query_one("#mcp-save-anyway").display = False
-        self.query_one("#mcp-test-cancel").display = False
+        tools_widget = maybe_one(self, "#mcp-test-tools", Static)
+        if tools_widget is not None:
+            tools_widget.update(redact(f"{headline}\n{tool_lines}" if tool_lines else headline))
+        self._hide("#mcp-save-anyway")
+        self._hide("#mcp-test-cancel")
         buttons.display = True
-        self.query_one("#mcp-test-continue", Button).focus()
+        self._focus("#mcp-test-continue")
+
+    def _hide(self, selector: str) -> None:
+        widget = maybe_one(self, selector, Button)
+        if widget is not None:
+            widget.display = False
+
+    def _focus(self, selector: str) -> None:
+        widget = maybe_one(self, selector, Button)
+        if widget is not None:
+            widget.focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "mcp-test-continue":

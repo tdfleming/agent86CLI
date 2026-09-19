@@ -49,7 +49,9 @@ class _PickerHost(App):
         yield from ()
 
     def on_mount(self) -> None:
-        self.push_screen(self._screen, self._store)
+        # `None` means "bare host": the test pushes its own screen when it wants to.
+        if self._screen is not None:
+            self.push_screen(self._screen, self._store)
 
     def _store(self, value) -> None:
         self.result = value
@@ -862,3 +864,46 @@ async def test_remove_of_never_mounted_server_raises_nothing(tmp_path, monkeypat
 
     # no exception raised; "off" was never in the registry or the fake manager's tool map
     assert fake.stop_calls == ["off"]
+
+
+# ---- shutdown-window guards (regression for the 67a79ca mount race) ------------------------- #
+
+
+async def test_mcp_form_pushed_during_shutdown_does_not_raise():
+    """`MCPServerFormModal.on_mount` must survive being mounted with no children.
+
+    Same race as the `#catalog-filter` flake fixed in 67a79ca: once `App._running` is False,
+    `App._register` returns no widgets, so `mount_all` stops awaiting the composed children and
+    `Mount` arrives with an empty dialog. This form is reached from the `/config mcp` chain,
+    whose steps resolve off modal callbacks, so a push can land in that window. `on_mount` here
+    is a run of ten-plus `query_one` calls, any one of which would take the app down.
+
+    The draft path is the dangerous one (edit mode prefills every field), so use it. Pushing
+    with no `pilot.pause()` puts `on_mount` in the window; `run_test.__aexit__` re-raises
+    `app._exception`, so an unguarded lookup fails this test.
+    """
+    from agent86.tui.screens.mcp_manager import MCPServerDraft, MCPServerFormModal
+
+    draft = MCPServerDraft(
+        name="alpha",
+        cfg=MCPServerConfig(command="npx", args=["-y", "srv"], env={"A": "b"}),
+    )
+    host = _PickerHost(None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        host.push_screen(MCPServerFormModal(mode="manual", draft=draft))
+        # Deliberately no pause: shutdown starts while the modal is still composing.
+
+
+async def test_mcp_manager_list_pushed_during_shutdown_does_not_raise():
+    """The list modal's `d`/`t` bindings must not raise when its OptionList never mounted."""
+    from agent86.tui.screens.mcp_manager import MCPManagerModal, mcp_server_rows
+
+    modal = MCPManagerModal(mcp_server_rows(_cfg_with_servers()))
+    host = _PickerHost(None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        host.push_screen(modal)
+        # Deliberately no pause. Then drive the bindings against the childless screen.
+        modal.action_remove()
+        modal.action_toggle()
