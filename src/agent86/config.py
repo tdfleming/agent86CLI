@@ -173,6 +173,37 @@ class AgentsConfig(BaseModel):
     max_depth: int = 2  # how deep delegation may nest (root=0)
 
 
+class ModelPrice(BaseModel):
+    """A per-model price override, USD per million tokens."""
+
+    input_per_mtok: float = Field(ge=0.0)
+    output_per_mtok: float = Field(ge=0.0)
+
+
+class PricingConfig(BaseModel):
+    """Per-model price overrides for the cost meter and ``limits.max_cost_usd``.
+
+    Keys are the ``provider:model`` ref or the bare model id; the ``provider:model`` form
+    wins when both are present. Dated snapshots resolve by prefix, so overriding
+    ``claude-sonnet-5`` also covers ``claude-sonnet-5-20260101``.
+
+    ::
+
+        [pricing.models."anthropic:claude-sonnet-5"]
+        input_per_mtok = 3.0
+        output_per_mtok = 15.0
+
+        [pricing.models."my-finetune"]
+        input_per_mtok = 0.5
+        output_per_mtok = 1.5
+
+    Overrides take precedence over ``agent86.cognitive.pricing.PRICES``; a model that is in
+    neither stays *unknown* (the status line shows "cost n/a", not "$0.00").
+    """
+
+    models: dict[str, ModelPrice] = Field(default_factory=dict)
+
+
 class ObservabilityConfig(BaseModel):
     trace: bool = True  # write the JSONL flight recorder
     path: str = "~/.agent86/traces"
@@ -260,10 +291,31 @@ class Config(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    pricing: PricingConfig = Field(default_factory=PricingConfig)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
     # Provenance — which files actually contributed (for `agent86 config path`).
     sources: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _publish_pricing_overrides(self) -> Config:
+        """Push ``[pricing.models]`` into the cost meter.
+
+        Providers call ``pricing.priced_usage()`` deep inside a stream, with no access to the
+        resolved ``Config`` — so the overrides have to reach a module-level table. Doing it
+        here (rather than in ``load_config``) means *any* validated ``Config``, however it was
+        built, is honoured: a test constructing ``Config(pricing=...)`` works the same as a
+        TOML load. Imported lazily to keep ``config`` free of a cognitive-tier import.
+        """
+        from agent86.cognitive import pricing
+
+        pricing.set_overrides(
+            {
+                key: pricing.Price(p.input_per_mtok, p.output_per_mtok, source="config")
+                for key, p in self.pricing.models.items()
+            }
+        )
+        return self
 
 
 # --------------------------------------------------------------------------- #
@@ -355,7 +407,9 @@ def config_paths() -> dict[str, str]:
 __all__ = [
     "Config",
     "ModelConfig",
+    "ModelPrice",
     "ModelRoute",
+    "PricingConfig",
     "ProviderConfig",
     "SandboxConfig",
     "GuardrailsConfig",

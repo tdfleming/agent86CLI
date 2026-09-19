@@ -93,6 +93,34 @@ def test_circuit_trips_on_cost_cap():
         breaker.before_step()
 
 
+def test_circuit_trips_on_real_priced_usage():
+    """The cap must trip on cost the *price table* produced, not just a hand-built Usage.
+
+    While ``PRICES`` was empty every call cost $0.00, so this bound was dead code.
+    """
+    from agent86.cognitive.pricing import priced_usage
+
+    # claude-opus-5 is $5/Mtok in, $25/Mtok out -> 200k in + 40k out = $1.00 + $1.00.
+    usage = priced_usage("anthropic:claude-opus-5", 200_000, 40_000)
+    assert usage.cost_usd == pytest.approx(2.0)
+
+    breaker = CircuitBreaker(LimitsConfig(max_cost_usd=1.5))
+    breaker.before_step()  # under budget
+    breaker.record_step(usage)
+    with pytest.raises(CircuitTripped, match="cost cap"):
+        breaker.before_step()
+
+
+def test_circuit_does_not_trip_on_free_local_usage():
+    from agent86.cognitive.pricing import priced_usage
+
+    breaker = CircuitBreaker(LimitsConfig(max_cost_usd=0.001))
+    for _ in range(5):
+        breaker.record_step(priced_usage("ollama:llama3.1", 1_000_000, 1_000_000))
+    breaker.before_step()  # local models are free; the cap must stay open
+    assert breaker.cost_usd == 0.0
+
+
 def test_circuit_trips_on_consecutive_errors():
     breaker = CircuitBreaker(LimitsConfig(max_consecutive_errors=2))
     breaker.record_tool_result(False)

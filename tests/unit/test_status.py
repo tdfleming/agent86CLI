@@ -6,9 +6,11 @@ from agent86.config import load_config
 from agent86.guardrails.policy import cycle_mode, parse_mode
 from agent86.types import ApprovalMode
 from agent86.ui.status import (
+    UNPRICED_LABEL,
     StatusState,
     context_percent,
     context_window_for,
+    format_cost,
     format_status_line,
     human_tokens,
 )
@@ -53,6 +55,7 @@ def _state(**over) -> StatusState:
     base = dict(
         model="qwen2.5:3b", used_tokens=1100, window=8192, output_tokens=320,
         cost_usd=0.0, sandbox="subprocess", approval="ask",
+        model_ref="ollama:qwen2.5:3b",
     )
     base.update(over)
     return StatusState(**base)
@@ -64,10 +67,36 @@ def test_status_line_idle():
     assert "ctx 13%" in line  # 1100/8192
     assert "1.1k/8.2k" in line
     assert "320 out" in line
-    assert "$0.0000" in line
+    assert "$0.0000" in line  # local model: free is the *real* price, not an unknown one
     assert "sbx subprocess" in line
     assert "mode: ask" in line
     assert "[Shift+Tab]" in line
+
+
+# ---- cost display ------------------------------------------------------ #
+
+
+def test_format_cost_priced_model():
+    assert format_cost(0.1234, "anthropic:claude-opus-4-8") == "$0.1234"
+
+
+def test_format_cost_local_model_is_free_not_unknown():
+    assert format_cost(0.0, "ollama:qwen2.5:3b") == "$0.0000"
+
+
+def test_format_cost_unknown_model_says_na():
+    assert format_cost(0.0, "groq:llama-3.3-70b-versatile") == UNPRICED_LABEL
+
+
+def test_status_line_unpriced_model_shows_na_not_zero():
+    line = format_status_line(_state(model="llama-3.3-70b-versatile", model_ref="groq:llama-3.3"))
+    assert UNPRICED_LABEL in line
+    assert "$0.0000" not in line
+
+
+def test_status_state_price_ref_falls_back_to_model():
+    assert _state(model_ref="").price_ref == "qwen2.5:3b"
+    assert _state().price_ref == "ollama:qwen2.5:3b"
 
 
 def test_status_line_working_shows_phase():
