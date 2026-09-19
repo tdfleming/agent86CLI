@@ -97,3 +97,79 @@ def test_tool_uses_context_executor(tmp_path):
     )
     assert res.ok
     assert calls == ["echo hi"]
+
+
+# ---- v0.7: a timed-out container is killed, not left running ---------------- #
+
+
+def test_docker_run_names_its_container(tmp_path):
+    ex = DockerExecutor(SandboxConfig())
+    cmd = ex.build_command(
+        SandboxPolicy(workspace=tmp_path), args=None, shell_command="echo hi", name="agent86-abc"
+    )
+    assert "--name" in cmd and "agent86-abc" in cmd
+    assert "--rm" in cmd  # the container still cleans itself up on a normal exit
+
+
+def test_docker_timeout_kills_the_container(tmp_path, monkeypatch):
+    """Killing `docker run` only kills the client — the container needs `docker kill <name>`."""
+    import subprocess
+
+    from agent86.tools.sandbox import docker_exec
+
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        if command[:2] == ["docker", "run"]:
+            raise subprocess.TimeoutExpired(cmd=command, timeout=kwargs.get("timeout", 1))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(docker_exec.subprocess, "run", fake_run)
+    res = DockerExecutor(SandboxConfig()).run(
+        SandboxPolicy(workspace=tmp_path, timeout_s=1), shell_command="sleep 120"
+    )
+
+    assert res.timed_out and res.returncode == 124
+    run_cmd, kill_cmd = calls
+    name = run_cmd[run_cmd.index("--name") + 1]
+    assert name.startswith("agent86-")
+    assert kill_cmd == ["docker", "kill", name]
+    assert "may still be running" not in res.stderr
+
+
+def test_docker_container_names_are_unique(tmp_path, monkeypatch):
+    from agent86.tools.sandbox import docker_exec
+
+    names: list[str] = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["docker", "run"]:
+            names.append(command[command.index("--name") + 1])
+        import subprocess as sp
+
+        return sp.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(docker_exec.subprocess, "run", fake_run)
+    ex = DockerExecutor(SandboxConfig())
+    policy = SandboxPolicy(workspace=tmp_path)
+    ex.run(policy, shell_command="echo one")
+    ex.run(policy, shell_command="echo two")
+    assert len(set(names)) == 2
+
+
+def test_docker_timeout_reports_when_the_kill_fails(tmp_path, monkeypatch):
+    import subprocess
+
+    from agent86.tools.sandbox import docker_exec
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["docker", "run"]:
+            raise subprocess.TimeoutExpired(cmd=command, timeout=1)
+        raise OSError("docker daemon gone")
+
+    monkeypatch.setattr(docker_exec.subprocess, "run", fake_run)
+    res = DockerExecutor(SandboxConfig()).run(
+        SandboxPolicy(workspace=tmp_path, timeout_s=1), shell_command="sleep 120"
+    )
+    assert res.timed_out and "may still be running" in res.stderr
