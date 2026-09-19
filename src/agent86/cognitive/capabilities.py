@@ -18,7 +18,10 @@ mechanisms deliberately:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from agent86.config import Config
 
 #: The request parameters that were removed together.
 SAMPLING_PARAMS: tuple[str, ...] = ("temperature", "top_p", "top_k")
@@ -101,11 +104,108 @@ def apply_sampling_params(
     return kwargs
 
 
+# --------------------------------------------------------------------------- #
+# Context windows
+#
+# The other per-model fact the harness cannot guess. Before v0.8 the conversation budget was
+# a flat `limits.max_context_tokens = 8000` regardless of model, which wasted ~96% of a 200k
+# Claude window and *overspent* a 4k local one. This is the single lookup everything asks.
+# --------------------------------------------------------------------------- #
+
+#: Used when nothing else knows: the smallest window any modern model ships with.
+DEFAULT_CONTEXT_WINDOW = 8_192
+
+#: Model-id substring -> context window (tokens), matched against the model id with its
+#: `provider:` prefix stripped and lowercased. Ordered: the FIRST match wins, so more
+#: specific ids must come before the families that contain them as a substring.
+_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
+    # Anthropic — every Claude 4.x / 5.x model is 200k.
+    ("claude", 200_000),
+    # OpenAI. gpt-4.1 advertises 1,047,576 input tokens; gpt-5 advertises 400,000.
+    ("gpt-5", 400_000),
+    ("gpt-4.1", 1_047_576),
+    ("gpt-4o", 128_000),
+    ("gpt-4-turbo", 128_000),
+    ("gpt-4", 8_192),
+    ("gpt-3.5", 16_385),
+    ("o4-mini", 200_000),
+    ("o3", 200_000),
+    ("o1", 200_000),
+    # Common open-weights ids, for OpenAI-compatible gateways (OpenRouter, Groq, vLLM).
+    ("llama-3.1", 131_072),
+    ("llama3.1", 131_072),
+    ("llama-3.3", 131_072),
+    ("llama3.3", 131_072),
+    ("qwen", 32_768),
+    ("mixtral", 32_768),
+    ("mistral", 32_768),
+    ("gemma", 8_192),
+    ("phi", 16_384),
+)
+
+
+def context_window_for(model_ref: str, config: Config) -> int:
+    """Tokens of context the model behind ``model_ref`` can hold, in priority order.
+
+    1. ``[model.context_window]`` — an explicit user override, looked up by the full
+       ``provider:model`` ref first and then by the bare model id.
+    2. The provider, where the *server* owns the window rather than the model: Ollama serves
+       whatever ``[providers.ollama] num_ctx`` asks for, and llama.cpp whatever it was
+       launched with — neither is knowable from the model name, so guessing 128k from
+       "llama3.1" would hand the budget a number the server will truncate.
+    3. :data:`_CONTEXT_WINDOWS`, matched as a substring of the model id.
+    4. :data:`DEFAULT_CONTEXT_WINDOW`.
+
+    ``model_ref`` may be a bare model id; then only steps 1, 3 and 4 apply.
+    """
+    ref = str(model_ref)
+    provider, _, model = ref.partition(":")
+    if not model:  # a bare model id, no provider prefix
+        provider, model = "", ref
+
+    overrides = getattr(config.model, "context_window", {}) or {}
+    for key in (ref, model):
+        override = overrides.get(key)
+        if override:
+            return int(override)
+
+    if provider == "ollama":
+        pconf = config.providers.get("ollama")
+        num_ctx = getattr(pconf, "num_ctx", None) if pconf else None
+        return int(num_ctx) if num_ctx else DEFAULT_CONTEXT_WINDOW
+    if provider == "llamacpp":
+        # llama.cpp's window is a server launch flag (-c); it is not discoverable over the
+        # OpenAI-compatible API, so the conservative default is the only honest answer.
+        return DEFAULT_CONTEXT_WINDOW
+
+    ident = model.strip().lower()
+    for needle, window in _CONTEXT_WINDOWS:
+        if needle in ident:
+            return window
+    return DEFAULT_CONTEXT_WINDOW
+
+
+def max_output_tokens_for(model_ref: str, config: Config) -> int:
+    """Output cap for one call: the provider's ``max_tokens``, else ``limits.max_output_tokens``.
+
+    Read with ``getattr`` so a Config predating these fields still resolves to something sane.
+    """
+    provider = str(model_ref).partition(":")[0]
+    pconf = config.providers.get(provider)
+    per_provider = getattr(pconf, "max_tokens", None) if pconf else None
+    if per_provider:
+        return int(per_provider)
+    return int(getattr(config.limits, "max_output_tokens", 8192) or 8192)
+
+
 __all__ = [
+    "DEFAULT_CONTEXT_WINDOW",
     "SAMPLING_PARAMS",
     "apply_sampling_params",
+    "context_window_for",
     "is_sampling_rejection",
     "mark_sampling_unsupported",
+    "max_output_tokens_for",
     "normalize_model",
     "supports_sampling_params",
 ]

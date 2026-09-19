@@ -671,3 +671,59 @@ def test_turn_summary_survives_a_json_round_trip():
     revived = AgentState.model_validate_json(state.model_dump_json())
     assert revived.last_turn is not None
     assert revived.last_turn.output_tokens == 5
+
+
+# ---- the context budget comes from the real window ------------------------- #
+
+
+class _WindowProbe(ModelProvider):
+    """Captures the request so the resolved budget can be inspected."""
+
+    name = "anthropic"
+
+    def __init__(self, model: str = "claude-opus-4-8"):
+        self.model = model
+        self.requests: list[CompletionRequest] = []
+
+    def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+        self.requests.append(request)
+        yield CompletionDelta(
+            done=True,
+            completion=Completion(
+                text="ok", usage=Usage(), model=self.model, stop_reason="end_turn"
+            ),
+        )
+
+
+def test_context_budget_uses_the_model_window_not_a_flat_8000():
+    harness = Harness(_config(), provider=_WindowProbe(), memory=None)
+    state = harness.new_session()
+    list(harness.run_turn("hi", state))
+
+    # A 200k Claude window, minus the system prompt + tool schemas + reserve + output cap —
+    # emphatically not the old flat 8000.
+    assert harness.working.max_tokens > 150_000
+
+
+def test_context_budget_honours_the_config_override_and_the_hard_cap():
+    cfg = _config()
+    cfg.model.context_window = {"anthropic:claude-opus-4-8": 32_768}
+    harness = Harness(cfg, provider=_WindowProbe(), memory=None)
+    list(harness.run_turn("hi", harness.new_session()))
+    override_budget = harness.working.max_tokens
+    assert 10_000 < override_budget < 32_768
+
+    cfg.limits.max_context_tokens = 5_000  # an explicit hard cap wins over the derived budget
+    harness = Harness(cfg, provider=_WindowProbe(), memory=None)
+    list(harness.run_turn("hi", harness.new_session()))
+    assert harness.working.max_tokens == 5_000
+
+
+def test_request_carries_the_resolved_max_tokens():
+    cfg = _config()
+    cfg.providers["anthropic"].max_tokens = 3_000
+    provider = _WindowProbe()
+    harness = Harness(cfg, provider=provider, memory=None)
+    list(harness.run_turn("hi", harness.new_session()))
+
+    assert provider.requests[0].max_tokens == 3_000

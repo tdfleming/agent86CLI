@@ -99,3 +99,61 @@ def test_mark_sampling_unsupported_normalizes_model_id():
 )
 def test_is_sampling_rejection(message, expected):
     assert capabilities.is_sampling_rejection(message) is expected
+
+
+# ---- context windows ------------------------------------------------------ #
+
+
+def _cfg():
+    from agent86.config import load_config
+
+    return load_config()
+
+
+def test_context_window_known_families():
+    cfg = _cfg()
+    win = capabilities.context_window_for
+    assert win("anthropic:claude-opus-4-8", cfg) == 200_000
+    assert win("anthropic:claude-sonnet-5-20260101", cfg) == 200_000
+    assert win("openai:gpt-4o", cfg) == 128_000
+    assert win("openai:gpt-4.1", cfg) == 1_047_576
+    assert win("openai:gpt-5", cfg) == 400_000
+    assert win("openai:o3-mini", cfg) == 200_000
+    # An OpenAI-compatible gateway carries the upstream model id; the family still resolves.
+    assert win("openai:anthropic/claude-3.7-sonnet", cfg) == 200_000
+
+
+def test_context_window_ollama_follows_num_ctx():
+    cfg = _cfg()
+    assert cfg.providers["ollama"].num_ctx == 8192
+    assert capabilities.context_window_for("ollama:qwen2.5:3b", cfg) == 8192
+    cfg.providers["ollama"].num_ctx = 32_768
+    # The SERVER owns an Ollama window, not the model name — num_ctx wins over the table.
+    assert capabilities.context_window_for("ollama:qwen2.5:3b", cfg) == 32_768
+    cfg.providers["ollama"].num_ctx = None
+    assert capabilities.context_window_for("ollama:qwen2.5:3b", cfg) == 8_192
+
+
+def test_context_window_llamacpp_and_unknown_fall_back():
+    cfg = _cfg()
+    assert capabilities.context_window_for("llamacpp:any-gguf", cfg) == 8_192
+    assert capabilities.context_window_for("mystery:model-x", cfg) == 8_192
+
+
+def test_context_window_config_override_wins():
+    cfg = _cfg()
+    cfg.model.context_window = {"ollama:qwen2.5:3b": 16_384}
+    assert capabilities.context_window_for("ollama:qwen2.5:3b", cfg) == 16_384
+    # The override beats a known family too, and a bare model id is accepted as the key.
+    cfg.model.context_window = {"claude-opus-4-8": 42_000}
+    assert capabilities.context_window_for("anthropic:claude-opus-4-8", cfg) == 42_000
+
+
+def test_max_output_tokens_precedence():
+    cfg = _cfg()
+    out = capabilities.max_output_tokens_for
+    assert out("anthropic:claude-opus-4-8", cfg) == cfg.limits.max_output_tokens == 8192
+    cfg.providers["anthropic"].max_tokens = 2048
+    assert out("anthropic:claude-opus-4-8", cfg) == 2048
+    # A provider with no block of its own falls back to the limits default.
+    assert out("mystery:model-x", cfg) == 8192

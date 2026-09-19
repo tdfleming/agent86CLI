@@ -27,7 +27,12 @@ from agent86.guardrails.egress import EgressGuardrail
 from agent86.guardrails.ingress import IngressGuardrail, wrap_untrusted
 from agent86.guardrails.policy import ApprovalGate, ApprovalPrompt
 from agent86.memory.system import MemorySystem, build_memory
-from agent86.memory.working import WorkingMemory
+from agent86.memory.working import (
+    MIN_CONVERSATION_TOKENS,
+    WorkingMemory,
+    conversation_budget,
+    count_spec_tokens,
+)
 from agent86.observability.recorder import Recorder, build_recorder
 from agent86.observability.tracing import Tracer, build_tracer
 from agent86.orchestration.circuit import CircuitBreaker, CircuitTripped
@@ -77,7 +82,9 @@ class Harness:
         self.memory: MemorySystem | None = (
             build_memory(config) if memory is _AUTO else memory  # type: ignore[assignment]
         )
-        self.working = WorkingMemory(config.limits.max_context_tokens)
+        # Seeded with the flat cap; `_context_budget` recomputes it from the model's real
+        # window (and the live tool catalogue) before every request.
+        self.working = WorkingMemory(config.limits.max_context_tokens or MIN_CONVERSATION_TOKENS)
         semantic = self.memory.semantic if self.memory else None
 
         # Skills (progressive disclosure) and MCP tools join the registry.
@@ -246,18 +253,61 @@ class Harness:
 
     # ---- request construction ----------------------------------------- #
 
-    def _build_request(self, state: AgentState, extra_system: str | None) -> CompletionRequest:
-        system_content = self.system_prompt.content
+    def _system_content(self, extra_system: str | None) -> str:
+        content = self.system_prompt.content
         if extra_system:
-            system_content = f"{system_content}\n\n{extra_system}"
-        convo = self.working.fit(state.messages, self.provider.count_tokens)
-        return CompletionRequest(
-            model=self.provider.model,
-            messages=[Message(role=Role.SYSTEM, content=system_content), *convo],
-            tools=self.registry.specs(),
-            temperature=0.0,
-            stream=True,
+            content = f"{content}\n\n{extra_system}"
+        return content
+
+    def _model_ref(self) -> str:
+        return f"{self.provider.name}:{self.provider.model}"
+
+    def _context_budget(self, system_content: str, specs: list) -> int:
+        """Conversation tokens available for THIS request, from the model's real window.
+
+        The window minus what the request already spends before a single turn of history is
+        added — the compiled system prompt and the tool catalogue, both of which change at
+        runtime (skills, MCP servers, the episodic recall note) — minus the room the response
+        needs. ``limits.max_context_tokens`` survives as an optional hard cap for anyone who
+        wants to spend less than the window allows.
+        """
+        from agent86.cognitive.capabilities import context_window_for, max_output_tokens_for
+
+        ref = self._model_ref()
+        window = context_window_for(ref, self.config)
+        overhead = self.provider.count_tokens(
+            [Message(role=Role.SYSTEM, content=system_content)]
+        ) + count_spec_tokens(specs)
+        budget = conversation_budget(
+            window,
+            overhead_tokens=overhead,
+            reserve_tokens=int(getattr(self.config.limits, "context_reserve_tokens", 0) or 0),
+            output_tokens=max_output_tokens_for(ref, self.config),
+            hard_cap=int(getattr(self.config.limits, "max_context_tokens", 0) or 0),
         )
+        # Published on the shared WorkingMemory so sub-agents trim to the same number.
+        self.working.max_tokens = budget
+        return budget
+
+    def _build_request(self, state: AgentState, extra_system: str | None) -> CompletionRequest:
+        system_content = self._system_content(extra_system)
+        specs = self.registry.specs()
+        budget = self._context_budget(system_content, specs)
+        convo = self.working.fit(state.messages, self.provider.count_tokens, budget)
+        kwargs: dict = {
+            "model": self.provider.model,
+            "messages": [Message(role=Role.SYSTEM, content=system_content), *convo],
+            "tools": specs,
+            "temperature": 0.0,
+            "stream": True,
+        }
+        # Additive on the provider side: set it only once types.CompletionRequest carries it,
+        # so this works both before and after that field lands.
+        if "max_tokens" in CompletionRequest.model_fields:
+            from agent86.cognitive.capabilities import max_output_tokens_for
+
+            kwargs["max_tokens"] = max_output_tokens_for(self._model_ref(), self.config)
+        return CompletionRequest(**kwargs)
 
     # ---- the loop ------------------------------------------------------ #
 

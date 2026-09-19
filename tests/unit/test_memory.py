@@ -286,3 +286,109 @@ def test_remember_and_recall_tools(tmp_path):
         ToolCall(id="2", name="recall", arguments={"query": "who built agent86?"}), ctx
     )
     assert res.ok and "Tony" in res.content
+
+
+# ---- the context budget ------------------------------------------------ #
+
+
+def test_conversation_budget_subtracts_overhead_reserve_and_output():
+    from agent86.memory.working import conversation_budget
+
+    budget = conversation_budget(
+        200_000, overhead_tokens=3_000, reserve_tokens=4_096, output_tokens=8_192
+    )
+    assert budget == 200_000 - 3_000 - 4_096 - 8_192
+
+
+def test_conversation_budget_clamps_the_reserve_on_a_small_window():
+    from agent86.memory.working import conversation_budget
+
+    # 4096 + 8192 would swallow an entire 8k window; the reserve is capped at half of it.
+    budget = conversation_budget(
+        8_192, overhead_tokens=1_000, reserve_tokens=4_096, output_tokens=8_192
+    )
+    assert budget == 8_192 - 1_000 - 4_096
+
+
+def test_conversation_budget_floors_then_applies_the_hard_cap():
+    from agent86.memory.working import MIN_CONVERSATION_TOKENS, conversation_budget
+
+    # Pathological: overhead alone exceeds the window. The floor keeps it sane ...
+    assert (
+        conversation_budget(2_000, overhead_tokens=9_000, reserve_tokens=500)
+        == MIN_CONVERSATION_TOKENS
+    )
+    # ... but an explicit hard cap is still honoured below the floor (it was typed on purpose).
+    assert conversation_budget(200_000, hard_cap=20) == 20
+    assert conversation_budget(200_000, hard_cap=0) == 200_000  # 0 = no cap
+
+
+def test_count_spec_tokens_scales_with_the_tool_catalogue():
+    from agent86.memory.working import count_spec_tokens
+    from agent86.types import ToolSpec
+
+    assert count_spec_tokens([]) == 0
+    specs = [
+        ToolSpec(
+            name=f"tool_{i}",
+            description="a tool with a reasonably long description " * 4,
+            parameters={"type": "object", "properties": {"path": {"type": "string"}}},
+        )
+        for i in range(10)
+    ]
+    one = count_spec_tokens(specs[:1])
+    assert one > 0 and count_spec_tokens(specs) > 8 * one
+
+
+def test_count_tokens_includes_tool_call_arguments():
+    from agent86.cognitive.base import ModelProvider
+
+    class _P(ModelProvider):
+        name = "p"
+        model = "p:m"
+
+        def stream(self, request):  # pragma: no cover - never called
+            raise NotImplementedError
+
+    provider = _P()
+    bare = Message(role=Role.ASSISTANT, content="")
+    with_call = Message(
+        role=Role.ASSISTANT,
+        content="",
+        tool_calls=[ToolCall(id="1", name="write_file", arguments={"body": "x" * 4_000})],
+    )
+    assert provider.count_tokens([bare]) == 0
+    # Regression: a step whose whole payload is tool arguments used to measure as 0 tokens.
+    assert provider.count_tokens([with_call]) > 900
+
+
+def test_compaction_cut_protects_recent_turns_and_tool_pairs():
+    from agent86.memory.working import WorkingMemory
+
+    msgs = [
+        Message(role=Role.USER, content="a" * 400),
+        Message(
+            role=Role.ASSISTANT,
+            content="",
+            tool_calls=[ToolCall(id="t1", name="read_file", arguments={})],
+        ),
+        Message(role=Role.TOOL, content="b" * 400, tool_call_id="t1", name="read_file"),
+        Message(role=Role.ASSISTANT, content="c" * 400),
+        Message(role=Role.USER, content="d" * 400),
+        Message(role=Role.ASSISTANT, content="e" * 400),
+        Message(role=Role.USER, content="f" * 400),
+    ]
+    counter = lambda m: sum(len(x.content) // 4 for x in m)  # noqa: E731
+    wm = WorkingMemory(max_tokens=10)
+
+    # keep_recent=5 would cut at index 2, which is a TOOL result — walk back to 1, then to the
+    # assistant that owns it, leaving the prefix a whole number of blocks.
+    cut = wm.compaction_cut(msgs, counter, keep_recent=5)
+    assert cut == 1
+    assert msgs[cut].role is Role.ASSISTANT
+
+    # Nothing to do when the conversation already fits.
+    assert WorkingMemory(max_tokens=10_000).compaction_cut(msgs, counter) == 0
+
+    # The current user turn is never compacted.
+    assert wm.compaction_cut(msgs, counter, keep_recent=0, protect_from=0) == 0

@@ -8,6 +8,7 @@ API round-trip yields both live text and the authoritative result (tool calls + 
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
@@ -63,8 +64,24 @@ class ModelProvider(ABC):
         return final
 
     def count_tokens(self, messages: list[Message]) -> int:
-        """Rough token estimate (~4 chars/token). Overridden where a real counter exists."""
-        chars = sum(len(m.content or "") for m in messages)
+        """Rough token estimate (~4 chars/token). Overridden where a real counter exists.
+
+        Tool-call arguments count. They used to be invisible here — only ``content`` was
+        measured — so a turn whose assistant messages were all tool calls with large
+        arguments (a file write, a long shell command) measured as ~0 tokens and the budget
+        never bit until the provider itself returned a context-length 400. Tool names and
+        result names are counted for the same reason: they are on the wire.
+        """
+        chars = 0
+        for m in messages:
+            chars += len(m.content or "")
+            chars += len(m.name or "")
+            for call in m.tool_calls:
+                chars += len(call.name)
+                try:
+                    chars += len(json.dumps(call.arguments, ensure_ascii=False, default=str))
+                except (TypeError, ValueError):  # pragma: no cover - defensive
+                    chars += len(str(call.arguments))
         return chars // 4
 
 
