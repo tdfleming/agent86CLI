@@ -7,6 +7,7 @@ only ever talks to the registry, never to concrete tools.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -30,15 +31,41 @@ if TYPE_CHECKING:
     from agent86.memory.semantic import SemanticMemory
     from agent86.skills.models import Skill
 
+logger = logging.getLogger(__name__)
+
+#: MCP tool names are sanitized to this length; two long names sharing a prefix can collide
+#: purely because of the truncation, which is worth saying out loud when they do.
+_MCP_NAME_LIMIT = 64
+
 
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
+        #: Names dropped at startup because something already owned them. Kept so the CLI/TUI
+        #: can show the user which of their MCP tools are NOT callable — silently dropping a
+        #: tool the user configured looks like the server failed to connect.
+        self.collisions: list[str] = []
 
     def register(self, tool: Tool) -> None:
         if tool.name in self._tools:
             raise ValueError(f"Tool '{tool.name}' is already registered.")
         self._tools[tool.name] = tool
+
+    def try_register(self, tool: Tool) -> bool:
+        """Register ``tool`` unless its name is taken; record and log the clash if it is.
+
+        The lenient path used when mounting many tools at startup, where one collision must
+        not abort the run — but must not vanish either.
+        """
+        if tool.name not in self._tools:
+            self._tools[tool.name] = tool
+            return True
+        detail = f"'{tool.name}' (already provided by another tool"
+        if len(tool.name) >= _MCP_NAME_LIMIT:
+            detail += f"; names are truncated to {_MCP_NAME_LIMIT} characters"
+        self.collisions.append(tool.name)
+        logger.warning("Tool name collision: %s) — this tool is not callable.", detail)
+        return False
 
     def unregister(self, name: str) -> bool:
         """Remove one tool by name; True if it was present (D-14).
@@ -106,10 +133,13 @@ def default_registry(
     if enable_delegate:
         registry.register(DelegateTool())
     for tool in mcp_tools or []:
-        try:
-            registry.register(tool)
-        except ValueError:
-            pass  # skip duplicate tool names across servers
+        registry.try_register(tool)  # a duplicate name is recorded, not raised
+    if registry.collisions:
+        logger.warning(
+            "%d tool name collision(s) at startup; these tools are not callable: %s",
+            len(registry.collisions),
+            ", ".join(registry.collisions),
+        )
     return registry
 
 
