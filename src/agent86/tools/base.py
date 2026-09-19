@@ -68,6 +68,12 @@ class Tool(ABC, Generic[TArgs]):
     description: str = ""
     #: True if invoking the tool causes an external side effect (gated by the HITL gate).
     side_effecting: bool = False
+    #: May this tool share a step with its siblings, running concurrently in a worker thread?
+    #: Side-effecting tools never do regardless (the orchestrator runs those sequentially, in
+    #: order, so their effects stay ordered); this is the extra opt-out for a *read-only* tool
+    #: that still cannot be run twice at once — one that drives a shared session, or that can
+    #: reach the approval prompt, where two concurrent asks would collide on one terminal.
+    parallel_safe: bool = True
     #: Pydantic model describing this tool's arguments (bound to the generic ``TArgs``).
     Args: type[TArgs]
 

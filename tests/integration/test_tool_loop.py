@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 
 from agent86.cognitive.base import ModelProvider
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
+from agent86.tools.base import EmptyArgs, Tool, ToolContext
 from agent86.types import (
     INVALID_TOOL_ARGS_KEY,
     AgentPhase,
@@ -16,6 +18,7 @@ from agent86.types import (
     CompletionRequest,
     Role,
     ToolCall,
+    ToolResult,
     Usage,
 )
 
@@ -185,3 +188,170 @@ def test_loop_declines_side_effect_without_approval(tmp_path):
     tool_msg = next(m for m in state.messages if m.role == Role.TOOL)
     assert "Not executed" in tool_msg.content
     assert state.phase is AgentPhase.DONE  # still terminates cleanly
+
+
+# ---- parallel tool dispatch (v0.8) ----------------------------------------- #
+
+
+class _BatchProvider(ModelProvider):
+    """Turn 1: one completion carrying a whole batch of tool calls. Turn 2: answer."""
+
+    name = "batch"
+
+    def __init__(self, calls: list[ToolCall], model: str = "fake:batch"):
+        self.model = model
+        self._calls = calls
+        self.turns = 0
+
+    def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+        self.turns += 1
+        if self.turns == 1:
+            yield CompletionDelta(
+                done=True,
+                completion=Completion(
+                    text="", tool_calls=list(self._calls), usage=Usage(),
+                    model=self.model, stop_reason="tool_use",
+                ),
+            )
+            return
+        yield CompletionDelta(
+            done=True,
+            completion=Completion(
+                text="done", usage=Usage(), model=self.model, stop_reason="end_turn"
+            ),
+        )
+
+
+class _SleepTool(Tool[EmptyArgs]):
+    """Records when it started and finished, so overlap is observable."""
+
+    Args = EmptyArgs
+
+    def __init__(self, name: str, delay: float = 0.3, side_effecting: bool = False,
+                 log: list | None = None, on_run=None):
+        self.name = name
+        self.description = f"sleeps {delay}s"
+        self.side_effecting = side_effecting
+        self.delay = delay
+        self.log = log if log is not None else []
+        self.runs = 0
+        self._on_run = on_run
+
+    def execute(self, args: EmptyArgs, ctx: ToolContext) -> ToolResult:
+        self.runs += 1
+        self.log.append(("start", self.name, time.monotonic()))
+        if self._on_run is not None:
+            self._on_run()
+        time.sleep(self.delay)
+        self.log.append(("end", self.name, time.monotonic()))
+        return ToolResult(call_id="", name=self.name, content=f"{self.name} ok")
+
+
+def _registry(*tools):
+    from agent86.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    for tool in tools:
+        registry.register(tool)
+    return registry
+
+
+def test_read_only_tools_in_one_step_run_concurrently():
+    log: list = []
+    tools = [_SleepTool(f"read_{i}", 0.3, log=log) for i in range(2)]
+    provider = _BatchProvider(
+        [ToolCall(id=f"c{i}", name=t.name, arguments={}) for i, t in enumerate(tools)]
+    )
+    harness = Harness(
+        _auto_config(), provider=provider, memory=None, registry=_registry(*tools)
+    )
+    state = harness.new_session()
+
+    started = time.monotonic()
+    list(harness.run_turn("go", state))
+    elapsed = time.monotonic() - started
+
+    assert all(t.runs == 1 for t in tools)
+    assert elapsed < 0.5, f"two 0.3s reads took {elapsed:.2f}s — they did not overlap"
+    # Results are still observed in CALL order, whatever order they finished in.
+    tool_msgs = [m for m in state.messages if m.role is Role.TOOL]
+    assert [m.name for m in tool_msgs] == ["read_0", "read_1"]
+    assert [m.tool_call_id for m in tool_msgs] == ["c0", "c1"]
+
+
+def test_parallel_tools_can_be_disabled():
+    log: list = []
+    tools = [_SleepTool(f"read_{i}", 0.2, log=log) for i in range(2)]
+    cfg = _auto_config()
+    cfg.limits.parallel_tools = False
+    provider = _BatchProvider(
+        [ToolCall(id=f"c{i}", name=t.name, arguments={}) for i, t in enumerate(tools)]
+    )
+    harness = Harness(cfg, provider=provider, memory=None, registry=_registry(*tools))
+
+    started = time.monotonic()
+    list(harness.run_turn("go", harness.new_session()))
+
+    # Strictly one after the other (0.35, not 0.4: Windows' sleep granularity undershoots).
+    assert time.monotonic() - started >= 0.35
+    # ... and strictly in order: nothing overlaps.
+    assert [entry[1] for entry in log] == ["read_0", "read_0", "read_1", "read_1"]
+
+
+def test_a_side_effecting_call_runs_after_the_reads():
+    log: list = []
+    read_a = _SleepTool("read_a", 0.2, log=log)
+    read_b = _SleepTool("read_b", 0.2, log=log)
+    write = _SleepTool("write_it", 0.05, side_effecting=True, log=log)
+    # The model asks for the write FIRST; the harness still runs it last.
+    provider = _BatchProvider(
+        [
+            ToolCall(id="c0", name="write_it", arguments={}),
+            ToolCall(id="c1", name="read_a", arguments={}),
+            ToolCall(id="c2", name="read_b", arguments={}),
+        ]
+    )
+    harness = Harness(
+        _auto_config(), provider=provider, memory=None, registry=_registry(read_a, read_b, write)
+    )
+    state = harness.new_session()
+
+    list(harness.run_turn("go", state))
+
+    write_start = next(e[2] for e in log if e[0] == "start" and e[1] == "write_it")
+    reads_end = max(e[2] for e in log if e[0] == "end" and e[1].startswith("read_"))
+    assert write_start >= reads_end, "the write overlapped a read"
+    # Ordering in the transcript follows the MODEL's call order, not the execution order.
+    tool_msgs = [m for m in state.messages if m.role is Role.TOOL]
+    assert [m.name for m in tool_msgs] == ["write_it", "read_a", "read_b"]
+
+
+def test_cancel_mid_batch_skips_the_pending_side_effecting_calls():
+    log: list = []
+    box: dict = {}
+    read_a = _SleepTool("read_a", 0.05, log=log, on_run=lambda: box["h"].cancel())
+    read_b = _SleepTool("read_b", 0.05, log=log)
+    write = _SleepTool("write_it", 0.05, side_effecting=True, log=log)
+    provider = _BatchProvider(
+        [
+            ToolCall(id="c0", name="read_a", arguments={}),
+            ToolCall(id="c1", name="read_b", arguments={}),
+            ToolCall(id="c2", name="write_it", arguments={}),
+        ]
+    )
+    harness = Harness(
+        _auto_config(), provider=provider, memory=None, registry=_registry(read_a, read_b, write)
+    )
+    box["h"] = harness
+    state = harness.new_session()
+
+    streamed = "".join(d.text for d in harness.run_turn("go", state) if d.text)
+
+    assert write.runs == 0                       # the side effect never happened
+    assert provider.turns == 1                   # and no follow-up model call was made
+    assert "[cancelled]" in streamed
+    assert state.phase is AgentPhase.ERROR
+    # Every call still has an observation, so the history has no tool_use without a result.
+    tool_msgs = [m for m in state.messages if m.role is Role.TOOL]
+    assert [m.tool_call_id for m in tool_msgs] == ["c0", "c1", "c2"]
+    assert "Not executed: cancelled" in tool_msgs[-1].content

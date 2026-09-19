@@ -137,6 +137,10 @@ class Harness:
         # is `str -> str`, so a spawned agent's cost cannot ride back on its return value;
         # it lands here and `run_turn` folds it into the turn after each tool call.
         self._subagent_usage = Usage()
+        # `spawn_subagent` can now be reached from a tool worker thread, and
+        # `acc = acc + usage` is a read-modify-write: without this, two delegations landing
+        # together would lose one of them from the turn's cost.
+        self._subagent_usage_lock = threading.Lock()
         # Per-turn read-out for the UI, live from the first model call of the turn. Published
         # on `state.last_turn`; see `_begin_turn_summary` / `_close_turn_summary`.
         self._summary: TurnSummary | None = None
@@ -654,17 +658,23 @@ class Harness:
             # because the tool results have to attach to the right assistant message.
             cont_start, cont_parts = None, []
 
-            for call in completion.tool_calls:
-                # Cancellation point (c): BETWEEN tool calls, never mid-execution — a tool
-                # that has started must be allowed to finish and be observed.
-                if self._cancel.is_set():
-                    state.record_step(step)
-                    yield from self._cancelled(state, sid, breaker.steps)
-                    return
-                yield CompletionDelta(text=f"\n[tool] {call.name}({_preview(call.arguments)})\n")
-                with self.tracer.span("tool_call", tool=call.name):
-                    result = self._execute_tool(call, sid)
+            # Cancellation point (c): BEFORE the batch, never mid-execution — a tool that has
+            # started must be allowed to finish and be observed.
+            if self._cancel.is_set():
+                state.record_step(step)
+                yield from self._cancelled(state, sid, breaker.steps)
+                return
 
+            # The whole batch is announced up front: with reads running concurrently, a start
+            # line printed next to its own result would claim an ordering that isn't real.
+            for call in completion.tool_calls:
+                yield CompletionDelta(text=f"\n[tool] {call.name}({_preview(call.arguments)})\n")
+
+            results = self._execute_batch(completion.tool_calls, sid)
+
+            # Observed strictly in call order, whatever order they finished in: the TOOL
+            # messages must line up with the assistant's tool_calls for every provider.
+            for call, result in zip(completion.tool_calls, results, strict=True):
                 content = self._observe(result, call.name, sid)
                 summary.tool_calls += 1
                 sub_usage = self._take_subagent_usage(breaker)
@@ -683,33 +693,153 @@ class Harness:
                     self._abort(state, sid, f"circuit tripped: {exc}")
                     raise HarnessError(f"Circuit tripped: {exc}") from None
 
+            # Every call in the batch has an observation by now — including any that was
+            # skipped because the cancel landed mid-batch — so the history is never left with
+            # a tool_use that no tool_result answers.
+            if self._cancel.is_set():
+                state.record_step(step)
+                yield from self._cancelled(state, sid, breaker.steps)
+                return
+
             state.record_step(step)
 
     # ---- helpers ------------------------------------------------------- #
 
     def _execute_tool(self, call, sid: str) -> ToolResult:
-        # Arguments the provider could not parse are answered here, before the registry,
-        # the approval gate, or any tool sees them: the model's mistake is its JSON, and
-        # only the harness can say so — a tool handed `{}` reports a missing field instead.
+        """Resolve and run one call. Kept as the single-call path used by tests and callers."""
+        decided, _parallel = self._resolve_call(call)
+        return decided if decided is not None else self._dispatch_call(call, sid)
+
+    def _resolve_call(self, call) -> tuple[ToolResult | None, bool]:
+        """Decide one call WITHOUT running it: ``(settled_result, may_run_in_parallel)``.
+
+        A non-None result means the call is already answered and must not be dispatched.
+        This is the half that may block on a human — the approval gate prompts here — so the
+        orchestrator runs it sequentially for every call in a step before anything executes.
+
+        Arguments the provider could not parse are answered here, before the registry, the
+        approval gate, or any tool sees them: the model's mistake is its JSON, and only the
+        harness can say so — a tool handed ``{}`` reports a missing field instead.
+        """
         invalid = call.invalid_arguments
         if invalid is not None:
-            result = invalid_arguments_result(call, invalid)
-        elif (tool := self.registry.get(call.name)) is None:
-            result = self.registry.dispatch(call, self.context)
-        else:
-            decision = self.gate.decide(tool, call)
-            if not decision.approved:
-                result = ToolResult(
+            return invalid_arguments_result(call, invalid), False
+        tool = self.registry.get(call.name)
+        if tool is None:
+            # The registry's own "Unknown tool" answer; nothing runs, nothing to parallelise.
+            return self.registry.dispatch(call, self.context), False
+        decision = self.gate.decide(tool, call)
+        if not decision.approved:
+            return (
+                ToolResult(
                     call_id=call.id, name=call.name, ok=False,
                     error=f"Not executed: {decision.reason}.",
-                )
-            else:
+                ),
+                False,
+            )
+        return None, (not tool.side_effecting and getattr(tool, "parallel_safe", True))
+
+    def _dispatch_call(self, call, sid: str) -> ToolResult:
+        """Run one approved call. Never raises — called from worker threads."""
+        try:
+            with self.tracer.span("tool_call", tool=call.name):
                 result = self.registry.dispatch(call, self.context)
+        except Exception as exc:  # pragma: no cover - Tool.run already traps tool errors
+            result = ToolResult(
+                call_id=call.id, name=call.name, ok=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
         self.recorder.event(
             sid, "tool_call", tool=call.name, ok=result.ok,
             arguments=call.arguments, error=result.error,
         )
         return result
+
+    def _not_executed(self, call, reason: str) -> ToolResult:
+        return ToolResult(
+            call_id=call.id, name=call.name, ok=False, error=f"Not executed: {reason}."
+        )
+
+    def _parallel_eligible(self, call) -> bool:
+        """Could this call share a worker pool? Decided from the TOOL alone — never the gate,
+        which may prompt and must be consulted exactly once, on the orchestrator's thread."""
+        if call.invalid_arguments is not None:
+            return False
+        tool = self.registry.get(call.name)
+        return (
+            tool is not None
+            and not tool.side_effecting
+            and bool(getattr(tool, "parallel_safe", True))
+        )
+
+    def _execute_batch(self, calls: list, sid: str) -> list[ToolResult]:
+        """Run a step's tool calls and return their results **in call order**.
+
+        The rule, deliberately the simplest one that is safe: read-only calls may run
+        concurrently with each other; side-effecting calls run sequentially, in the order the
+        model asked for them, *after* the reads. Two writes racing could interleave edits to
+        the same file, and a write racing a read could hand the model a half-written file —
+        ordering them costs a little latency and buys determinism. Approvals are all resolved
+        first, on this thread, because the gate may prompt a human.
+
+        Thread-safety of what a concurrent read touches: ``ToolContext`` is read-only for
+        every built-in, the sandbox executor holds no per-call state, and ``MCPManager``
+        marshals onto its own background loop with ``run_coroutine_threadsafe``.
+        """
+        candidates = [i for i, call in enumerate(calls) if self._parallel_eligible(call)]
+        enabled = bool(getattr(self.config.limits, "parallel_tools", True))
+        if not enabled or len(candidates) < 2:
+            # Strictly sequential, resolving and running one call at a time — the pre-v0.8
+            # path, unchanged, and the one a single-call step always takes.
+            return [
+                self._not_executed(call, "cancelled")
+                if self._cancel.is_set()
+                else self._execute_tool(call, sid)
+                for call in calls
+            ]
+
+        settled: list[ToolResult | None] = []
+        parallel_ok: list[bool] = []
+        for call in calls:
+            result, may_parallel = self._resolve_call(call)
+            settled.append(result)
+            parallel_ok.append(may_parallel)
+
+        pending = [i for i, r in enumerate(settled) if r is None]
+        reads = [i for i in pending if parallel_ok[i]]
+        writes = [i for i in pending if not parallel_ok[i]]
+
+        if len(reads) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(
+                max_workers=min(4, len(reads)), thread_name_prefix="agent86-tool"
+            ) as pool:
+                futures = {i: pool.submit(self._dispatch_call, calls[i], sid) for i in reads}
+                collected = {i: f.result() for i, f in futures.items()}
+            for i, result in collected.items():
+                settled[i] = result
+        else:
+            for i in reads:
+                settled[i] = (
+                    self._not_executed(calls[i], "cancelled")
+                    if self._cancel.is_set()
+                    else self._dispatch_call(calls[i], sid)
+                )
+
+        for i in writes:
+            # Between calls, never mid-execution: a tool that has started is always allowed
+            # to finish and be observed.
+            settled[i] = (
+                self._not_executed(calls[i], "cancelled")
+                if self._cancel.is_set()
+                else self._dispatch_call(calls[i], sid)
+            )
+
+        return [
+            r if r is not None else self._not_executed(calls[i], "skipped")
+            for i, r in enumerate(settled)
+        ]
 
     def _scan_tool_arguments(self, calls: list, sid: str) -> None:
         """Egress-scan tool-call arguments — the other way a secret leaves the harness.
@@ -770,7 +900,8 @@ class Harness:
         text, usage = SubAgent(self, role, depth).run(task)
         # Accumulated rather than returned: `ToolContext.spawn` is `(role, task) -> str` and
         # the delegate tool's output must stay exactly the sub-agent's answer.
-        self._subagent_usage = self._subagent_usage + usage
+        with self._subagent_usage_lock:
+            self._subagent_usage = self._subagent_usage + usage
         return text
 
     def _take_subagent_usage(self, breaker: CircuitBreaker) -> Usage:
@@ -782,7 +913,8 @@ class Harness:
         rather than via `record_step`, which would also count the sub-agent as one of the
         PARENT's model calls and quietly shrink the step budget the user configured.
         """
-        usage, self._subagent_usage = self._subagent_usage, Usage()
+        with self._subagent_usage_lock:
+            usage, self._subagent_usage = self._subagent_usage, Usage()
         breaker.cost_usd += usage.cost_usd
         return usage
 

@@ -131,7 +131,13 @@ def default_registry(
     if skills:
         registry.register(UseSkillTool())
     if enable_delegate:
-        registry.register(DelegateTool())
+        delegate = DelegateTool()
+        # `delegate` is read-only at this level (the sub-agent's own tools are individually
+        # gated), but it runs a whole nested agent loop — including approval prompts of its
+        # own. Two of those racing for one terminal is not something the gate can untangle,
+        # so delegation never joins a parallel batch.
+        delegate.parallel_safe = False
+        registry.register(delegate)
     for tool in mcp_tools or []:
         registry.try_register(tool)  # a duplicate name is recorded, not raised
     if registry.collisions:

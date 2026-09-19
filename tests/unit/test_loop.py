@@ -344,7 +344,12 @@ def _turn_end(recorder: _CapturingRecorder) -> dict:
 
 
 def test_cancel_before_a_tool_call_skips_the_rest_of_the_batch():
-    """Cancelling from inside tool #1 must stop tool #2 dead and end the turn."""
+    """Cancelling from inside tool #1 must stop tool #2 dead and end the turn.
+
+    Sequential semantics, so `parallel_tools` is off: a cancel raised from inside one call
+    obviously cannot un-start a sibling that is already running on another thread. The
+    parallel batch has its own cancellation test below.
+    """
     from agent86.tools.registry import ToolRegistry
 
     box: dict = {}
@@ -360,7 +365,9 @@ def test_cancel_before_a_tool_call_skips_the_rest_of_the_batch():
             ToolCall(id="b", name="never_runs", arguments={}),
         ]
     )
-    harness = Harness(_config(), provider=provider, memory=None, registry=registry)
+    cfg = _config()
+    cfg.limits.parallel_tools = False
+    harness = Harness(cfg, provider=provider, memory=None, registry=registry)
     box["harness"] = harness
     recorder = _CapturingRecorder()
     harness.recorder = recorder
