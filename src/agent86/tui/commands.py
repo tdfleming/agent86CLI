@@ -174,6 +174,34 @@ def _set_model(repl, arg: str) -> str:
     return f"model: {escape(new.name)}:{escape(new.model)}"
 
 
+def _cache_savings(model_ref: str, usage) -> float | None:  # noqa: ANN001
+    """What prompt caching saved this session, if the pricing module can say.
+
+    ``pricing.cache_savings`` is an optional contract (v0.8): absent, or unhappy with the
+    arguments we offer, and ``/cost`` simply reports the cache token counts instead. Cost
+    reporting must never be the thing that breaks a session, so every failure is swallowed.
+    """
+    from agent86.cognitive import pricing
+
+    fn = getattr(pricing, "cache_savings", None)
+    if fn is None:
+        return None
+    for args in ((model_ref, usage), (usage,), (model_ref, usage.input_tokens,
+                 getattr(usage, "cache_read_tokens", 0),
+                 getattr(usage, "cache_creation_tokens", 0))):
+        try:
+            value = fn(*args)
+        except TypeError:
+            continue  # a different signature than this shape; try the next
+        except Exception:  # noqa: BLE001 - never let a price lookup break /cost
+            return None
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _show_cost(repl) -> str:
     from agent86.ui.status import UNPRICED_LABEL, format_cost
 
@@ -184,11 +212,21 @@ def _show_cost(repl) -> str:
     # only the dollar figure gets the "cost" label in front of it.
     cost = format_cost(u.cost_usd, repl.status.price_ref)
     cost_text = cost if cost == UNPRICED_LABEL else f"cost {cost}"
-    return (
+    line = (
         f"steps {repl.state.step_count}  "
         f"in {u.input_tokens}  out {u.output_tokens} tok  "
         f"{cost_text}"
     )
+    # getattr: a Usage predating the cache fields says nothing about caching at all, rather
+    # than claiming a confident zero.
+    read = getattr(u, "cache_read_tokens", 0) or 0
+    written = getattr(u, "cache_creation_tokens", 0) or 0
+    if read or written:
+        line += f"\ncache read {read}  written {written} tok"
+        saved = _cache_savings(repl.status.price_ref, u)
+        if saved:
+            line += f"  saved ${saved:.4f}"
+    return line
 
 
 def _show_memory(repl) -> str:

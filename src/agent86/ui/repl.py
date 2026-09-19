@@ -93,7 +93,7 @@ class _Repl:
             model=p.model,
             model_ref=f"{p.name}:{p.model}",
             used_tokens=0,
-            window=context_window_for(f"{p.name}:{p.model}", cfg),
+            window=self._context_window(f"{p.name}:{p.model}"),
             output_tokens=0,
             cost_usd=0.0,
             sandbox=cfg.sandbox.mode,
@@ -112,14 +112,40 @@ class _Repl:
     def status_line(self) -> str:
         return format_status_line(self.status)
 
+    def _context_window(self, ref: str) -> int:
+        """The real window if the harness knows it, else this module's per-model table.
+
+        The harness resolves the window it actually budgets against (provider settings, config
+        overrides, live model metadata); when it exposes that, the gauge must agree with it
+        rather than with a second, independent guess.
+        """
+        window = getattr(self.harness, "context_window", None)
+        if callable(window):  # a method rather than a property -> ask it
+            try:
+                window = window()
+            except Exception:  # noqa: BLE001 - never let the status line break a turn
+                window = None
+        try:
+            if window and int(window) > 0:
+                return int(window)
+        except (TypeError, ValueError):
+            pass
+        return context_window_for(ref, self.cfg)
+
     def _refresh_status(self) -> None:
         p = self.harness.provider
+        ref = f"{p.name}:{p.model}"
         self.status.model = p.model
-        self.status.model_ref = f"{p.name}:{p.model}"
-        self.status.window = context_window_for(f"{p.name}:{p.model}", self.cfg)
+        self.status.model_ref = ref
+        self.status.window = self._context_window(ref)
         self.status.used_tokens = self.state.steps[-1].usage.input_tokens if self.state.steps else 0
         self.status.output_tokens = self.state.usage.output_tokens
         self.status.cost_usd = self.state.usage.cost_usd
+        # getattr: a Usage predating the cache fields leaves the tokens segment cache-free.
+        self.status.cache_read_tokens = getattr(self.state.usage, "cache_read_tokens", 0) or 0
+        self.status.cache_creation_tokens = (
+            getattr(self.state.usage, "cache_creation_tokens", 0) or 0
+        )
         self.status.approval = self.harness.gate.mode.value
         self.status.working = False
 

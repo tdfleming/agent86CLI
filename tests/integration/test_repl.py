@@ -71,6 +71,84 @@ def test_cost_command_prints_usage(tmp_path, capsys):
     assert "steps" in out and "cost" in out
 
 
+def test_cost_command_reports_cache_tokens_when_there_are_any(tmp_path, capsys):
+    repl, _ = _repl(tmp_path)
+    repl.state.usage.cache_read_tokens = 1900
+    repl.state.usage.cache_creation_tokens = 200
+
+    assert repl.dispatch("/cost") == "handled"
+
+    out = capsys.readouterr().out
+    assert "cache read 1900" in out and "written 200" in out
+
+
+def test_cost_command_stays_quiet_about_a_cache_nobody_used(tmp_path, capsys):
+    repl, _ = _repl(tmp_path)
+    assert repl.dispatch("/cost") == "handled"
+    assert "cache" not in capsys.readouterr().out
+
+
+def test_cost_command_reports_cache_savings_when_pricing_offers_them(
+    tmp_path, capsys, monkeypatch
+):
+    """`pricing.cache_savings` is optional (v0.8); when it exists /cost spends it."""
+    from agent86.cognitive import pricing
+
+    repl, _ = _repl(tmp_path)
+    repl.state.usage.cache_read_tokens = 1900
+    monkeypatch.setattr(pricing, "cache_savings", lambda ref, usage: 0.0421, raising=False)
+
+    assert repl.dispatch("/cost") == "handled"
+    assert "saved $0.0421" in capsys.readouterr().out
+
+
+def test_cost_command_survives_an_incompatible_cache_savings(tmp_path, capsys, monkeypatch):
+    """A signature we don't know how to call must degrade to the counts, never raise."""
+    from agent86.cognitive import pricing
+
+    repl, _ = _repl(tmp_path)
+    repl.state.usage.cache_read_tokens = 1900
+
+    def _savings(*, only_keywords):  # noqa: ANN001 - deliberately uncallable positionally
+        raise AssertionError("should not be reached")
+
+    monkeypatch.setattr(pricing, "cache_savings", _savings, raising=False)
+
+    assert repl.dispatch("/cost") == "handled"
+    out = capsys.readouterr().out
+    assert "cache read 1900" in out and "saved" not in out
+
+
+def test_status_window_prefers_the_harness_context_window(tmp_path):
+    """When the harness publishes the window it budgets against, the gauge agrees with it."""
+    repl, harness = _repl(tmp_path)
+    object.__setattr__(harness, "context_window", 12_345)
+
+    repl._refresh_status()
+
+    assert repl.status.window == 12_345
+
+
+def test_status_window_falls_back_when_the_harness_says_nothing(tmp_path):
+    repl, harness = _repl(tmp_path)
+    object.__setattr__(harness, "context_window", None)
+
+    repl._refresh_status()
+
+    assert repl.status.window == 8_192  # the per-model table's default for a fake provider
+
+
+def test_status_carries_cumulative_cache_tokens(tmp_path):
+    repl, _ = _repl(tmp_path)
+    repl.state.usage.cache_read_tokens = 1800
+    repl.state.usage.cache_creation_tokens = 100
+
+    repl._refresh_status()
+
+    assert repl.status.cached_tokens == 1900
+    assert "(1.9k cached)" in repl.status_line()
+
+
 def test_config_model_degrades_gracefully_in_plain_mode(tmp_path, capsys):
     """The model manager is a TUI surface; in plain mode it says so rather than failing."""
     repl, _ = _repl(tmp_path)

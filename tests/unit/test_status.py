@@ -17,6 +17,8 @@ from agent86.ui.status import (
     format_status_line,
     format_turn_summary,
     human_tokens,
+    join_segments,
+    status_segments,
 )
 
 # ---- context window --------------------------------------------------- #
@@ -70,11 +72,35 @@ def test_status_line_idle():
     assert "qwen2.5:3b" in line
     assert "ctx 13%" in line  # 1100/8192
     assert "1.1k/8.2k" in line
-    assert "320 out" in line
+    assert "tok 1.1k/320" in line
     assert "$0.0000" in line  # local model: free is the *real* price, not an unknown one
     assert "sbx subprocess" in line
     assert "mode: ask" in line
     assert "[Shift+Tab]" in line
+
+
+def test_status_line_shows_cached_tokens_when_present():
+    line = format_status_line(_state(cache_read_tokens=1800, cache_creation_tokens=100))
+    assert "tok 1.1k/320 (1.9k cached)" in line
+
+
+def test_status_line_omits_cached_tokens_when_zero():
+    assert "cached" not in format_status_line(_state())
+
+
+def test_status_segments_are_keyed_in_display_order():
+    keys = [s.key for s in status_segments(_state())]
+    assert keys == ["model", "ctx", "tok", "cost", "sbx", "mode", "hint"]
+
+
+def test_status_segments_working_replaces_stats_with_phase():
+    keys = [s.key for s in status_segments(_state(working=True, phase="thinking"))]
+    assert keys == ["model", "phase", "sbx", "mode", "hint"]
+
+
+def test_join_segments_round_trips_the_full_line():
+    state = _state()
+    assert join_segments(status_segments(state)) == format_status_line(state)
 
 
 # ---- cost display ------------------------------------------------------ #

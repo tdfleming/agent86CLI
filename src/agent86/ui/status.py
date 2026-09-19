@@ -164,30 +164,80 @@ class StatusState:
     #: label that is displayed). Empty falls back to ``model``, which resolves for cloud
     #: models but cannot tell a *local* model from an unpriced one — set it where you can.
     model_ref: str = ""
+    #: Cumulative prompt-cache traffic this session. Both stay 0 on providers with no cache,
+    #: and the tokens segment then says nothing about caching at all.
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
     @property
     def price_ref(self) -> str:
         return self.model_ref or self.model
 
+    @property
+    def cached_tokens(self) -> int:
+        return self.cache_read_tokens + self.cache_creation_tokens
 
-def format_status_line(state: StatusState) -> str:
-    """Render the persistent status line as plain text."""
+
+@dataclass(frozen=True)
+class StatusSegment:
+    """One labelled piece of the status line.
+
+    ``key`` is what a surface sheds by under width pressure (see
+    ``agent86.tui.widgets.status_footer.fit_status_line``); ``text`` is what it renders.
+    """
+
+    key: str
+    text: str
+
+
+def status_segments(state: StatusState) -> list[StatusSegment]:
+    """The status line broken into its labelled parts, in display order.
+
+    The pure half of the footer's width policy: this decides *what* the line says, the
+    widget decides how much of it fits. ``format_status_line`` joins them all, which is what
+    every non-width-aware surface renders.
+    """
+    segments: list[StatusSegment] = [StatusSegment("model", state.model)]
     if state.working:
-        label = state.phase or "working"
-        left = f"{state.model} · {label}…"
+        segments.append(StatusSegment("phase", f"{state.phase or 'working'}…"))
     else:
         pct = context_percent(state.used_tokens, state.window)
-        left = (
-            f"{state.model} · ctx {pct}% "
-            f"({human_tokens(state.used_tokens)}/{human_tokens(state.window)}) · "
-            f"{human_tokens(state.output_tokens)} out · "
-            f"{format_cost(state.cost_usd, state.price_ref)}"
+        segments.append(
+            StatusSegment(
+                "ctx",
+                f"ctx {pct}% "
+                f"({human_tokens(state.used_tokens)}/{human_tokens(state.window)})",
+            )
         )
-    return f"{left} · sbx {state.sandbox} · mode: {state.approval}  [{state.hotkey_hint}]"
+        tokens = f"tok {human_tokens(state.used_tokens)}/{human_tokens(state.output_tokens)}"
+        if state.cached_tokens:
+            tokens += f" ({human_tokens(state.cached_tokens)} cached)"
+        segments.append(StatusSegment("tok", tokens))
+        segments.append(
+            StatusSegment("cost", format_cost(state.cost_usd, state.price_ref))
+        )
+    segments.append(StatusSegment("sbx", f"sbx {state.sandbox}"))
+    segments.append(StatusSegment("mode", f"mode: {state.approval}"))
+    if state.hotkey_hint:
+        segments.append(StatusSegment("hint", f"[{state.hotkey_hint}]"))
+    return segments
+
+
+def join_segments(segments: list[StatusSegment]) -> str:
+    """Render segments as one line: ``·``-separated, with the key hint set off at the end."""
+    body = " · ".join(s.text for s in segments if s.key != "hint")
+    hint = next((s.text for s in segments if s.key == "hint"), "")
+    return f"{body}  {hint}" if hint else body
+
+
+def format_status_line(state: StatusState) -> str:
+    """Render the full persistent status line as plain text (no width policy)."""
+    return join_segments(status_segments(state))
 
 
 __all__ = [
     "UNPRICED_LABEL",
+    "StatusSegment",
     "StatusState",
     "context_window_for",
     "context_percent",
@@ -196,4 +246,6 @@ __all__ = [
     "format_last_turn",
     "format_status_line",
     "format_turn_summary",
+    "join_segments",
+    "status_segments",
 ]
