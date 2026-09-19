@@ -121,6 +121,27 @@ def test_circuit_does_not_trip_on_free_local_usage():
     assert breaker.cost_usd == 0.0
 
 
+def test_circuit_trips_on_wall_clock():
+    breaker = CircuitBreaker(LimitsConfig(max_wall_clock_s=30))
+    breaker.before_step()  # fresh breaker is inside the window
+    breaker._start -= 31  # pretend 31s of wall clock elapsed
+    with pytest.raises(CircuitTripped, match="wall-clock"):
+        breaker.before_step()
+
+
+def test_circuit_max_steps_none_uses_limits():
+    """``max_steps=None`` means "use limits.max_steps" — the main loop's case."""
+    breaker = CircuitBreaker(LimitsConfig(max_steps=3), max_steps=None)
+    assert breaker.max_steps == 3
+    assert CircuitBreaker(LimitsConfig(max_steps=3)).max_steps == 3
+
+
+def test_circuit_explicit_max_steps_can_only_tighten():
+    """A sub-agent may lower its own budget but never raise it past the user's config."""
+    assert CircuitBreaker(LimitsConfig(max_steps=40), max_steps=8).max_steps == 8
+    assert CircuitBreaker(LimitsConfig(max_steps=5), max_steps=8).max_steps == 5
+
+
 def test_circuit_trips_on_consecutive_errors():
     breaker = CircuitBreaker(LimitsConfig(max_consecutive_errors=2))
     breaker.record_tool_result(False)

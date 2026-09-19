@@ -19,8 +19,18 @@ class CircuitTripped(RuntimeError):
 
 
 class CircuitBreaker:
+    """Bounds one unit of agentic work (a user turn, or one sub-agent's delegated task).
+
+    ``max_steps=None`` means "use ``limits.max_steps``" — that is the main loop's case, where
+    the user's configured budget *is* the budget. A caller that passes a number (a sub-agent
+    passing ``config.agents.max_steps``) gets the *smaller* of the two, so a delegated task
+    can tighten the bound but never widen it past what the user configured.
+    """
+
     def __init__(self, limits: LimitsConfig, max_steps: int | None = None):
-        self.max_steps = min(max_steps, limits.max_steps) if max_steps else limits.max_steps
+        # `is None`, not falsy: `max_steps=0` is a caller bug worth surfacing as an immediate
+        # trip, not silently re-read as "unbounded, use the config value".
+        self.max_steps = limits.max_steps if max_steps is None else min(max_steps, limits.max_steps)
         self.max_cost_usd = limits.max_cost_usd
         self.max_wall_clock_s = limits.max_wall_clock_s
         self.max_consecutive_errors = limits.max_consecutive_errors
