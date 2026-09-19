@@ -73,6 +73,28 @@ CONTINUE_PROMPT = "Continue exactly where you left off; do not repeat."
 MAX_CONTINUATIONS = 3
 
 
+def compacted_notice(count: int) -> str:
+    """The user-visible line for a successful compaction.
+
+    Compaction and continuation used to be invisible: the recorder knew, the user did not, so
+    a conversation that silently lost its oldest turns — or an answer stitched from four
+    requests — looked like the model behaving oddly. These are the harness talking about the
+    conversation, so they are yielded as ordinary text deltas with a prefix both surfaces
+    recognise (``agent86.ui.repl.NOTICE_PREFIXES``) and render dim, on their own line.
+    """
+    return f"\n[compacted {count} messages into a summary]\n"
+
+
+def compaction_failed_notice(count: int) -> str:
+    """The user-visible line when summarizing failed and the oldest messages were dropped."""
+    return f"\n[compaction failed; dropped {count} messages]\n"
+
+
+def continuation_notice(index: int, total: int = MAX_CONTINUATIONS) -> str:
+    """The user-visible line announcing continuation ``index`` of ``total``."""
+    return f"\n[continuation {index}/{total}]\n"
+
+
 class HarnessError(RuntimeError):
     """A turn could not be completed."""
 
@@ -371,7 +393,7 @@ class Harness:
         summary: TurnSummary,
         breaker: CircuitBreaker,
         protect_from: int,
-    ) -> None:
+    ) -> str | None:
         """Replace the oldest over-budget span with a summary, in place, before a model call.
 
         Dropping the oldest turns (the pre-v0.8 behaviour, still available as
@@ -383,24 +405,28 @@ class Harness:
         so a summarizer that is itself expensive cannot start a compaction cascade. It must
         never raise: any failure falls back to the drop behaviour ``fit`` already implements,
         and says so in the trace.
+
+        Returns the user-visible notice ``run_turn`` should yield (``None`` when nothing
+        happened). Returned rather than yielded because this is a plain method called from
+        the loop body — the loop owns the stream.
         """
         if self.config.limits.compaction != CompactionMode.SUMMARIZE:
-            return
+            return None
         if self._compacting:
-            return
+            return None
 
         system_content = self._system_content(extra_system)
         budget = self._context_budget(system_content, self.registry.specs())
         counter = self.provider.count_tokens
         if self.working.fits(state.messages, counter, budget):
-            return
+            return None
         cut = self.working.compaction_cut(
             state.messages, counter, budget, protect_from=protect_from
         )
         if cut <= 0:
             # Everything left is the current turn or its tool blocks: there is nothing old
             # enough to compact, so `fit` trims and the provider's own limits take over.
-            return
+            return None
 
         prefix = state.messages[:cut]
         dropped_tokens = counter(prefix)
@@ -412,7 +438,7 @@ class Harness:
                 sid, "compaction", status="failed", fallback="drop",
                 dropped=len(prefix), error=f"{type(exc).__name__}: {exc}",
             )
-            return
+            return compaction_failed_notice(len(prefix))
         finally:
             self._compacting = False
 
@@ -420,7 +446,7 @@ class Harness:
             self.recorder.event(
                 sid, "compaction", status="empty", fallback="drop", dropped=len(prefix)
             )
-            return
+            return compaction_failed_notice(len(prefix))
 
         # The originals are archived before they leave the live conversation.
         if self.memory:
@@ -442,6 +468,7 @@ class Harness:
         # Persist immediately: a resume must see the compacted history, not a stale copy that
         # would silently re-inflate the context on the next turn.
         self._persist(state)
+        return compacted_notice(len(prefix))
 
     # ---- the loop ------------------------------------------------------ #
 
@@ -508,7 +535,14 @@ class Harness:
 
             # Compact BEFORE the request is built, so the model call sees the compacted
             # history and the summary is what gets persisted. Once per step, never nested.
-            self._compact_if_needed(state, sid, recall_note, summary, breaker, turn_start)
+            notice = self._compact_if_needed(
+                state, sid, recall_note, summary, breaker, turn_start
+            )
+            if notice:
+                # Said out loud, not just recorded: a conversation that quietly lost its
+                # oldest turns is indistinguishable, from the user's seat, from a model that
+                # forgot what it was doing.
+                yield CompletionDelta(text=notice)
 
             completion = None
             # Redact mode cannot stream: text inspected only after it has been shown to the
@@ -633,6 +667,9 @@ class Harness:
                         sid, "continuation", index=continuations, step=breaker.steps,
                         model=self.provider.model, chars=len(text),
                     )
+                    # Announced BEFORE the continuation request goes out, so the pause the
+                    # user is about to sit through has a visible reason.
+                    yield CompletionDelta(text=continuation_notice(continuations))
                     continue
 
                 if cont_start is not None:
@@ -1016,4 +1053,10 @@ def _summarize(result: ToolResult) -> str:
     return head[:160]
 
 
-__all__ = ["Harness", "HarnessError"]
+__all__ = [
+    "Harness",
+    "HarnessError",
+    "compacted_notice",
+    "compaction_failed_notice",
+    "continuation_notice",
+]

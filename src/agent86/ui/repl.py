@@ -60,6 +60,8 @@ def _banner(cfg: Config) -> Panel:
 NOTICE_PREFIXES: tuple[str, ...] = (
     "[compacted",
     "[compacting",
+    # The drop fallback: "[compaction failed; dropped N messages]".
+    "[compaction",
     "[continuation",
     "[continuing",
 )

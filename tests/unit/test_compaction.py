@@ -120,6 +120,59 @@ def test_summary_replaces_the_oldest_prefix():
     assert state.last_turn is not None and state.last_turn.compactions == 1
 
 
+def test_a_successful_compaction_tells_the_user_it_happened():
+    """Silent compaction reads, from the user's seat, as a model that forgot the task."""
+    from agent86.ui.repl import notice_text
+
+    harness = _harness()
+    state = harness.new_session()
+    state.messages = _history(12)
+
+    deltas = list(harness.run_turn("and now finish", state))
+
+    notices = [n for n in (notice_text(d.text) for d in deltas if d.text) if n is not None]
+    dropped = harness.recorder.of_kind("compaction")[-1]["dropped"]
+    assert notices == [f"[compacted {dropped} messages into a summary]"]
+    # It is a plain text delta, newline-fenced, so it can never glue onto model prose.
+    assert any(d.text == f"\n[compacted {dropped} messages into a summary]\n" for d in deltas)
+
+
+def test_the_drop_fallback_says_so_rather_than_going_quiet():
+    from agent86.ui.repl import notice_text
+
+    harness = _harness(CompactingProvider(fail_summary=True))
+    state = harness.new_session()
+    state.messages = _history(12)
+
+    deltas = list(harness.run_turn("and now finish", state))
+
+    notices = [n for n in (notice_text(d.text) for d in deltas if d.text) if n is not None]
+    dropped = harness.recorder.of_kind("compaction")[-1]["dropped"]
+    assert notices == [f"[compaction failed; dropped {dropped} messages]"]
+
+
+def test_an_empty_summary_reports_the_same_drop_notice():
+    from agent86.ui.repl import notice_text
+
+    harness = _harness(CompactingProvider(summary="   "))
+    state = harness.new_session()
+    state.messages = _history(12)
+
+    deltas = list(harness.run_turn("and now finish", state))
+
+    notices = [n for n in (notice_text(d.text) for d in deltas if d.text) if n is not None]
+    assert notices and notices[0].startswith("[compaction failed; dropped ")
+
+
+def test_a_turn_that_compacts_nothing_is_silent():
+    harness = _harness(CompactingProvider(), cfg=load_config())
+    state = harness.new_session()
+
+    deltas = list(harness.run_turn("hello", state))
+
+    assert not any("[compact" in (d.text or "") for d in deltas)
+
+
 def test_the_current_user_turn_is_never_compacted():
     harness = _harness()
     state = harness.new_session()

@@ -145,6 +145,38 @@ def test_plain_loop_sets_harness_notices_apart_from_the_answer(tmp_path, capsys,
             assert line.strip() == "[compacted 12 messages]"
 
 
+def test_plain_loop_renders_the_loops_own_compaction_notice(tmp_path, capsys, monkeypatch):
+    """End-to-end: the real loop compacts, and the user sees a line saying so.
+
+    The notice above is injected by a fake ``run_turn``; this one comes out of
+    ``Harness._compact_if_needed`` itself, so the loop and the renderer are pinned together.
+    """
+    from agent86.types import Message, Role
+    from tests.support import CompactingProvider
+
+    cfg = load_config()
+    cfg.limits.max_context_tokens = 60  # make the budget bite without a 200k fixture
+    harness = Harness(
+        cfg, provider=CompactingProvider(reply="all done"), memory=None, workspace=tmp_path
+    )
+    repl = _Repl(cfg, resume=None, harness=harness)
+    for i in range(6):
+        repl.state.messages.append(Message(role=Role.USER, content=f"question {i} " + "x" * 200))
+        repl.state.messages.append(
+            Message(role=Role.ASSISTANT, content=f"answer {i} " + "y" * 200)
+        )
+    _feed(monkeypatch, "and now finish", "/exit")
+
+    repl.plain_loop()
+
+    out = capsys.readouterr().out
+    assert "all done" in out  # the answer still streamed normally
+    lines = [line.strip() for line in out.splitlines() if "compacted" in line]
+    assert lines, "the compaction notice never reached the screen"
+    # Its own line, whole and unglued — the dim styling is dropped by the capsys console.
+    assert lines[0].startswith("[compacted ") and lines[0].endswith("messages into a summary]")
+
+
 def test_plain_loop_does_not_treat_model_brackets_as_a_notice(tmp_path, capsys, monkeypatch):
     repl, _ = _repl(tmp_path, reply="[see docs/ARCHITECTURE.md] for more")
     _feed(monkeypatch, "where?", "/exit")

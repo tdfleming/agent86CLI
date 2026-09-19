@@ -760,10 +760,16 @@ def test_max_tokens_stop_is_continued_and_stitched_back_together():
     harness.recorder = recorder
     state = harness.new_session()
 
-    streamed = "".join(d.text for d in harness.run_turn("write a long thing", state) if d.text)
+    from agent86.ui.repl import notice_text
+
+    chunks = [d.text for d in harness.run_turn("write a long thing", state) if d.text]
+    notices = [n for n in (notice_text(c) for c in chunks) if n is not None]
+    streamed = "".join(c for c in chunks if notice_text(c) is None)
 
     # Every piece reached the user as it streamed ...
     assert streamed == "one two three"
+    # ... each continuation said so, numbered against the configured ceiling ...
+    assert notices == ["[continuation 1/3]", "[continuation 2/3]"]
     assert provider.calls == 3
     # ... and the history holds ONE assistant answer, not three partials and two prompts.
     assert [m.role for m in state.messages] == [Role.USER, Role.ASSISTANT]
@@ -785,8 +791,15 @@ def test_continuations_are_bounded():
     harness = Harness(_config(), provider=provider, memory=None)
     state = harness.new_session()
 
-    list(harness.run_turn("go", state))
+    deltas = list(harness.run_turn("go", state))
 
+    # The last notice is the ceiling itself: the user can see the turn stopped because the
+    # harness refused to ask again, not because the model finished.
+    from agent86.ui.repl import notice_text
+
+    notices = [n for n in (notice_text(d.text) for d in deltas if d.text) if n is not None]
+    assert notices[-1] == f"[continuation {MAX_CONTINUATIONS}/{MAX_CONTINUATIONS}]"
+    assert len(notices) == MAX_CONTINUATIONS
     assert provider.calls == MAX_CONTINUATIONS + 1
     assert state.phase is AgentPhase.DONE
     assert state.messages[-1].content == "chunk " * (MAX_CONTINUATIONS + 1)
