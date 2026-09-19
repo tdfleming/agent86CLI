@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-import pytest
-
 from agent86.agents.broker import MessageBus
 from agent86.agents.envelope import AgentMessage, Intent
 from agent86.agents.orchestrator import SupervisorOrchestrator
@@ -220,8 +218,6 @@ def test_subagent_usage_lands_in_the_parent_turn(tmp_path):
 
 def test_subagent_step_cap_comes_from_config(tmp_path):
     cfg = _cfg()
-    if not hasattr(cfg.agents, "max_steps"):
-        pytest.skip("config.agents.max_steps has not landed yet")
     cfg.agents.max_steps = 2
 
     provider = LoopingToolProvider("ping")

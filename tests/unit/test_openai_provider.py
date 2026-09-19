@@ -259,10 +259,7 @@ def test_no_cap_sent_when_nobody_asked_for_one(monkeypatch):
 
 
 def test_openai_provider_config_max_tokens_used_when_request_is_silent(monkeypatch):
-    config = ProviderConfig(base_url="http://local/v1")
-    if not hasattr(config, "max_tokens"):
-        pytest.skip("config.py has not grown ProviderConfig.max_tokens yet")
-    config.max_tokens = 1234
+    config = ProviderConfig(base_url="http://local/v1", max_tokens=1234)
     payloads = _capture_payload(monkeypatch)
     provider = OpenAIProvider("test-model", config, require_key=False)
     _drain(provider.stream(CompletionRequest(model="test-model", messages=[])))

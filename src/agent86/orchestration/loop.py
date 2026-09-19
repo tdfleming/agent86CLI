@@ -329,33 +329,29 @@ class Harness:
         budget = conversation_budget(
             window,
             overhead_tokens=overhead,
-            reserve_tokens=int(getattr(self.config.limits, "context_reserve_tokens", 0) or 0),
+            reserve_tokens=self.config.limits.context_reserve_tokens,
             output_tokens=max_output_tokens_for(ref, self.config),
-            hard_cap=int(getattr(self.config.limits, "max_context_tokens", 0) or 0),
+            hard_cap=self.config.limits.max_context_tokens,
         )
         # Published on the shared WorkingMemory so sub-agents trim to the same number.
         self.working.max_tokens = budget
         return budget
 
     def _build_request(self, state: AgentState, extra_system: str | None) -> CompletionRequest:
+        from agent86.cognitive.capabilities import max_output_tokens_for
+
         system_content = self._system_content(extra_system)
         specs = self.registry.specs()
         budget = self._context_budget(system_content, specs)
         convo = self.working.fit(state.messages, self.provider.count_tokens, budget)
-        kwargs: dict = {
-            "model": self.provider.model,
-            "messages": [Message(role=Role.SYSTEM, content=system_content), *convo],
-            "tools": specs,
-            "temperature": 0.0,
-            "stream": True,
-        }
-        # Additive on the provider side: set it only once types.CompletionRequest carries it,
-        # so this works both before and after that field lands.
-        if "max_tokens" in CompletionRequest.model_fields:
-            from agent86.cognitive.capabilities import max_output_tokens_for
-
-            kwargs["max_tokens"] = max_output_tokens_for(self._model_ref(), self.config)
-        return CompletionRequest(**kwargs)
+        return CompletionRequest(
+            model=self.provider.model,
+            messages=[Message(role=Role.SYSTEM, content=system_content), *convo],
+            tools=specs,
+            temperature=0.0,
+            stream=True,
+            max_tokens=max_output_tokens_for(self._model_ref(), self.config),
+        )
 
     # ---- compaction ----------------------------------------------------- #
 
@@ -376,20 +372,20 @@ class Harness:
     def _write_summary(self, prefix: list[Message]) -> tuple[str, Usage]:
         """Ask the summarizer for a structured digest of ``prefix``. May raise."""
         provider = self._summary_provider()
-        kwargs: dict = {
-            "model": provider.model,
-            "messages": [
-                Message(role=Role.SYSTEM, content=SUMMARY_SYSTEM_PROMPT),
-                Message(role=Role.USER, content=render_transcript(prefix)),
-            ],
-            "temperature": 0.0,
-            "stream": False,
-        }
-        if "max_tokens" in CompletionRequest.model_fields:
-            # A summary is a bounded artefact; there is no reason to let it run to the
-            # provider's default ceiling and cost more than the span it replaces.
-            kwargs["max_tokens"] = SUMMARY_MAX_TOKENS * 2
-        completion = provider.complete(CompletionRequest(**kwargs))
+        completion = provider.complete(
+            CompletionRequest(
+                model=provider.model,
+                messages=[
+                    Message(role=Role.SYSTEM, content=SUMMARY_SYSTEM_PROMPT),
+                    Message(role=Role.USER, content=render_transcript(prefix)),
+                ],
+                temperature=0.0,
+                stream=False,
+                # A summary is a bounded artefact; there is no reason to let it run to the
+                # provider's default ceiling and cost more than the span it replaces.
+                max_tokens=SUMMARY_MAX_TOKENS * 2,
+            )
+        )
         return completion.text.strip(), completion.usage
 
     def _compact_if_needed(
@@ -831,7 +827,7 @@ class Harness:
         marshals onto its own background loop with ``run_coroutine_threadsafe``.
         """
         candidates = [i for i, call in enumerate(calls) if self._parallel_eligible(call)]
-        enabled = bool(getattr(self.config.limits, "parallel_tools", True))
+        enabled = self.config.limits.parallel_tools
         if not enabled or len(candidates) < 2:
             # Strictly sequential, resolving and running one call at a time — the pre-v0.8
             # path, unchanged, and the one a single-call step always takes.

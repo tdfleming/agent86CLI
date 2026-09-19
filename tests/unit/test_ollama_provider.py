@@ -82,20 +82,14 @@ def test_request_max_tokens_becomes_num_predict(monkeypatch):
 
 
 def test_provider_config_max_tokens_used_when_request_is_silent(monkeypatch):
-    config = ProviderConfig()
-    if not hasattr(config, "max_tokens"):
-        pytest.skip("config.py has not grown ProviderConfig.max_tokens yet")
-    config.max_tokens = 999
+    config = ProviderConfig(max_tokens=999)
     provider = OllamaProvider("qwen3.5:4b", config)
     payload = _run(provider, monkeypatch)
     assert payload["options"]["num_predict"] == 999
 
 
 def test_request_max_tokens_beats_provider_config(monkeypatch):
-    config = ProviderConfig()
-    if not hasattr(config, "max_tokens"):
-        pytest.skip("config.py has not grown ProviderConfig.max_tokens yet")
-    config.max_tokens = 999
+    config = ProviderConfig(max_tokens=999)
     provider = OllamaProvider("qwen3.5:4b", config)
     captured: dict = {}
     _patch_stream(monkeypatch, captured)

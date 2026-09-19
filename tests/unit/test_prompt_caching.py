@@ -275,18 +275,16 @@ def test_minimum_cacheable_prefix_table(model, minimum):
 
 
 def test_caching_is_omitted_when_the_provider_config_disables_it():
-    config = ProviderConfig()
-    if not hasattr(config, "prompt_cache"):
-        pytest.skip("config.py has not grown ProviderConfig.prompt_cache yet")
-    config.prompt_cache = False
+    config = ProviderConfig(prompt_cache=False)
     kwargs = _kwargs_for(tools=_big_tools(), config=config)
     assert kwargs["system"] == _LONG_SYSTEM
     assert all("cache_control" not in t for t in kwargs["tools"])
 
 
-def test_caching_is_on_for_a_config_that_predates_the_flag():
-    # ProviderConfig grows `prompt_cache` in another agent's commit; until then the
-    # getattr default has to keep caching on rather than silently off.
+def test_caching_is_on_by_default():
+    # `prompt_cache` defaults to True: a cache read is ~10x cheaper than fresh input and
+    # the prefix is byte-identical across a turn, so opting IN must not be required.
+    assert ProviderConfig().prompt_cache is True
     assert isinstance(_kwargs_for(config=ProviderConfig())["system"], list)
 
 
@@ -357,10 +355,7 @@ def test_default_max_tokens_when_nobody_asked():
 
 
 def test_provider_config_max_tokens_is_the_standing_preference():
-    config = ProviderConfig()
-    if not hasattr(config, "max_tokens"):
-        pytest.skip("config.py has not grown ProviderConfig.max_tokens yet")
-    config.max_tokens = 4096
+    config = ProviderConfig(max_tokens=4096)
     provider = _provider("claude-opus-5", config)
     provider._client = client = _RecordingClient([_FakeStream()])
     list(provider.stream(CompletionRequest(model="claude-opus-5", messages=[])))

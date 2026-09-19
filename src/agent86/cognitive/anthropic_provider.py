@@ -198,15 +198,14 @@ class AnthropicProvider(ModelProvider):
         """
         if request.max_tokens:
             return int(request.max_tokens)
-        configured = getattr(self._config, "max_tokens", None)
-        if configured:
-            return int(configured)
+        if self._config.max_tokens:
+            return int(self._config.max_tokens)
         return _DEFAULT_MAX_TOKENS
 
     @property
     def _prompt_cache_enabled(self) -> bool:
-        """``prompt_cache`` from the provider config, defaulting on for configs without it."""
-        return bool(getattr(self._config, "prompt_cache", True))
+        """``prompt_cache`` from THIS provider's config section (on by default)."""
+        return self._config.prompt_cache
 
     def _apply_prompt_cache(
         self, kwargs: dict[str, Any], system: str | None, tools: list[dict[str, Any]]

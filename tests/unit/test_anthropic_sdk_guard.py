@@ -210,14 +210,7 @@ def test_max_retries_is_passed_to_the_sdk_client(monkeypatch):
 def test_configured_max_retries_overrides_the_default(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", _RecordingClient, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-TESTKEY-0001")
-    config = ProviderConfig(api_key_env="ANTHROPIC_API_KEY")
+    config = ProviderConfig(api_key_env="ANTHROPIC_API_KEY", max_retries=5)
 
-    if not hasattr(config, "max_retries"):
-        # config.py has not grown the field yet: the built-in default must still apply.
-        AnthropicProvider(model="claude-opus-5", config=config)
-        assert _RecordingClient.calls[-1]["max_retries"] == 2
-        return
-
-    config.max_retries = 5
     AnthropicProvider(model="claude-opus-5", config=config)
     assert _RecordingClient.calls[-1]["max_retries"] == 5

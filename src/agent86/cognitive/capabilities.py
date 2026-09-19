@@ -171,7 +171,7 @@ def context_window_for(model_ref: str, config: Config) -> int:
 
     if provider == "ollama":
         pconf = config.providers.get("ollama")
-        num_ctx = getattr(pconf, "num_ctx", None) if pconf else None
+        num_ctx = pconf.num_ctx if pconf else None
         return int(num_ctx) if num_ctx else DEFAULT_CONTEXT_WINDOW
     if provider == "llamacpp":
         # llama.cpp's window is a server launch flag (-c); it is not discoverable over the
@@ -188,14 +188,15 @@ def context_window_for(model_ref: str, config: Config) -> int:
 def max_output_tokens_for(model_ref: str, config: Config) -> int:
     """Output cap for one call: the provider's ``max_tokens``, else ``limits.max_output_tokens``.
 
-    Read with ``getattr`` so a Config predating these fields still resolves to something sane.
+    ``model_ref``'s provider segment must be the CONFIG SECTION the provider was built from
+    (``ModelProvider.config_ref``), not the adapter name — see that property.
     """
     provider = str(model_ref).partition(":")[0]
     pconf = config.providers.get(provider)
-    per_provider = getattr(pconf, "max_tokens", None) if pconf else None
+    per_provider = pconf.max_tokens if pconf else None
     if per_provider:
         return int(per_provider)
-    return int(getattr(config.limits, "max_output_tokens", 8192) or 8192)
+    return int(config.limits.max_output_tokens or 8192)
 
 
 __all__ = [

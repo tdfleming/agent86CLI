@@ -145,7 +145,7 @@ class OpenAIProvider(ModelProvider):
         """
         if request.max_tokens:
             return int(request.max_tokens)
-        configured = getattr(self._config, "max_tokens", None)
+        configured = self._config.max_tokens
         return int(configured) if configured else None
 
     # ------------------------------------------------------------------ #
