@@ -15,12 +15,15 @@ from agent86.config import MCPServerConfig, load_config
 from agent86.tools.mcp_client import MCPManager, MCPTool, build_mcp
 from agent86.types import ToolCall
 
+# The stdio lifecycle tests below drive the real `live_mcp_server.py`, which is built on the
+# SDK's own server API. This probed `mcp.server.fastmcp` until mcp 2.0 removed it (FastMCP
+# moved out of the SDK), which skipped them even where the extra WAS installed.
 try:
-    import mcp.server.fastmcp  # noqa: F401
+    import mcp.server.mcpserver  # noqa: F401
 
-    _HAS_FASTMCP = True
+    _HAS_MCP_SERVER = True
 except ImportError:
-    _HAS_FASTMCP = False
+    _HAS_MCP_SERVER = False
 
 
 class _FakeManager:
@@ -69,7 +72,7 @@ def test_build_mcp_returns_none_without_servers():
 
 # --- Wave 0 scaffold for plan 04-04: real-stdio per-server lifecycle (D-23 regression guard) - #
 #
-# Requires the `mcp` extra (FastMCP server). Guarded by a module-level boolean + skipif, never a
+# Requires the `mcp` extra (its server API). Guarded by a module-level boolean + skipif, never a
 # module-level `pytest.importorskip` — that would skip the mock-only tests above.
 
 _SERVER = Path(__file__).with_name("live_mcp_server.py")
@@ -79,7 +82,7 @@ def _stdio_cfg() -> MCPServerConfig:
     return MCPServerConfig(command=sys.executable, args=[str(_SERVER), "stdio", "0"])
 
 
-@pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
+@pytest.mark.skipif(not _HAS_MCP_SERVER, reason="requires the 'mcp' extra")
 def test_per_server_start_lists_real_tools():
     manager = MCPManager({})
     try:
@@ -90,7 +93,7 @@ def test_per_server_start_lists_real_tools():
         manager.close()
 
 
-@pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
+@pytest.mark.skipif(not _HAS_MCP_SERVER, reason="requires the 'mcp' extra")
 def test_per_server_call_tool_round_trip():
     manager = MCPManager({})
     try:
@@ -101,7 +104,7 @@ def test_per_server_call_tool_round_trip():
         manager.close()
 
 
-@pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
+@pytest.mark.skipif(not _HAS_MCP_SERVER, reason="requires the 'mcp' extra")
 def test_independent_teardown_leaves_other_server_intact():
     """The highest-value test in the phase (D-23): stopping one server must not tear down
     another server's session via a cross-task cancel scope."""
@@ -129,7 +132,7 @@ def test_independent_teardown_leaves_other_server_intact():
         manager.close()
 
 
-@pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
+@pytest.mark.skipif(not _HAS_MCP_SERVER, reason="requires the 'mcp' extra")
 def test_close_after_partial_stop_is_clean():
     manager = MCPManager({})
     try:
@@ -141,7 +144,7 @@ def test_close_after_partial_stop_is_clean():
     assert manager._loop is None
 
 
-@pytest.mark.skipif(not _HAS_FASTMCP, reason="requires the 'mcp' extra")
+@pytest.mark.skipif(not _HAS_MCP_SERVER, reason="requires the 'mcp' extra")
 def test_start_server_failure_does_not_break_manager():
     manager = MCPManager({})
     try:
