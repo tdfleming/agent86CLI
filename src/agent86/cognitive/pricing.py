@@ -29,6 +29,22 @@ from dataclasses import dataclass
 
 from agent86.types import Usage
 
+#: Prompt-cache multipliers, applied to a model's *input* rate (claude-api skill, cached
+#: 2026-06-24). A cache read is a tenth of the input price; a 5-minute cache write is a 25%
+#: premium over it. Those two numbers are what make caching break even after two requests
+#: (1.25x + 0.1x = 1.35x, against 2x uncached) — which is why cost has to price them apart
+#: instead of billing every prompt token at the input rate.
+CACHE_READ_MULTIPLIER = 0.1
+CACHE_WRITE_MULTIPLIER = 1.25
+
+#: Models whose cache reads are cheaper than the usual 0.1x. Claude Fable 5.1 reads at
+#: $0.25/MTok against a $10 input rate. Claude Mythos 5.1 is deliberately absent: whether it
+#: shares that rate was open at launch, and over-charging in an estimate beats under-charging
+#: in a cost circuit breaker.
+CACHE_READ_MULTIPLIER_OVERRIDES: dict[str, float] = {
+    "claude-fable-5-1": 0.025,
+}
+
 
 @dataclass(frozen=True)
 class Price:
@@ -36,20 +52,59 @@ class Price:
 
     ``source`` records provenance so callers can distinguish a genuinely free local model
     from a configured or built-in rate: ``"builtin"``, ``"local"``, or ``"config"``.
+
+    ``cache_read_per_mtok`` / ``cache_write_per_mtok`` are ``None`` for almost every model,
+    meaning "derive from the input rate via the standard multipliers". They exist as explicit
+    fields so a config override — or a model that prices its cache off-scale — can state a
+    rate directly instead of the multiplier being a hidden constant.
     """
 
     input_per_mtok: float
     output_per_mtok: float
     source: str = "builtin"
+    cache_read_per_mtok: float | None = None
+    cache_write_per_mtok: float | None = None
 
     @property
     def is_local(self) -> bool:
         return self.source == "local"
 
-    def cost(self, input_tokens: int, output_tokens: int) -> float:
-        return (input_tokens / 1_000_000) * self.input_per_mtok + (
-            output_tokens / 1_000_000
-        ) * self.output_per_mtok
+    def cache_read_rate(self, model: str = "") -> float:
+        """USD per million tokens served from the prompt cache."""
+        if self.cache_read_per_mtok is not None:
+            return self.cache_read_per_mtok
+        return self.input_per_mtok * _cache_read_multiplier(model)
+
+    def cache_write_rate(self) -> float:
+        """USD per million tokens written to the prompt cache (5-minute TTL)."""
+        if self.cache_write_per_mtok is not None:
+            return self.cache_write_per_mtok
+        return self.input_per_mtok * CACHE_WRITE_MULTIPLIER
+
+    def cost(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        *,
+        model: str = "",
+    ) -> float:
+        """Cost of one call, with the cached portions of the prompt billed at their own rates.
+
+        ``input_tokens`` is the WHOLE prompt (the provider adapters normalise it to that), so
+        the uncached remainder is what is left after the two cache classes are taken out.
+        Passing the cache counts as 0 — every provider without a prompt cache, and every
+        caller that predates them — reduces exactly to the old input+output arithmetic.
+        """
+        cached = max(0, cache_read_tokens) + max(0, cache_creation_tokens)
+        uncached = max(0, input_tokens - cached)
+        return (
+            (uncached / 1_000_000) * self.input_per_mtok
+            + (max(0, cache_read_tokens) / 1_000_000) * self.cache_read_rate(model)
+            + (max(0, cache_creation_tokens) / 1_000_000) * self.cache_write_rate()
+            + (output_tokens / 1_000_000) * self.output_per_mtok
+        )
 
 
 #: Providers whose models run on the user's own hardware. Zero is the real price.
@@ -168,6 +223,16 @@ def _match(table: Mapping[str, Price], model: str) -> Price | None:
     return best[1] if best else None
 
 
+def _cache_read_multiplier(model: str) -> float:
+    """The cache-read multiplier for ``model``, honouring the per-model overrides."""
+    ident = (model or "").split(":", 1)[-1].strip().lower()
+    best: tuple[int, float] | None = None
+    for key, multiplier in CACHE_READ_MULTIPLIER_OVERRIDES.items():
+        if ident.startswith(key) and (best is None or len(key) > best[0]):
+            best = (len(key), multiplier)
+    return best[1] if best else CACHE_READ_MULTIPLIER
+
+
 def lookup(model: str) -> Price | None:
     """Resolve a price for a ``provider:model`` ref or bare model id, or ``None`` if unknown."""
     override = _match(_OVERRIDES, model)
@@ -183,32 +248,60 @@ def is_priced(model: str) -> bool:
     return lookup(model) is not None
 
 
-def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float | None:
+def estimate_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> float | None:
     """Estimate USD cost for a call, or ``None`` when the model's price is unknown.
 
     ``None`` — not ``0.0`` — is what lets the status line say "cost n/a" instead of
-    implying a call was free.
+    implying a call was free. ``input_tokens`` is the whole prompt; the two cache counts are
+    the parts of it billed at the cache rates rather than the input rate.
     """
     price = lookup(model)
-    return None if price is None else price.cost(input_tokens, output_tokens)
+    if price is None:
+        return None
+    return price.cost(
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+        model=model,
+    )
 
 
-def priced_usage(model: str, input_tokens: int, output_tokens: int) -> Usage:
+def priced_usage(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> Usage:
     """Build a :class:`Usage` with cost filled in from the price table.
 
     ``Usage.cost_usd`` is a plain float (shared type, provider-agnostic), so an unknown
     model contributes ``0.0`` to the running total; ask :func:`is_priced` before *displaying*
     that total so an unpriced model reads as "n/a" rather than "$0.00".
     """
-    cost = estimate_cost(model, input_tokens, output_tokens)
+    cost = estimate_cost(
+        model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
+    )
     return Usage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost if cost is not None else 0.0,
+        cache_read_tokens=cache_read_tokens,
+        cache_creation_tokens=cache_creation_tokens,
     )
 
 
 __all__ = [
+    "CACHE_READ_MULTIPLIER",
+    "CACHE_READ_MULTIPLIER_OVERRIDES",
+    "CACHE_WRITE_MULTIPLIER",
     "LOCAL_PRICE",
     "LOCAL_PROVIDERS",
     "PRICES",
