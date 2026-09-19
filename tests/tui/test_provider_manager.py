@@ -43,7 +43,9 @@ class _PickerHost(App):
         yield from ()
 
     def on_mount(self) -> None:
-        self.push_screen(self._screen, self._store)
+        # `None` means "bare host": the test pushes its own screen when it wants to.
+        if self._screen is not None:
+            self.push_screen(self._screen, self._store)
 
     def _store(self, value) -> None:
         self.result = value
@@ -197,6 +199,27 @@ async def test_catalog_filter_no_match_submits_as_free_text():
     assert host.result == "openai:zzz"
 
 
+async def test_catalog_picker_pushed_during_shutdown_does_not_raise():
+    """A picker pushed as the app tears down must not raise `NoMatches` from `on_mount`.
+
+    Regression for the order-dependent `#catalog-filter` flake. `CatalogPickerModal` is pushed
+    from `on_catalog_ready`, so a catalog-fetch worker result can land in the shutdown window.
+    Once `App._running` is False, `App._register` returns no widgets, `mount_all` stops awaiting
+    them and `Mount` arrives with the dialog still empty — an unguarded `query_one` in `on_mount`
+    then blows up, and Textual re-raises it from `run_test()`'s teardown.
+
+    Pushing with no `pilot.pause()` puts the screen's first `_pre_process` in exactly that window;
+    `run_test.__aexit__` re-raises `app._exception`, so this test fails if `on_mount` raises.
+    """
+    from agent86.tui.screens.provider_manager import CatalogPickerModal
+
+    host = _PickerHost(None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        host.push_screen(CatalogPickerModal("openai", [("gpt-4o", "gpt-4o")]))
+        # Deliberately no pause: shutdown starts while the modal is still composing.
+
+
 async def test_catalog_escape_returns_none():
     from agent86.tui.screens.provider_manager import CatalogPickerModal
 
@@ -298,9 +321,7 @@ async def test_save_anyway_override(monkeypatch, tmp_path):
         await _wait_until(lambda: isinstance(app.screen, ConnectionTestModal))
 
         # the (faked) connection fails; "Save anyway" is focused — press it
-        await _wait_until(
-            lambda: app.screen.query_one("#test-buttons").display, timeout=5.0
-        )
+        await _wait_until(lambda: app.screen.query_one("#test-buttons").display, timeout=5.0)
         await pilot.pause()
         await pilot.press("enter")
         await _wait_until(lambda: isinstance(app.screen, SaveDiffModal))
@@ -311,7 +332,17 @@ async def test_switch_is_immediate_persist_is_separate(monkeypatch, tmp_path):
     import shutil
     from pathlib import Path
 
+    import agent86.cognitive.catalog as catalog
     import agent86.config_writer as config_writer
+
+    # Selecting a provider row that already has a key kicks off a catalog fetch on a worker
+    # thread. Left real, that is a live network call whose result lands at an unpredictable
+    # moment — including inside the app's shutdown window, where it pushes a CatalogPickerModal
+    # into a dying app. That is what made the `#catalog-filter` flake wander between tests and
+    # depend on the machine's environment. Stub it so this test is hermetic.
+    monkeypatch.setattr(
+        catalog, "fetch_catalog", lambda provider, pconf, api_key: [("claude-3-opus", "opus")]
+    )
 
     fixture = Path(__file__).parents[1] / "fixtures" / "config_with_comments.toml"
     target = tmp_path / "config.toml"

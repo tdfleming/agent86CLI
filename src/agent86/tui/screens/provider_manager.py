@@ -77,10 +77,7 @@ class ProviderManagerModal(ModalScreen[ProviderRow | None]):
         with Container(id="provider-manager-dialog"):
             yield Label("Providers — select one to configure")
             yield OptionList(
-                *[
-                    Option(self._label(self._rows[name]), id=name)
-                    for name in self._order
-                ],
+                *[Option(self._label(self._rows[name]), id=name) for name in self._order],
                 id="provider-list",
             )
 
@@ -110,6 +107,7 @@ class CatalogPickerModal(ModalScreen[str | None]):
         super().__init__()
         self._provider = provider
         self._entries = entries
+        self._focus_retried = False
 
     def compose(self) -> ComposeResult:
         placeholder = (
@@ -123,7 +121,30 @@ class CatalogPickerModal(ModalScreen[str | None]):
             yield OptionList(*self._options(self._entries), id="catalog-list")
 
     def on_mount(self) -> None:
-        self.query_one("#catalog-filter", Input).focus()
+        self._focus_filter()
+
+    def _focus_filter(self) -> None:
+        """Focus the filter Input, tolerating a dialog whose children are not mounted yet.
+
+        Normally Textual mounts everything `compose` yielded before it dispatches `Mount`, so
+        `#catalog-filter` is always there. It is *not* there once the app has begun shutting
+        down: `App._register` deliberately returns no widgets while `App._running` is False, so
+        `mount_all` stops awaiting the child tasks and `Mount` reaches this screen with an empty
+        dialog. An unguarded `query_one` then raises `NoMatches` straight out of `on_mount` —
+        Textual routes that to `App._handle_exception`, which re-raises it from whichever test's
+        `run_test()` teardown is in flight. That is the order-dependent `#catalog-filter` flake:
+        this modal is pushed from `on_catalog_ready`, i.e. from a catalog-fetch worker whose
+        result can land at exactly that moment.
+
+        So: focus it when it is there, try once more after a refresh (ample for a normal mount),
+        and otherwise let it go — a screen that is being torn down needs no focus.
+        """
+        found = self.query("#catalog-filter")
+        if found:
+            found.first(Input).focus()
+        elif not self._focus_retried and self.is_running:
+            self._focus_retried = True
+            self.call_after_refresh(self._focus_filter)
 
     @staticmethod
     def _options(entries: list[tuple[str, str]]) -> list[Option]:
