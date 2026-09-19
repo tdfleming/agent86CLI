@@ -120,3 +120,13 @@ def test_default_policy_reads_env_passthrough(tmp_path):
     cfg = load_config()
     _set_flag(cfg.sandbox, "env_passthrough", ["MY_BUILD_FLAVOUR"])
     assert default_policy(cfg, tmp_path).env_passthrough == ["MY_BUILD_FLAVOUR"]
+
+
+def test_tool_timeout_s_flows_from_config_into_the_policy(tmp_path):
+    """The field is a real `LimitsConfig` attribute now — no getattr shim on either side."""
+    cfg = load_config()
+    assert cfg.limits.tool_timeout_s == 60
+    assert default_policy(cfg, tmp_path).timeout_s == 60
+
+    cfg.limits.tool_timeout_s = 5
+    assert default_policy(cfg, tmp_path).timeout_s == 5

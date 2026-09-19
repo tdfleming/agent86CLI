@@ -164,7 +164,7 @@ def default_policy(config, workspace: Path | None = None) -> SandboxPolicy:
     return SandboxPolicy(
         workspace=ws,
         network=True,
-        timeout_s=int(getattr(config.limits, "tool_timeout_s", 60)),
+        timeout_s=int(config.limits.tool_timeout_s),
         env_passthrough=list(getattr(config.sandbox, "env_passthrough", []) or []),
     )
 

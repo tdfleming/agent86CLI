@@ -178,11 +178,19 @@ class MemoryConfig(BaseModel):
 
 
 class LimitsConfig(BaseModel):
+    """Circuit breakers for a run, plus the per-tool execution budget."""
+
     max_steps: int = 40
     max_cost_usd: float = 5.0
     max_wall_clock_s: int = 900
     max_consecutive_errors: int = 3
     max_context_tokens: int = 8000
+    #: Seconds a single sandboxed tool may run before it is killed (``SandboxPolicy.timeout_s``).
+    #: A *per-tool* budget, deliberately separate from ``max_wall_clock_s`` (the whole-run
+    #: budget): the tool timeout used to be derived from the run budget, which silently
+    #: shortened every tool's timeout for anyone who lowered the run budget, and could not be
+    #: set directly at all.
+    tool_timeout_s: int = 60
 
 
 class UIConfig(BaseModel):

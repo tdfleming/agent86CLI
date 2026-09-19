@@ -272,3 +272,29 @@ def test_shared_contract_fields_load_from_toml(monkeypatch, tmp_path):
     price = pricing.lookup("anthropic:claude-sonnet-5")
     assert price is not None and price.source == "config"
     pricing.set_overrides(None)
+
+
+def test_limits_tool_timeout_s_defaults_to_60(monkeypatch, tmp_path):
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", tmp_path / "none.toml")
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none2.toml")
+    cfg = load_config()
+    assert cfg.limits.tool_timeout_s == 60
+    # It is a per-tool budget, not the whole-run one — they must be independent fields.
+    assert cfg.limits.max_wall_clock_s == 900
+
+
+def test_limits_tool_timeout_s_is_configurable(monkeypatch, tmp_path):
+    user = tmp_path / "config.toml"
+    user.write_text(
+        textwrap.dedent(
+            """
+            [limits]
+            tool_timeout_s = 5
+            """
+        )
+    )
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", user)
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none.toml")
+    cfg = load_config()
+    assert cfg.limits.tool_timeout_s == 5
+    assert cfg.limits.max_wall_clock_s == 900  # untouched by the per-tool budget
