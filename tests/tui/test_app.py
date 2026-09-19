@@ -677,3 +677,75 @@ async def test_typed_colon_free_ref_cold_cache_miss_falls_through(monkeypatch, t
         assert "must be 'provider:model'" in lines
         assert "resolved to" not in lines
         assert repl.harness.provider.model == before_model
+
+
+# ---- dismissal / no-pending-row guards ------------------------------------- #
+
+
+async def test_key_entered_with_no_pending_row_is_discarded(tmp_path):
+    """A key typed while no provider row is in flight must not be kept or tested.
+
+    `_on_key_entered` used to dereference `self._pending_row.name` unconditionally, so a key
+    modal resolving after the chain had been reset (`_open_provider_manager` clears the row)
+    crashed with `AttributeError: 'NoneType' object has no attribute 'name'`.
+    """
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    requested: list[tuple] = []
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._request_catalog = lambda *a: requested.append(a)  # type: ignore[method-assign]
+        app._pending_row = None
+
+        app._on_key_entered("sk-should-be-dropped")
+        await pilot.pause()
+
+        assert requested == []
+        assert app._pending_key is None
+        lines = _transcript_lines(app)
+        assert "no provider selected" in lines
+        assert "sk-should-be-dropped" not in lines
+
+
+async def test_connection_test_dismissed_with_none_is_a_cancel(tmp_path):
+    """Textual resolves a push_screen callback with None when the modal is dismissed without a
+    result (shutdown/cancel). That must read as "cancelled", not crash on `outcome.ok`."""
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._pending_key = "sk-never-stored"
+
+        app._on_test_done(None)
+        await pilot.pause()
+
+        assert app._pending_key is None
+        assert len(app.screen_stack) == 1  # no SaveDiffModal was pushed
+        lines = _transcript_lines(app)
+        assert "connection test cancelled" in lines
+        assert "sk-never-stored" not in lines
+
+
+async def test_mcp_test_dismissed_with_none_is_a_cancel(tmp_path):
+    """Same shutdown guard for the MCP add chain: None abandons the draft and drops secrets."""
+    from agent86.config import MCPServerConfig
+    from agent86.tui.screens.mcp_manager import MCPServerDraft
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._mcp_draft = MCPServerDraft(
+            name="demo", cfg=MCPServerConfig(command="echo", args=["hi"])
+        )
+        app._mcp_overrides = {"DEMO_TOKEN": "sk-never-stored"}
+
+        app._on_mcp_test_done(None)
+        await pilot.pause()
+
+        assert app._mcp_draft is None
+        assert app._mcp_overrides == {}
+        assert len(app.screen_stack) == 1  # no SaveDiffModal was pushed
+        lines = _transcript_lines(app)
+        assert "mcp: cancelled" in lines
+        assert "sk-never-stored" not in lines
