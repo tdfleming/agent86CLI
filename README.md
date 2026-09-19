@@ -12,25 +12,27 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**v0.5.8 — the full harness, an interactive UX, cloud providers, and remote MCP.** A five-tier agentic harness
-that runs on remote or local models and uses tools, skills, MCP servers, and sub-agents. Every
-pillar and tier from *The Agentic Harness* is implemented, tested (158 tests), and verified live
-against a local model.
+**v0.6.0 — the full harness, a full-screen interactive TUI, cloud providers, and remote MCP.** A
+five-tier agentic harness that runs on remote or local models and uses tools, skills, MCP servers,
+and sub-agents. Every pillar and tier from *The Agentic Harness* is implemented, tested
+(532 tests), and verified live against a local model.
 
 | Tier / Pillar | What's there |
 |---|---|
-| **Tier 1 Gateway** | session lifecycle, input sanitization |
+| **Tier 1 Gateway** | the CLI/TUI entry point + input sanitization (session lifecycle lives in `orchestration/`) |
 | **Tier 2 Orchestration** (Pillar 1) | ReAct loop, FSM state, dynamic routing, circuit breakers |
 | **Tier 3 Cognitive** | Anthropic · OpenAI-compatible (incl. built-in OpenRouter & Groq) · Ollama · llama.cpp/LM Studio; prompt compilation; token budgeting |
 | **Tier 4 Tools** (Pillar 3) | built-ins (files, shell, python, web) + memory/skill/delegate + MCP (stdio · SSE · streamable HTTP); **subprocess or Docker** sandbox |
 | **Tier 5 Guardrails/Obs** (Pillar 4) | ingress/egress scanning, HITL approvals, circuit breakers, flight recorder, OpenTelemetry |
 | **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence, automatic retention/pruning |
 | **Multi-agent** | sub-agents via `delegate`, message envelopes, broker, supervisor orchestrator |
-| **Interactive REPL** | persistent status line, processing spinner, Shift+Tab approval-mode cycle, live `/model` switching; plain fallback for any terminal |
+| **Interactive TUI** | full-screen Textual app: scrollable transcript, live status footer, slash-command palette, arrow-key pickers, approval modal, in-app `/config model` + `/config mcp`; plain fallback for any terminal |
 
-Since v0.2: first-class cloud providers (OpenRouter/Groq built in, any OpenAI-compatible endpoint
-via config), live mid-session `/model` switching, automatic memory retention/pruning, and cleaner
-`web_fetch` (main-content extraction, model-friendly sizing).
+New in v0.6: the full-screen TUI is the default interactive UI, with in-app model/provider and
+MCP configuration (keyring-backed keys, live connection tests, comment-preserving config writes)
+and cancellable turns. Since v0.2: first-class cloud providers (OpenRouter/Groq built in, any
+OpenAI-compatible endpoint via config), live mid-session `/model` switching, automatic memory
+retention/pruning, and cleaner `web_fetch` (main-content extraction, model-friendly sizing).
 
 Optional heavy deps degrade gracefully: no torch → hash-embedder memory; no Docker → subprocess
 sandbox; no `mcp` → MCP disabled. Install extras as needed: `pip install -e ".[all]"`.
@@ -38,7 +40,7 @@ sandbox; no `mcp` → MCP disabled. Install extras as needed: `pip install -e ".
 Try it (with a running Ollama chat model, or provider API keys set):
 
 ```bash
-agent86 --model ollama:qwen2.5:3b            # REPL: /help /tools /skills /memory /cost /exit
+agent86 --model ollama:qwen2.5:3b            # interactive TUI: type `/` for the command palette
 agent86 --model openai:gpt-4o run "Summarize the harness in one sentence"
 agent86 --sandbox docker run --yes "Use python_exec to print the OS you're running on"
 agent86 run --yes "Delegate to a 'researcher' sub-agent: find X. Then summarize."
@@ -55,7 +57,58 @@ cheap = "ollama:qwen2.5:3b"
 frontier = "anthropic:claude-opus-4-8"
 ```
 
+## Interactive TUI
+
+Running `agent86` with no subcommand opens a full-screen [Textual](https://textual.textualize.io)
+app: a scrollable transcript, a prompt input, and a footer status bar that stays **live while a
+turn runs** — active model, context-fill %, output tokens, session cost, sandbox and approval
+mode, and the current phase. Turns execute on a worker thread, so streamed output arrives
+incrementally and the UI never freezes. Tool approvals appear as a modal dialog.
+
+Type `/` to open the **command palette** — an autocompleting list of every command with its
+description. Commands that need a choice (`/model`, `/mode`) present an arrow-key picker instead
+of demanding a typed argument:
+
+```
+/help    /config    /config model    /config mcp    /models    /model <provider:model>
+/tools   /skills    /memory          /mode [ask|auto|deny]     /cost    /clear    /exit
+```
+
+| Key | What it does |
+|---|---|
+| `Escape` | dismiss the palette; otherwise cancel the running turn |
+| `Ctrl+C` | cancel the running turn; quit if none is running (or on a second press) |
+| `Ctrl+Q` | quit |
+| `Shift+Tab` | cycle the approval mode (`ask` → `auto` → `deny`) live |
+| `↑` / `↓` | move through the palette or a picker |
+
+**`/config model`** walks the whole provider setup in-app: a provider manager lists what's
+configured, a type-to-filter catalog picker browses the provider's live model list (with a
+free-text fallback), the API key is entered **masked** and stored in the **OS keyring**, a live
+connection test confirms the endpoint actually answers, and the exact TOML diff is shown for
+confirmation before anything is written. Keys are never written to config.
+
+**`/config mcp`** does the same for MCP servers — add, edit, remove, enable/disable across stdio,
+SSE, and streamable HTTP. Secret values are held as `${VAR}` references and resolved at connect
+time; a pre-save connection test starts the server and enumerates its tools; and after saving,
+the server's tools are mounted into the running session **without a restart**.
+
+Both write through a comment-preserving TOML writer, defaulting to user scope
+(`~/.agent86/config.toml`) with a project-scope option.
+
+**Plain mode.** `--plain`, `AGENT86_PLAIN=1`, or a non-TTY stdin/stdout runs the dependable
+stdlib `input()` loop instead — same slash-commands (they share one registry), no full-screen
+app. `run` and `run --json` are unaffected and never import Textual.
+
+```toml
+[ui]
+tui = true       # false forces the plain loop (pre-v0.6 `status_line` is still accepted)
+```
+
 ## Configuring model providers
+
+> Everything in this section can also be done from inside the app with **`/config model`** —
+> including storing the key in the OS keyring and testing the connection before saving.
 
 Models are named `provider:model`. Config lives in `~/.agent86/config.toml` (user) or
 `./.agent86/config.toml` (project). **API keys are never stored in config** — each provider
@@ -107,6 +160,9 @@ and `api_key_env` under `[providers.openai]`. Run `agent86 models` to see what's
 
 ## Connecting MCP servers
 
+> Everything in this section can also be done from inside the app with **`/config mcp`** —
+> with a pre-save connection test and live mounting, no restart.
+
 Each `[mcp.servers.<name>]` block mounts an external [MCP](https://modelcontextprotocol.io)
 server's tools as first-class harness tools (same schema, approval gating, and tracing).
 Servers are reached over one of three transports:
@@ -130,8 +186,9 @@ transport = "sse"
 ```
 
 Set exactly one of `command` (stdio) or `url` (sse/http); `transport` is inferred but can be
-given explicitly (`stdio` | `sse` | `http`). Inspect with `agent86 mcp list` and
-`agent86 mcp tools`. Requires the `mcp` extra (`pip install -e ".[mcp]"`).
+given explicitly (`stdio` | `sse` | `http`). Add `enabled = false` to keep a server configured but
+unmounted. Inspect with `agent86 mcp list` and `agent86 mcp tools`. Requires the `mcp` extra
+(`pip install -e ".[mcp]"`).
 
 ## Install (development)
 
@@ -163,8 +220,10 @@ pip install -e ".[all]"         # everything
 ## Usage
 
 ```bash
-agent86                     # interactive REPL
+agent86                     # interactive TUI (full-screen)
+agent86 --plain             # interactive plain loop (also AGENT86_PLAIN=1, or a non-TTY)
 agent86 run "your goal"     # one-shot, scriptable
+agent86 run "goal" --json   # structured output for automation
 agent86 config path         # show resolved config location
 agent86 models              # list configured models
 agent86 --help
@@ -177,13 +236,17 @@ executes, and persists.** The model never touches the sandbox, the database, or 
 directly. Everything crosses the harness.
 
 ```
-Tier 1  Gateway         gateway/          session, input sanitization
+Tier 1  Gateway         cli.py + tui/     entry point, input sanitization (guardrails/ingress)
 Tier 2  Orchestration   orchestration/    ReAct loop, state machine, routing, circuit breakers
 Tier 3  Cognitive       cognitive/        provider adapters, prompt compilation, token budget
 Tier 4  Tool & Exec     tools/            built-ins + MCP + sandbox
 Tier 5  Guardrails/Obs  guardrails/ + observability/   HITL, OTel, flight recorder
         Memory          memory/           SQLite + sqlite-vec (working/episodic/semantic)
 ```
+
+Tier 1 is deliberately thin: `gateway/` holds no logic of its own — the entry point and input
+sanitization live in `cli.py`/`tui/` and `guardrails/ingress.py`, and session lifecycle is
+`orchestration/state.py`.
 
 ## License
 
