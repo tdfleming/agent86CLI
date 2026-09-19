@@ -12,11 +12,11 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**v0.7.0 — the full harness, a full-screen interactive TUI, cloud providers, remote MCP, and a
-cost meter and security posture you can trust.** A five-tier agentic harness that runs on remote
-or local models and uses tools, skills, MCP servers, and sub-agents. Every pillar and tier from
-*The Agentic Harness* is implemented, tested (670+ tests), and verified live against a local
-model.
+**v0.8.0 — the full harness, a full-screen interactive TUI, cloud providers, remote MCP, a cost
+meter and security posture you can trust, and a context window spent deliberately.** A five-tier
+agentic harness that runs on remote or local models and uses tools, skills, MCP servers, and
+sub-agents. Every pillar and tier from *The Agentic Harness* is implemented, tested (860+ tests),
+and verified live against a local model.
 
 | Tier / Pillar | What's there |
 |---|---|
@@ -28,9 +28,15 @@ model.
 | **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence, automatic retention/pruning |
 | **Multi-agent** | sub-agents via `delegate`, message envelopes, broker, supervisor orchestrator |
 | **Interactive TUI** | full-screen Textual app: scrollable transcript, live status footer, slash-command palette, arrow-key pickers, approval modal, in-app `/config model` + `/config mcp`; plain fallback for any terminal |
+| **Context & cost** | the conversation budgeted against the model's **real** context window, summarizing compaction of the oldest span, `max_tokens` continuation, parallel read-only tool calls, Anthropic prompt caching, cache-aware pricing, and a per-turn cost line |
 | **Cost & resilience** | real per-model price table + `[pricing.models]` overrides (`limits.max_cost_usd` actually trips), retries with backoff on transient provider failures, sub-agent spend rolled into the session total |
 | **Security** | `web_fetch` SSRF guard, cross-platform sandbox env allowlist, MCP stdio env scrubbing, process-tree kill on timeout |
 
+New in v0.8 — the **context & cost** pass: the conversation is budgeted against the model's real
+context window instead of a flat 8000 tokens, the span that no longer fits is *summarized* rather
+than forgotten, an answer truncated at the output cap continues instead of stopping mid-sentence,
+a step's read-only tool calls run concurrently, the Anthropic prompt cache is used and priced, and
+every turn ends with one line saying what it cost (see [Context management](#context-management)).
 New in v0.7 — the **trustworthy** pass: the cost meter is backed by a real price table (and says
 `n/a` rather than `$0.00` when it doesn't know), transient provider failures retry with backoff
 instead of killing the turn, `guardrails.egress = "redact"` actually redacts what is streamed and
@@ -70,9 +76,19 @@ frontier = "anthropic:claude-opus-4-8"
 
 Running `agent86` with no subcommand opens a full-screen [Textual](https://textual.textualize.io)
 app: a scrollable transcript, a prompt input, and a footer status bar that stays **live while a
-turn runs** — active model, context-fill %, output tokens, session cost, sandbox and approval
-mode, and the current phase. Turns execute on a worker thread, so streamed output arrives
-incrementally and the UI never freezes. Tool approvals appear as a modal dialog.
+turn runs** — active model, a context gauge measured against the window the harness actually
+budgets against, `tok <in>/<out>` (plus `(1.9k cached)` once a session has prompt-cache traffic),
+session cost, sandbox and approval mode, and the current phase. Turns execute on a worker thread,
+so streamed output arrives incrementally and the UI never freezes. Tool approvals appear as a
+modal dialog, and each finished turn ends with a dim per-turn read-out (see
+[Cost tracking](#cost-tracking)).
+
+**The footer stays one row.** Rather than wrapping on a narrow terminal, it fits itself to the
+available width and sheds whole segments in a fixed order: the `[Shift+Tab]` hint first (it is in
+`/help` too), then the token counts (one `/cost` away), then the context gauge. The model name,
+the cost, the approval mode, and the working/phase indicator are **never** shed — they say what is
+running, what it costs, and whether it can act without asking. Widening the terminal brings the
+shed segments straight back.
 
 Type `/` to open the **command palette** — an autocompleting list of every command with its
 description. Commands that need a choice (`/model`, `/mode`) present an arrow-key picker instead
@@ -200,6 +216,78 @@ given explicitly (`stdio` | `sse` | `http`). Add `enabled = false` to keep a ser
 unmounted. Inspect with `agent86 mcp list` and `agent86 mcp tools`. Requires the `mcp` extra
 (`pip install -e ".[mcp]"`).
 
+## Context management
+
+Before v0.8 the conversation was trimmed to a flat `8000` tokens no matter which model was
+answering — which threw away ~96% of a 200k Claude window you are paying for, and *overspent* a 4k
+local model into a context-length error. The budget is now derived from the model's real window,
+and the span that no longer fits is summarized instead of forgotten.
+
+**The window.** Resolved in priority order, by `cognitive/capabilities.py`:
+
+| Source | What it gives | Notes |
+|---|---|---|
+| `[model.context_window]` | your explicit override | looked up by full `provider:model` ref, then bare model id |
+| the **provider**, where the server owns the window | `ollama` → `[providers.ollama] num_ctx`; `llamacpp` → 8192 | llama.cpp's `-c` isn't discoverable over the API, so guessing 128k from `llama3.1` would hand the budget a number the server truncates |
+| the built-in family table | Claude 4.x/5.x **200k**; `gpt-5` 400k, `gpt-4.1` 1,047,576, `gpt-4o` 128k, o-series 200k; common open-weights ids (llama-3.x 131,072, qwen/mixtral/mistral 32,768, gemma 8,192, phi 16,384) | matched as a substring of the model id |
+| the default | **8192** | the smallest window any modern model ships with |
+
+**The budget.** Every request is measured against *the window, minus what is already in the
+request before any history*: the compiled system prompt and the tool schemas, minus
+`limits.context_reserve_tokens` of headroom (slack for the provider's token counting differing
+from ours — an error the model call otherwise pays for with a hard 400), minus the output cap the
+call will ask for. The reserve is clamped to half the window so a small local model isn't starved,
+and `limits.max_context_tokens` is an optional **hard cap** applied last, for anyone who wants to
+spend less than the window allows. It is recomputed before every request — skills, MCP servers and
+the episodic recall note all change the overhead mid-session — and shared with sub-agents so they
+trim to the same number.
+
+**Compaction.** When the conversation outgrows the budget, `[limits] compaction` decides what
+happens to the oldest turns:
+
+| Mode | Behaviour |
+|---|---|
+| `"summarize"` *(default)* | the oldest prefix is replaced by a model-written digest — GOAL / DECISIONS / FACTS / OPEN, instructed to reproduce paths, identifiers and numbers verbatim — written by the cheap route model when routing is on, else the current provider. It rides on a user message headed `[Conversation summary — earlier turns compacted]`. |
+| `"drop"` | the pre-v0.8 sliding window: the oldest messages are discarded. |
+
+An assistant message that requested tools is never separated from its tool results, the last 6
+messages and the whole current turn are never compacted, and compaction **never raises** — a
+failed or empty summary falls back to dropping and records `compaction status="failed"` in the
+trace. The compacted history is persisted immediately so a resumed session sees it, and the
+originals are archived verbatim to episodic memory (held out of `recall`, so a later turn is never
+handed a raw transcript). You see it happen: `[compacted N messages into a summary]` or
+`[compaction failed; dropped N messages]` appears dim in the transcript.
+
+**Continuation.** A completion that stops because it hit the output cap (`stop_reason` is
+`max_tokens`) with no tool calls used to just end mid-sentence, with the turn reported as done.
+The harness now asks the model to continue where it left off — up to **3** times per turn, each
+one a full step the circuit breaker counts and budgets, shown as `[continuation k/3]` — and
+stitches the pieces into one assistant message, so neither the partials nor the harness's own
+prompts survive into the history.
+
+**Parallel tool calls.** A model that asks for five files in one step no longer waits for five
+sequential round-trips. Approvals for the whole step are resolved first (sequentially — the gate
+may prompt you, and must ask exactly once per call), then read-only calls run together on a
+4-worker pool, then side-effecting calls run one at a time in the order the model asked for them:
+two writes racing could interleave edits to one file, and a write racing a read could hand the
+model a half-written one. Results are observed in **call** order regardless of completion order.
+`[limits] parallel_tools = false` restores strictly sequential execution.
+
+```toml
+[limits]
+max_context_tokens    = 0           # optional HARD cap; 0 = none (was a flat 8000 budget)
+max_output_tokens     = 8192        # tokens the model may generate when no provider cap is set
+context_reserve_tokens = 4096       # headroom kept free inside the window
+compaction            = "summarize" # summarize | drop
+parallel_tools        = true        # run a step's read-only tool calls concurrently
+
+[model.context_window]
+"ollama:qwen2.5:3b" = 16384         # override the resolved window for one model
+
+[providers.anthropic]
+max_tokens = 8192                   # per-provider output cap (None = the provider's own default)
+```
+
 ## Cost tracking
 
 The status footer and `/cost` report what a session actually spent, and `[limits] max_cost_usd`
@@ -242,6 +330,55 @@ max_cost_usd = 5.0                      # trips the circuit breaker for real now
 
 Delegated work counts too: a sub-agent's usage and cost roll up into the parent turn's totals and
 against the same cap.
+
+### Prompt caching
+
+Every turn used to re-send the whole system prompt and tool list at full input price, though
+neither changes across a session. The Anthropic adapter now marks the stable prefix as cacheable:
+caching is a prefix match over tools → system → messages, so one breakpoint on the **last tool**
+caches the tool list and one on the **system block** caches tools + system — both stable while the
+conversation after them is not. A marker is placed only when the prefix it closes clears that
+model's minimum cacheable length (512 tokens on the newest models, 4096 on Opus 4.6/4.5 and
+Haiku 4.5 — the minimum is not monotonic across generations), because below it the API silently
+ignores the marker and the breakpoint is spent for nothing. At most two of the four available
+breakpoints are used.
+
+```toml
+[providers.anthropic]
+prompt_cache = true     # false for an endpoint that proxies Anthropic and rejects cache_control
+```
+
+Caching is billed at its own rates, so the meter tells the truth about it: **cache reads at 0.1×**
+the input rate, **5-minute cache writes at 1.25×**, and the uncached remainder at the input rate
+(with a per-model override where a model prices reads differently, and optional explicit
+`cache_read_per_mtok` / `cache_write_per_mtok` in a `[pricing.models]` entry). Billing every
+prompt token at the input rate made `limits.max_cost_usd` wrong in both directions: a fully-cached
+turn is a tenth of the price, a cache write a 25% premium. OpenAI's `cached_tokens` is read the
+same way.
+
+`/cost` reports the session's cache traffic — `cache read N  written N tok`, plus `saved $X` where
+it can be computed — alongside the usual totals.
+
+### The per-turn line
+
+The session total has been climbing all afternoon; the number you actually watch while deciding
+whether to hit `Escape` is *this* turn's. Every finished turn now ends with one dim read-out:
+
+```
+— 3 steps · 2 tools · 4.1k in / 612 out (1.9k cached) · $0.0123 · 8.2s
+```
+
+It appears on the TUI transcript, in the plain loop, and on `agent86 run`'s stderr (non-JSON), all
+through one formatter so they cannot drift. An unpriced model reads `cost n/a (unpriced model)`
+rather than a fabricated `$0.0000`, and the cached parenthetical is dropped when nothing was
+cached. It is written on the error path too — a turn that failed halfway still spent tokens.
+
+`run --json` carries the same summary under an additive **`turn`** key; every pre-existing key is
+untouched, so the scripting contract holds.
+
+```bash
+agent86 run --json "hello" | jq '.turn'
+```
 
 ## Resilience
 
