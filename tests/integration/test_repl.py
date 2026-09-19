@@ -168,3 +168,49 @@ def test_status_line_reflects_state(tmp_path):
     line = repl.status_line()
     assert harness.provider.model in line
     assert "mode:" in line and "sbx" in line
+
+
+def test_unknown_command_echo_is_markup_escaped(tmp_path, capsys):
+    """The plain loop must not blow up on an unknown command that looks like Rich markup.
+
+    `handle_command` echoes the raw line back, and `_Repl.dispatch` hands that straight to
+    `Console.print`, which parses markup. `[/bar]` is a closing tag with nothing open, so an
+    unescaped echo raises `MarkupError` — out of the REPL's own input loop, where there is
+    nothing to catch it. Same class of bug as the transcript escaping in
+    `tests/tui/test_transcript_escape.py`, on the other surface.
+    """
+    repl, _ = _repl(tmp_path)
+
+    assert repl.dispatch("/foo [/bar]") == "handled"
+
+    out = capsys.readouterr().out
+    assert "/foo [/bar]" in out  # echoed verbatim, tags shown as text
+
+
+def test_unknown_command_markup_is_not_interpreted(tmp_path, capsys):
+    """A well-formed tag must render as text, not as styling — no injection into the console."""
+    repl, _ = _repl(tmp_path)
+
+    assert repl.dispatch("/foo [bold red]loud[/bold red]") == "handled"
+
+    out = capsys.readouterr().out
+    assert "[bold red]loud[/bold red]" in out
+
+
+def test_handle_command_escapes_the_unknown_line_itself(tmp_path):
+    """Pin the escaping at the source, so the TUI surface is covered by the same guarantee."""
+    import io
+
+    from rich.console import Console
+
+    from agent86.tui.commands import handle_command
+
+    repl, _ = _repl(tmp_path)
+    result = handle_command(repl, "/foo [/bar]")
+
+    assert result.action == "handled"
+    assert result.render == r"unknown command /foo \[/bar]"
+    # And the escaped form survives a real markup parse.
+    buf = io.StringIO()
+    Console(file=buf, width=200).print(result.render)
+    assert "/foo [/bar]" in buf.getvalue()
