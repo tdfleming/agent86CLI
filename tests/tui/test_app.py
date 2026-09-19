@@ -95,7 +95,9 @@ async def test_shell_has_transcript_input_footer(tmp_path):
 async def test_turn_streams_and_footer_goes_live_then_idle(tmp_path):
     repl = _make_repl(tmp_path, _SlowTextProvider("hello world"))
     app = Agent86App(repl)
-    async with app.run_test() as pilot:
+    # 140 columns: wide enough that the footer's width policy sheds nothing, so this test
+    # stays about the live/idle transition (tests/tui/test_status_footer.py owns the policy).
+    async with app.run_test(size=(140, 24)) as pilot:
         await pilot.pause()
         prompt = app.query_one("#prompt", Input)
         prompt.value = "hi there"
