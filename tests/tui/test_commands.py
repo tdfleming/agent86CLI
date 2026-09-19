@@ -319,3 +319,42 @@ def test_models_table_shows_keyring_availability(tmp_path, monkeypatch):
     console.print(commands_mod._models_tables(repl.cfg))
     text = console.export_text()
     assert "unavailable" in text
+
+
+def test_cost_command_labels_unpriced_models(tmp_path):
+    """/cost must not print $0.0000 for a model whose rate we simply do not know."""
+    from agent86.ui.status import UNPRICED_LABEL
+
+    repl, _ = _repl(tmp_path)
+    repl.state.usage.input_tokens = 1000
+    repl.state.usage.output_tokens = 500
+
+    # Priced cloud model -> a real dollar figure.
+    repl.status.model_ref = "anthropic:claude-opus-5"
+    repl.status.cost_usd = 0.0125
+    repl.state.usage.cost_usd = 0.0125
+    text = _render_to_text(handle_command(repl, "/cost").render)
+    assert "cost $0.0125" in text
+
+    # Local model -> priced at zero, which is the truth, so $0.0000 stays.
+    repl.status.model_ref = "ollama:qwen2.5"
+    repl.state.usage.cost_usd = 0.0
+    text = _render_to_text(handle_command(repl, "/cost").render)
+    assert "cost $0.0000" in text
+
+    # Unpriced model (Groq / most OpenRouter routes) -> say so instead of lying.
+    repl.status.model_ref = "groq:llama-3.3-70b-versatile"
+    text = _render_to_text(handle_command(repl, "/cost").render)
+    assert UNPRICED_LABEL in text
+    assert "$0.0000" not in text
+
+    repl.status.model_ref = "openrouter:some-vendor/mystery-model"
+    assert UNPRICED_LABEL in _render_to_text(handle_command(repl, "/cost").render)
+
+
+def test_cost_command_still_reports_steps_and_tokens(tmp_path):
+    repl, _ = _repl(tmp_path)
+    repl.state.usage.input_tokens = 12
+    repl.state.usage.output_tokens = 34
+    text = _render_to_text(handle_command(repl, "/cost").render)
+    assert "in 12" in text and "out 34 tok" in text and "steps" in text

@@ -175,11 +175,19 @@ def _set_model(repl, arg: str) -> str:
 
 
 def _show_cost(repl) -> str:
+    from agent86.ui.status import UNPRICED_LABEL, format_cost
+
     u = repl.state.usage
+    # Same honesty rule as the status line: on a model with no known rate (Groq, most
+    # OpenRouter routes) a running total of $0.0000 reads as "this turn was free" when the
+    # truth is "we have no idea what this cost". `format_cost` spells that out itself, so
+    # only the dollar figure gets the "cost" label in front of it.
+    cost = format_cost(u.cost_usd, repl.status.price_ref)
+    cost_text = cost if cost == UNPRICED_LABEL else f"cost {cost}"
     return (
         f"steps {repl.state.step_count}  "
         f"in {u.input_tokens}  out {u.output_tokens} tok  "
-        f"cost ${u.cost_usd:.4f}"
+        f"{cost_text}"
     )
 
 
