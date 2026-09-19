@@ -9,7 +9,7 @@
 | 2 | Command Palette + Menus | 4/4 | Complete   | 2026-07-20 |
 | 3 | Secrets + Model Config | 13/13 | Complete   | 2026-08-06 |
 | 4 | MCP Config UI | 8/8 | Complete   | 2026-08-06 |
-| 5 | Packaging & Hardening | Lazy-import packaging, graceful degradation, docs, release | TUI-06 | 4 |
+| 5 | Packaging & Hardening | TUI-06 | Complete   | 2026-09-19 |
 
 ---
 
@@ -131,5 +131,12 @@ graceful degradation, and ship docs.
    cover the core TUI flows.
 4. README + CHANGELOG updated; version bumped for the v0.6 release.
 
+**Status:** Complete (2026-09-19). Executed as a review-driven hardening pass rather than a
+numbered plan set — see `phases/05-packaging-hardening/SUMMARY.md` for the commit-by-commit
+breakdown: transcript markup escaping, single harness construction per process, the plain loop
+routed through the shared command registry, turn cancellation and hang-free shutdown, a capped
+live stream region, removal of the dead prompt_toolkit rich loop and spinner, the catalog-picker
+flake, a clean ruff run, and the v0.6.0 docs + version bump.
+
 ---
-*Roadmap created: 2026-07-19*
+*Roadmap created: 2026-07-19 · Milestone complete: 2026-09-19 (5/5 phases)*

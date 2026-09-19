@@ -46,13 +46,16 @@ TOML or restarting.
 - ✓ **MCP-01**: List / add / remove / enable / disable MCP servers from within the app via
   `/config mcp`, with a pre-save connection test that starts the server for real and enumerates
   its tools; servers mount and unmount live in the running session (no restart) — Phase 4
+- ✓ **TUI-06**: Plain loop and `run --json` keep working unchanged; Textual/keyring/tomlkit
+  are core-but-lazy (never imported on the `run`/`--plain` path, pinned by
+  `tests/tui/test_lazy_import.py`) and their absence degrades to the plain loop / env-var key
+  resolution rather than crashing — Phase 5
 
 ### Active
 
 <!-- This milestone. Hypotheses until shipped. -->
 
-- [ ] **TUI-06**: Plain loop and `run --json` keep working; keyring/Textual absence degrades
-      gracefully (fallback landed in Phase 1; formal packaging/hardening in Phase 5)
+_None — all 10 v1 requirements validated; v0.6 shipped as v0.6.0 on 2026-09-19._
 ### Out of Scope
 
 - Retaining the legacy `rich_loop` long-term — replaced by TUI + plain loop (two loops, not three)
@@ -104,6 +107,28 @@ TOML or restarting.
 | Enter-routing "Approach B": bind/unbind priority `enter` only while palette open (spike-proven) | Permanent priority `enter` swallows `Input.Submitted`; arrow/escape need `SkipAction` fallthrough too | ✓ Good (Phase 2) |
 | Picker callbacks synthesize `/mode`/`/model` lines through `handle_command` (not direct state mutation) | Keeps `_dispatch_line` the single execution path for typed + picker input | ✓ Good (Phase 2) |
 
+## Next milestone candidates
+
+v0.6 made the harness *usable*. The natural v0.7 theme is making it **trustworthy** — the
+places where the harness currently reports or defends less than it claims:
+
+- **Populate the pricing table** — the cost figure in the status footer and `/cost` is only as
+  honest as `cognitive/pricing.py`
+- **Wire egress redact** — the redact mode exists but isn't on the output path
+- **Provider-stream error handling + retries/backoff** — a mid-stream failure should degrade,
+  not end the turn; rate limits deserve backoff
+- **MCP subprocess env scrubbing** — stdio servers currently inherit more environment than the
+  sandbox's own tool subprocesses do
+- **POSIX env allowlist** — bring the non-Windows sandbox env policy up to the same allowlist
+  discipline
+- **`web_fetch` private-address guard** — block loopback/link-local/RFC1918 targets (SSRF)
+- **Remove the 12-step hard cap** — `[limits] max_steps` should be the only bound
+- **Config enums** — mode/router/transport string fields should be enums, validated once
+- **Sub-agent usage accounting** — delegated turns should roll their tokens and cost up into the
+  session totals
+
+Deferred beyond v0.7: see `docs/BACKLOG.md` § "Review findings 2026-09-19".
+
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
@@ -122,5 +147,5 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-06 after Phase 4 (MCP Config UI) — MCP-01 validated; TUI-06 remains
-active for Phase 5 (Packaging & Hardening).*
+*Last updated: 2026-09-19 after Phase 5 (Packaging & Hardening) — TUI-06 validated; the v0.6
+Interactive milestone is complete (5/5 phases, 10/10 requirements) and released as v0.6.0.*

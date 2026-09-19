@@ -17,7 +17,7 @@ Requirements for the v0.6 interactive milestone. Each maps to exactly one roadma
       current phase (thinking / running tool) *while a turn is processing*
 - [x] **TUI-05**: Tool-approval requests appear as a modal dialog (replacing the inline `y/N`),
       resolving the worker thread's approval event
-- [ ] **TUI-06**: The plain loop and `run --json` continue to work unchanged; keyring/Textual
+- [x] **TUI-06**: The plain loop and `run --json` continue to work unchanged; keyring/Textual
       absence degrades gracefully to the plain loop
 - [x] **TUI-03**: A command palette offers autocomplete over slash-commands (`/model`, `/mcp`,
       `/config`, `/cost`, `/clear`, …) and runs the selected one
@@ -72,7 +72,7 @@ Deferred — acknowledged but not in this milestone's roadmap.
 | MODEL-01 | Phase 3 | Complete |
 | MODEL-02 | Phase 3 | Complete |
 | MCP-01 | Phase 4 | Complete |
-| TUI-06 | Phase 5 | Pending |
+| TUI-06 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 10 total

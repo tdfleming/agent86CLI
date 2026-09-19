@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
-status: unknown
-last_updated: "2026-08-13T17:59:28.536Z"
+status: complete
+last_updated: "2026-09-19"
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 30
   completed_plans: 30
 ---
@@ -19,12 +19,12 @@ See: .planning/PROJECT.md (updated 2026-07-19)
 
 **Core value:** Run, configure, and steer the agent entirely from within an interactive terminal
 app — no hand-editing TOML, no restarts.
-**Current focus:** Phase 05 — packaging-hardening (Phase 04 complete)
+**Current focus:** v0.6 milestone complete (5/5 phases) — released as v0.6.0
 
 ## Milestone
 
-**v0.6 — Interactive** (agent86 currently at v0.5.8)
-5 phases | 10 v1 requirements | 0 phases complete
+**v0.6 — Interactive** (agent86 now at v0.6.0)
+5 phases | 10 v1 requirements | 5 phases complete
 
 ## Progress
 
@@ -34,9 +34,30 @@ app — no hand-editing TOML, no restarts.
 | 2 — Command Palette + Menus | ● | 4/4 | 100% |
 | 3 — Secrets + Model Config | ● | 13/13 | 100% |
 | 4 — MCP Config UI | ● | 8/8 | 100% |
-| 5 — Packaging & Hardening | ○ | 0/? | 0% |
+| 5 — Packaging & Hardening | ● | n/a | 100% |
 
 ## Recent Activity
+
+- 2026-09-19 — **Phase 5 (Packaging & Hardening) complete; v0.6 milestone complete at 5/5
+  phases and released as v0.6.0.** Executed as a review-driven hardening pass rather than a
+  numbered plan set (see `phases/05-packaging-hardening/SUMMARY.md` for the commit-by-commit
+  breakdown). Hardening: untrusted text is markup-escaped at the transcript boundary and in
+  command renderables, so bracketed text no longer raises `MarkupError` and kills the TUI
+  mid-turn; `run_tui` takes the already-built `_Repl` so the harness — and every MCP server — is
+  constructed exactly once per process; turns are cancellable (Escape / Ctrl+C) and shutdown
+  releases pending approvals with a bounded wait so quitting can't hang on a modal nobody will
+  answer; the live stream region is capped so a long answer can't push the prompt and status
+  footer off a short terminal; the dead prompt_toolkit rich loop and `ui/spinner.py` are gone
+  and `[ui]` is honest (`status_line` -> `tui`, `mode_cycle_key` removed); the plain loop
+  dispatches through the same `COMMANDS` registry as the TUI; the `CatalogPickerModal` flake and
+  the ruff backlog are cleared. Release: CHANGELOG `[0.6.0] - 2026-09-19`, README status block
+  and a new "Interactive TUI" section, `docs/ARCHITECTURE.md` synced to 0.6.0 (§4 gains `tui/`,
+  `config_writer.py`, `secrets.py`; §11 documents `[ui] tui`, the env->keyring secret flow, and
+  config_writer as the only writer; §12 documents the TUI, `--plain`, `/config model`,
+  `/config mcp`, and cancellation), version bumped to 0.6.0 in `pyproject.toml` and
+  `src/agent86/__init__.py`, `prompt_toolkit` dropped from core deps (last importer removed),
+  and `[tool.mypy] python_version` moved to 3.12 to match CI. 532 tests collected. TUI-06
+  Complete — all 10 v1 requirements now Complete.
 
 - 2026-08-06 — Plan 04-08 complete (`/config mcp` full-app chain, Wave 4 — final plan, Phase 4
   now feature-complete 8/8, MCP-01 and the SEC-01 `headers.Authorization` write-path both closed):
@@ -546,17 +567,16 @@ app — no hand-editing TOML, no restarts.
 
 ## Next Step
 
-Phase 3 (secrets-model-provider-config) is now feature-complete and fully gap-closed: 13/13
-plans done, all 6 UAT items from `03-HUMAN-UAT.md` resolved (1 passed as-is, 5 gaps diagnosed and
-closed by plans 03-10..03-13). Plan 03-13 closed the last blocker, UAT gap 3 (Anthropic SDK
-version guard + fail-soft startup) — full suite green at 341 passed, 0 failed. Manual Windows
-Terminal verification per `03-VALIDATION.md` §Manual-Only (real keyring round-trip, real
-config.toml comment preservation, live OpenRouter/Groq catalog schema check, and a real `hello`
-turn against `anthropic:claude-opus-5`) remains outstanding but does not block automated
-progress.
+The v0.6 "Interactive" milestone is complete and shipped as **v0.6.0** — 5/5 phases, 10/10 v1
+requirements Complete. The orchestrator tags the release after the final full-suite run.
 
-Phase 4 (MCP Config UI) is now feature-complete: 8/8 plans done, MCP-01 and the SEC-01
-`headers.Authorization` write-path gap both closed. Full suite green at 438 passed, 0 xfailed,
-0 failed. Manual Windows Terminal verification of the full `/config mcp` flow against a real MCP
-server remains outstanding but does not block automated progress. Next: Phase 5 (Packaging &
-Hardening) — TUI-06 formal packaging/hardening.
+Outstanding (non-blocking) from earlier phases: manual Windows Terminal verification per
+`03-VALIDATION.md` §Manual-Only (real keyring round-trip, real `config.toml` comment
+preservation, live OpenRouter/Groq catalog schema check, a real turn against a cloud model) and
+of the full `/config mcp` flow against a real MCP server.
+
+Next milestone candidates are recorded in `PROJECT.md` under **Next milestone candidates** —
+v0.7 "trustworthy harness": populate the pricing table, wire egress redact, provider-stream
+error handling with retries/backoff, MCP subprocess env scrubbing, a POSIX env allowlist, a
+`web_fetch` private-address guard, removing the 12-step hard cap, config enums, and sub-agent
+usage accounting. Deferred-beyond-v0.7 items are in `docs/BACKLOG.md`.
