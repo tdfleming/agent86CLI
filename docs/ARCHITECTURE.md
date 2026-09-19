@@ -5,16 +5,19 @@
 > implementation of the five-tier architecture and four pillars described in
 > *The Agentic Harness* (Tony Fleming, 2026).
 
-**Status:** Implemented (Phases 1–9 complete), then extended through v0.6.0. This document is
+**Status:** Implemented (Phases 1–9 complete), then extended through v0.7.0. This document is
 the contract the code was built against; the build followed §14 phase-by-phase, each phase
 verified with tests and a live run against a local model. Post-v0.1 releases added an
 interactive REPL with a persistent status line and live approval-mode and model switching
 (v0.2, v0.4); memory management via `memory prune`/`forget` plus automatic log retention
 (v0.3, v0.4); first-class OpenAI-compatible cloud providers — OpenRouter, Groq, and any
-configured `base_url` endpoint (v0.4); MCP over SSE and streamable HTTP (v0.5); and a
+configured `base_url` endpoint (v0.4); MCP over SSE and streamable HTTP (v0.5); a
 full-screen Textual TUI as the default interactive UI, with in-app model/provider and MCP
-configuration, keyring-backed secrets, and cancellable turns (v0.6).
-**Version:** 0.6.0
+configuration, keyring-backed secrets, and cancellable turns (v0.6); and the "trustworthy"
+pass — a real price table behind the cost cap, provider retries with backoff, a clean error
+path for a failed stream, egress redaction on the output path, sub-agent accounting, and the
+`web_fetch` / sandbox-environment / MCP-environment / process-tree security fixes (v0.7).
+**Version:** 0.7.0
 
 ---
 
@@ -130,7 +133,8 @@ agent86CLI/
 │   │   ├── ollama_provider.py     #   local Ollama HTTP API
 │   │   ├── llamacpp_provider.py   #   llama.cpp server / LM Studio local server
 │   │   ├── prompt.py              #   prompt compilation (system + skills + history + schema)
-│   │   └── pricing.py             #   per-model token pricing → usage cost
+│   │   ├── retry.py               #   transient-failure policy: backoff + jitter, Retry-After
+│   │   └── pricing.py             #   per-model price table → usage cost (priced/local/unknown)
 │   │
 │   ├── tools/                     # ── Tier 4 / Pillar 3 ──
 │   │   ├── base.py                #   Tool ABC, JSON-Schema spec, ToolResult
@@ -253,7 +257,31 @@ box; it never touches the sandbox, the DB, or the terminal directly.
 
 **Circuit breakers** (Tier 2 / `circuit.py`): abort the loop when any of
 `max_steps`, `max_cost_usd`, `max_wall_clock_s`, or `max_consecutive_errors` is exceeded —
-the antidote to the "naive ReAct infinite loop" failure mode.
+the antidote to the "naive ReAct infinite loop" failure mode. **`[limits] max_steps` is the
+only step budget** — there is no hidden per-turn ceiling underneath it. A caller may pass an
+explicit cap (a sub-agent passes `[agents] max_steps`), which is clamped with `min` so a
+delegated task can *tighten* the bound but never widen it; `None` means "the configured budget
+is the budget", resolved by an explicit `is None` check so an explicit `0` trips immediately
+instead of being read as "unset".
+
+**The error path is part of the loop.** A turn appends the user message before it calls the
+model, so a failure in the model-call stream must not simply escape: any exception —
+a `ProviderError`, or a raw `httpx.RemoteProtocolError` / `json.JSONDecodeError` from a truncated
+SSE or NDJSON line — aborts the turn (ERROR phase, `turn_end status="error"`, state persisted)
+*before* being re-raised, as the original `ProviderError` when the provider produced one and
+wrapped in one naming provider + model otherwise. A stream that ends with no final completion
+takes the same path. The result is a resumable session and a trace whose turns always end.
+
+Transient failures don't get that far: the provider adapters retry them first (§6).
+
+**Cancellation** is a first-class exit, not an exception leak. A cancelled turn records
+`turn_end status="cancelled"` with the steps taken, persists state, and — in redact mode — still
+emits whatever was buffered, redacted.
+
+**Redact buffering.** When `[guardrails] egress = "redact"`, the step's text deltas are held back
+and replayed from the *inspected* text (including the terminal done delta, whose ordering
+consumers rely on), and the inspected text is what gets stored in the assistant message and the
+episodic outcome. `warn`/`off` stream live and are untouched. See §9.
 
 ---
 
@@ -272,20 +300,52 @@ class ModelProvider(ABC):
     def embed(self, texts: list[str]) -> list[list[float]] | None: ...
 ```
 
-- **Native tool-calling** (Anthropic, OpenAI) is used when available.
-- **Tool-emulation shim** for local models without reliable function calling: the harness
-  injects a JSON tool protocol into the prompt and parses/repairs the response
-  (Pydantic validation → structured error → self-correction), exactly as the book's
-  `SQLQueryProposal` example does.
+- **Native tool-calling** is used throughout: Anthropic and OpenAI natively, and Ollama and
+  llama.cpp by passing tools through to the server's own tool support (which varies by model).
+  There is no prompt-level tool-emulation shim today — a local model without reliable function
+  calling is a model to swap, not to emulate around. *Not built; see §15.*
+- **Self-correction at the boundary** is real and is where the book's `SQLQueryProposal`
+  discipline lives: arguments are validated against the tool's Pydantic `Args` model and a
+  failure returns a structured `ToolResult` error the model can correct from — including
+  "invalid JSON in tool arguments", raised before the registry, the approval gate, or any tool
+  when a provider could not parse the streamed argument text (previously substituted with `{}`,
+  which sent the model chasing a phantom missing field).
 - **Dynamic routing** (`router.py`): a triage step classifies each turn and routes simple
-  work to a cheap/local model and hard work to a frontier model. Configurable policy.
+  work to a cheap/local model and hard work to a frontier model. Configurable policy. The
+  router caches one provider per model string; `invalidate()` clears that cache (keeping the
+  pinned provider) so a runtime config change — a new key, a new `base_url`, a re-registered
+  provider — actually reaches the next call instead of the session continuing against the old
+  endpoint.
+
+**Retry policy** (`retry.py`) — one module decides whether a provider failure is worth another
+attempt and how long to wait, so the four adapters can't drift:
+
+- **Retryable**: HTTP 429/500/502/503/504 and transport errors (`ConnectError`, `ConnectTimeout`,
+  `RemoteProtocolError`). Everything else fails immediately.
+- **Backoff**: exponential with equal jitter; `Retry-After` honoured as delta-seconds or an
+  HTTP-date, both clamped.
+- **Budget**: `[providers.<name>] max_retries` (default 2, `0` disables).
+- **Invariant**: nothing is retried once a delta has been yielded — a second attempt would
+  duplicate text the user has already seen, so that failure surfaces as a `ProviderError`. The
+  Anthropic adapter passes `max_retries` to the SDK client rather than wrapping a client that
+  already retries; llama.cpp inherits the OpenAI path.
+
+**Pricing** (`pricing.py`) — a built-in table of USD per million tokens (Anthropic and OpenAI;
+Groq and OpenRouter deliberately absent), with `[pricing.models]` config overrides layered on top
+through a `Config` post-validation hook, because providers price usage deep inside a stream with
+no access to the resolved config. Lookup tries the full `provider:model` ref, then the bare model
+id, then a dated-snapshot prefix. Three outcomes stay distinct — **priced**, **local**
+(`ollama`/`llamacpp`: zero is correct), and **unknown** (`None`, rendered as
+`cost n/a (unpriced model)`) — so a cost meter never reports a paid call as free. This is what
+makes `[limits] max_cost_usd` a real circuit breaker rather than dead code.
 
 ---
 
 ## 7. Tool & Execution Tier — three sources, one registry
 
-1. **Built-in tools** — `shell`, `read_file`, `write_file`, `edit_file`, `list_dir`,
-   `web_fetch`, `web_search`, `python_exec`.
+1. **Built-in tools** — `run_command` (shell), `read_file`, `write_file`, `edit_file`,
+   `list_dir`, `web_fetch`, `python_exec`, plus `remember`/`recall`, `use_skill`, and
+   `delegate`. (A `web_search` tool is *not* implemented — see §15.)
 2. **MCP client** — connect to MCP servers (stdio/HTTP); their tools are registered
    into the same registry with the same schema/guardrail treatment.
 3. **Skills** — self-contained folders discovered from skill paths:
@@ -301,10 +361,46 @@ Skills use **progressive disclosure**: only `name` + `description` sit in contex
 model chooses to invoke the skill, at which point its full instructions load. Keeps the
 token budget lean (the book's Pillar-2 working-memory discipline).
 
+A tool name is claimed once. Bulk registration keeps the first registration, appends the loser to
+`registry.collisions`, and logs it (naming the 64-character truncation when the clash is a
+truncation artefact) instead of dropping it silently; the strict `register()` still raises, so an
+explicit `add_mcp_server` reports the clash to the caller.
+
 **Sandboxing** (`sandbox/`): every side-effectful tool runs through an executor governed by
 a `SandboxPolicy` (path allow/deny + cwd jail, network egress allow/deny, env scrubbing,
-CPU/mem/time limits). Default = restricted subprocess; `--sandbox docker` escalates to a
-container when Docker is available.
+output/time limits). Default = restricted subprocess; `--sandbox docker` escalates to a
+container when Docker is available. The per-tool budget is `[limits] tool_timeout_s`.
+
+- **Environment allowlist.** A tool subprocess gets a curated environment, never the harness's:
+  `PATH` + locale/encoding vars, plus the platform set — Windows (`SYSTEMROOT`, `COMSPEC`,
+  `APPDATA`, `TEMP`, …) or POSIX (`HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TERM`, `TZ`, the
+  `LC_*`/`XDG_*` prefix families, and the CA-bundle vars, without which git/pip/npm break rather
+  than merely being constrained). `[sandbox] env_passthrough` forwards extra variables **by
+  name**; credential-looking names (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`, `*_KEY`) are
+  refused even when named explicitly, with a logged warning — an allowlist entry must not become a
+  way to hand the model's subprocesses the key that pays for the model.
+- **Process-tree kill on timeout.** Each command starts in its own process group
+  (`CREATE_NEW_PROCESS_GROUP` on Windows, `start_new_session` on POSIX) and the *group* is killed
+  on timeout (`taskkill /T /F` or `killpg`), with a bounded drain of the pipes — a timed-out
+  `npm test` no longer leaves workers holding ports. Docker runs get a unique
+  `--name agent86-<uuid>` and a timeout follows up with `docker kill`, because killing the
+  `docker run` client leaves the container alive and `--rm` never fires. stdin is closed (EOF)
+  rather than inherited, so a command that reads stdin fails fast.
+- **`web_fetch` SSRF guard.** The fetch tool runs inside the user's trust boundary against a
+  model-chosen URL, so every hop is vetted before a connection: `http`/`https` only; all A/AAAA
+  answers resolved and refused when loopback, private, link-local, multicast, reserved, or
+  unspecified (IPv4-mapped, 6to4 and Teredo forms unwrapped first); redirects followed **manually**
+  with a bound of 5 hops, because automatic following lets a public host bounce the fetch into the
+  private network; the body streamed and stopped at 2 MB *before* decoding; and a textual content
+  type required. Refusals are structured `ToolResult` errors naming the reason and the
+  `[tools] web_allow_private` escape hatch. The tool stays `side_effecting = False` — the guard,
+  not the approval gate, is the mitigation.
+- **MCP stdio servers get the same scrubbed environment.** A server that declared any `env` value
+  used to receive `{**os.environ, **cfg.env}` — the whole host environment, every API key on the
+  machine, handed to a third-party subprocess. It now gets `SandboxPolicy.scrubbed_env()` with its
+  own `env` layered on top, so a server that needs one token gets exactly that token via `${VAR}`.
+  An MCP tool whose annotations carry `readOnlyHint` is mounted `side_effecting = False`, so
+  reading through a server stops prompting for approval.
 
 ---
 
@@ -314,7 +410,7 @@ Single embedded store: **SQLite** for relational state + **`sqlite-vec`** for ve
 
 | Layer | What | Backing |
 |---|---|---|
-| **Working** | Current context window; sliding window + recursive summarization | in-memory, budget-managed |
+| **Working** | Current context window; token-budgeted sliding window (the system prompt is held out of the trim) | in-memory, budget-managed |
 | **Episodic** | Append-only trace of every past step/run ("flight data recorder"); similar-task lookup injects warnings on new tasks | SQLite tables + vec index |
 | **Semantic** | User/domain knowledge; RAG retrieval | SQLite + vec index |
 
@@ -329,16 +425,39 @@ for millions. Retention caps bound the episode/session log automatically; curate
 never auto-pruned. If scale ever demands it, sqlite-vec's `vec0` virtual table would add a
 true vector index — an intentional, isolated upgrade behind the same `MemoryStore` API.
 
+**Not yet built.** Working memory *drops* the oldest span when the budget is exceeded; it does
+not summarize it. Recursive/rolling summarization of the trimmed span, and Anthropic prompt-cache
+breakpoints for the stable system + tool-schema block, are tracked in `docs/BACKLOG.md`
+§ "Context & cost" (see also §15).
+
 ---
 
 ## 9. Guardrails & Observability (Tier 5 / Pillar 4)
 
-- **Ingress** — prompt-injection heuristics, jailbreak patterns, PII detection on input.
-- **Egress** — secret/API-key/PII scanning on output; Pydantic schema validation of any
-  structured proposal before it can reach the tool tier.
-- **Operational policy** — rate limits, cost caps, step caps (shared with circuit breakers).
+- **Ingress** (`off` | `warn` | `block`) — prompt-injection heuristics, jailbreak patterns, PII
+  detection on input; `block` refuses a turn carrying prompt injection. Findings are recorded as
+  `guardrail stage="ingress_input"`. Tool observations are scanned too
+  (`stage="observation"`, `[guardrails] scan_observations`).
+- **Egress** (`off` | `warn` | `redact`) — secret/API-key/PII scanning on output, plus Pydantic
+  schema validation of any structured proposal before it can reach the tool tier.
+  - `warn` scans and reports (`stage="egress"`); the text streams live.
+  - `redact` additionally **buffers the step's text deltas and replays them from the inspected
+    text**, and stores the inspected text in the assistant message and the episodic outcome — so
+    a secret is never shown, never persisted, and never recalled later. (Before v0.7 the redacted
+    copy was computed and discarded: raw text had already been streamed and stored, making
+    `redact` a synonym for `warn`.) A cancelled turn still emits its buffered partial, redacted.
+  - In both `warn` and `redact`, **tool-call arguments are scanned**
+    (`stage="egress_tool_args"`) — a model that reads a key from a file and posts it to a URL
+    never puts it in its prose. The call is recorded, not blocked, and the arguments are not
+    rewritten: the approval gate is what stops side effects, and rewriting would hand the tool
+    something the model never asked for.
+- **Operational policy** — cost caps, step caps, wall-clock and consecutive-error bounds, shared
+  with the circuit breakers (§5). Provider-side rate limiting is *absorbed*, not enforced: a 429
+  is retried with backoff and `Retry-After` (§6). The harness does not implement its own
+  request-rate limiter.
 - **HITL approvals** — permission modes (`auto` / `ask` / `deny`) per tool category;
-  destructive or side-effectful calls surface an approval prompt in the REPL before running.
+  destructive or side-effectful calls surface an approval prompt (a modal in the TUI) before
+  running. MCP tools annotated `readOnlyHint` are not gated.
 - **Observability** — OpenTelemetry spans wrap each step, model call, and tool execution;
   a parallel append-only **JSONL flight recorder** gives a local, greppable audit trail even
   with no OTel collector configured.
@@ -351,11 +470,26 @@ true vector index — an intentional, isolated upgrade behind the same `MemorySt
 - **Envelope** = structured message (sender, recipient, intent, payload, correlation id) —
   never raw natural language as a wire protocol (the book's "Babel problem").
 - **Broker** = in-process async pub/sub for agent-to-agent messaging.
-- **Orchestrator** = spawns sub-agents, wires topologies (supervisor / pipeline / blackboard),
-  and applies harness-level conflict resolution (state-oscillation detection, gated locks)
-  rather than trusting pure LLM debate to converge.
+- **Orchestrator** = spawns sub-agents and fans work out over the **supervisor** topology, the
+  one wired path. Pipeline and blackboard topologies, and harness-level conflict resolution
+  (state-oscillation detection, gated locks), remain design intent — *not built; see §15.*
 
-v0.1 ships single-agent-first with the MAS scaffolding present; supervisor topology is the
+**Sub-agent accounting** (v0.7). A delegated turn is bounded and billed like any other work:
+
+- Its step budget is `[agents] max_steps` (default 8), handed to its own `CircuitBreaker` and
+  clamped by `[limits] max_steps` — a sub-agent can tighten the bound, never widen it.
+- Its messages run through the *parent's* working memory, with the system prompt held out of the
+  trim, so a delegated task can't blow the context window.
+- It inherits the parent's compiled system prompt and skills list (it was previously offered
+  `use_skill` with no skills to call it with) and records `model_call` events tagged with role
+  and depth.
+- It returns its `Usage`; `spawn_subagent` accumulates it on the harness and `run_turn` folds it
+  into the step and the breaker's **cost** after each tool call — so delegated spend appears in
+  `state.usage` and counts against `max_cost_usd`. Cost only, never `record_step`: a sub-agent is
+  not one of the parent's model calls and must not shrink the parent's step budget. The
+  `delegate` tool's `str -> str` contract is unchanged.
+
+v0.1 shipped single-agent-first with the MAS scaffolding present; supervisor topology is the
 first wired path.
 
 ---
@@ -378,30 +512,54 @@ backend-less machine falls through silently rather than failing. Config never na
 only the env var that holds it (`api_key_env`); MCP entries may hold a `${VAR}` reference, which
 is expanded at connect time, at the transport boundary.
 
+**Validated enums.** `model.router`, `sandbox.mode`, `guardrails.ingress`, and
+`guardrails.egress` are `StrEnum`s (as `guardrails.approval` already was). They were plain
+strings, so `egress = "redcat"` validated cleanly and silently turned a safety switch off — the
+worst failure mode available to a guardrail. A bad value now raises a `ValidationError` naming
+the allowed values, while every existing `== "triage"` / `== "docker"` / `== "off"` comparison
+and f-string rendering keeps working, and `model_dump(mode="json")` still emits plain strings so
+the tomlkit round-trip is unaffected.
+
 ```toml
 [model]
 default   = "anthropic:claude-opus-4-8"
-router    = "triage"                 # off | triage
+router    = "triage"                 # off | triage                      (enum)
 [model.route]
 cheap     = "ollama:llama3.1"
 frontier  = "anthropic:claude-opus-4-8"
 
-[providers.anthropic]  api_key_env = "ANTHROPIC_API_KEY"
+[providers.anthropic]  api_key_env = "ANTHROPIC_API_KEY"  max_retries = 2
 [providers.openai]     api_key_env = "OPENAI_API_KEY"  base_url = "https://api.openai.com/v1"
 [providers.ollama]     base_url = "http://localhost:11434"
 [providers.llamacpp]   base_url = "http://localhost:8080"
 
+[pricing.models."anthropic:claude-sonnet-5"]   # override or add a rate; USD per million tokens
+input_per_mtok = 3.0  output_per_mtok = 15.0
+
 [ui]          tui = true             # false → the plain input() loop (pre-v0.6: `status_line`)
 
-[sandbox]     mode = "subprocess"    # subprocess | docker
+[sandbox]     mode = "subprocess"    # subprocess | docker               (enum)
+              env_passthrough = []   # extra env var NAMES for tool/MCP subprocesses
+[tools]       web_allow_private = false   # let web_fetch reach loopback/RFC1918 (SSRF escape hatch)
 [guardrails]  approval = "ask"       # auto | ask | deny  (per-category overrides allowed)
+              ingress = "warn"       # off | warn | block                (enum)
+              egress  = "warn"       # off | warn | redact               (enum)
 [memory]      path = "~/.agent86/memory.db"  embeddings = "sentence-transformers:all-MiniLM-L6-v2"
-[limits]      max_steps = 40  max_cost_usd = 5.0  max_wall_clock_s = 900
+[limits]      max_steps = 40  max_cost_usd = 5.0  max_wall_clock_s = 900  tool_timeout_s = 60
+[agents]      max_steps = 8          # per-sub-agent cap, clamped by limits.max_steps
 
 [mcp.servers.example]  command = "npx"  args = ["-y", "some-mcp-server"]   # stdio (local subprocess)
 [mcp.servers.remote]   url = "https://mcp.example.com/mcp"  enabled = true  # streamable HTTP (transport inferred)
 [mcp.servers.remote.headers]  Authorization = "Bearer ${TOKEN}"           # optional auth headers
 ```
+
+Fields added in v0.7: `providers.<name>.max_retries` (2), `agents.max_steps` (8),
+`tools.web_allow_private` (false), `sandbox.env_passthrough` (`[]`), `limits.tool_timeout_s` (60),
+and the `[pricing.models]` table. `env_passthrough` holds variable **names** only — values are
+read from the parent environment at spawn time, so the "no secrets in config" rule (§11 opening,
+and the `config_writer` guard) still holds. `[limits] tool_timeout_s` replaces the old derived
+per-tool timeout (`max_wall_clock_s if under 120 else 60`), which silently shortened every tool
+timeout for anyone who lowered their run budget.
 
 An MCP server is reached over one of three transports: **stdio** (default — set `command`),
 **streamable HTTP** (default when `url` is set), or **SSE** (`url` + `transport = "sse"`). Exactly
@@ -498,8 +656,27 @@ Heavy/optional deps (`sentence-transformers`, `docker`) live behind extras:
 > (memory), 5 (guardrails/observability), 8 (multi-agent), and 9 (Docker sandbox) each shipped
 > with a graceful-degradation path so the harness runs without heavy optional deps.
 
-## 15. Non-goals for v0.1
+## 15. Non-goals, and design intent not yet built
+
+**Non-goals (still, as of v0.7):**
 
 - Distributed/networked multi-host agents (in-process MAS only).
 - gVisor / WASM sandboxes (subprocess + Docker only; WASM is a later option).
 - A hosted service / web UI — this is a local-first CLI.
+- A harness-side request-rate limiter. Provider rate limits are *absorbed* (429 → backoff +
+  `Retry-After`, §6), not pre-empted.
+
+**Described above as design intent, deliberately not implemented yet.** Each is marked *not
+built* at its section; the full list with analysis is in `docs/BACKLOG.md`.
+
+| Not built | Area | Tracked |
+|---|---|---|
+| Recursive/rolling summarization of the trimmed context span | §8 memory | BACKLOG § Context & cost |
+| Anthropic prompt-cache breakpoints for the stable prompt + tool-schema block | §6 cognitive | BACKLOG § Context & cost |
+| Parallel execution of a turn's independent tool calls | §5 loop | BACKLOG § Context & cost |
+| `max_tokens` continuation after a truncated response | §5 loop | BACKLOG § Context & cost |
+| Prompt-level tool-emulation shim for models without native tool calling | §6 cognitive | — (swap the model) |
+| A `web_search` built-in tool | §7 tools | — (use an MCP search server) |
+| Pipeline / blackboard topologies; state-oscillation detection and gated locks | §10 MAS | BACKLOG |
+| `SKILL.md` `allowed-tools` enforced as a gate rather than documentation | §7 skills | BACKLOG § Skills & tools |
+| A configured OTel exporter; flight-recorder redaction and rotation | §9 observability | BACKLOG § Observability |
