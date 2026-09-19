@@ -12,6 +12,7 @@ from agent86.cognitive.capabilities import (
     mark_sampling_unsupported,
 )
 from agent86.cognitive.pricing import priced_usage
+from agent86.cognitive.retry import max_retries_for
 from agent86.config import ProviderConfig
 from agent86.types import (
     Completion,
@@ -90,6 +91,10 @@ class AnthropicProvider(ModelProvider):
         kwargs: dict[str, Any] = {"api_key": api_key}
         if config.base_url:
             kwargs["base_url"] = config.base_url
+        # The SDK has its own retry layer (429/5xx, Retry-After aware), so this provider
+        # configures it rather than using cognitive/retry.py — wrapping a client that already
+        # retries would multiply the budget (max_retries * our attempts) behind the user's back.
+        kwargs["max_retries"] = max_retries_for(config)
         # D-3: deliberately NOT wiring read_timeout_s/connect_timeout_s here. The SDK applies
         # its own ~600s default, so this path cannot hang unbounded (the bug class this quick
         # task closes doesn't exist for Anthropic). The SDK's timeout= is a total-request

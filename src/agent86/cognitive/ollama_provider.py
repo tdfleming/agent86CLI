@@ -14,6 +14,7 @@ import httpx
 
 from agent86.cognitive.base import ModelProvider, ProviderError
 from agent86.cognitive.http_timeouts import stream_timeout, timeout_error
+from agent86.cognitive.retry import RetryPolicy, max_retries_for, retry_after_header
 from agent86.config import ProviderConfig
 from agent86.types import (
     Completion,
@@ -38,6 +39,7 @@ class OllamaProvider(ModelProvider):
         self._base_url = (config.base_url or _DEFAULT_BASE_URL).rstrip("/")
         self._num_ctx = config.num_ctx
         self._timeout = stream_timeout(config)
+        self._max_retries = max_retries_for(config)
 
     # ------------------------------------------------------------------ #
     # Conversion helpers
@@ -92,81 +94,98 @@ class OllamaProvider(ModelProvider):
         if request.tools:
             payload["tools"] = self._to_tools(request.tools)
 
-        text_parts: list[str] = []
-        tool_calls: list[ToolCall] = []
-        prompt_tokens = 0
-        eval_tokens = 0
-        stop_reason: str | None = None
+        policy = RetryPolicy(self._max_retries, provider=self.name, model=self.model)
+        for attempt in policy.attempts():
+            # Per-attempt state: a retry must not inherit half a response from the last try.
+            text_parts: list[str] = []
+            tool_calls: list[ToolCall] = []
+            prompt_tokens = 0
+            eval_tokens = 0
+            stop_reason: str | None = None
+            # Once a delta has reached the consumer, retrying would duplicate that text.
+            emitted = False
 
-        try:
-            with httpx.stream(
-                "POST", f"{self._base_url}/api/chat", json=payload, timeout=self._timeout
-            ) as resp:
-                if resp.status_code != 200:
-                    resp.read()
-                    raise ProviderError(
-                        f"Ollama returned HTTP {resp.status_code}: {resp.text.strip()}"
-                    )
-                for line in resp.iter_lines():
-                    if not line:
-                        continue
-                    chunk = json.loads(line)
-                    if "error" in chunk:
-                        raise ProviderError(f"Ollama error: {chunk['error']}")
-                    msg = chunk.get("message") or {}
-                    piece = msg.get("content") or ""
-                    if piece:
-                        text_parts.append(piece)
-                        yield CompletionDelta(text=piece)
-                    for tc in msg.get("tool_calls") or []:
-                        fn = tc.get("function") or {}
-                        tool_calls.append(
-                            ToolCall(
-                                id=f"ollama-{len(tool_calls)}",
-                                name=fn.get("name", ""),
-                                arguments=_as_dict(fn.get("arguments")),
-                            )
+            try:
+                with httpx.stream(
+                    "POST", f"{self._base_url}/api/chat", json=payload, timeout=self._timeout
+                ) as resp:
+                    if resp.status_code != 200:
+                        resp.read()
+                        if policy.retry_status(
+                            resp.status_code, attempt, retry_after=retry_after_header(resp)
+                        ):
+                            continue
+                        raise ProviderError(
+                            f"Ollama returned HTTP {resp.status_code}: {resp.text.strip()}"
                         )
-                    if chunk.get("done"):
-                        prompt_tokens = chunk.get("prompt_eval_count", 0) or 0
-                        eval_tokens = chunk.get("eval_count", 0) or 0
-                        stop_reason = chunk.get("done_reason")
-        except httpx.ConnectError as exc:
-            raise ProviderError(
-                f"Cannot reach Ollama at {self._base_url}. Is it running? "
-                "Start it with 'ollama serve'."
-            ) from exc
-        except httpx.TimeoutException as exc:
-            raise timeout_error(
-                exc,
-                endpoint=f"{self._base_url}/api/chat",
-                timeout=self._timeout,
-                section="ollama",
-                connect_hint="Is it running? Start it with 'ollama serve'.",
-            ) from exc
-        except json.JSONDecodeError as exc:
-            # Ollama streams NDJSON: one JSON object per line. A truncated line used to
-            # escape as a bare JSONDecodeError naming neither the server nor the model.
-            raise ProviderError(
-                f"{self.name}: {self._base_url}/api/chat returned a malformed NDJSON line "
-                f"for model {self.model!r} — {exc}. The stream was probably truncated; "
-                "retry, or check the Ollama server log."
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise ProviderError(
-                f"{self.name}: the connection to {self._base_url}/api/chat failed while "
-                f"streaming model {self.model!r} — {type(exc).__name__}: {exc}. The server "
-                "closed the stream early; retry, or check that 'ollama serve' is healthy."
-            ) from exc
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        chunk = json.loads(line)
+                        if "error" in chunk:
+                            raise ProviderError(f"Ollama error: {chunk['error']}")
+                        msg = chunk.get("message") or {}
+                        piece = msg.get("content") or ""
+                        if piece:
+                            text_parts.append(piece)
+                            emitted = True
+                            yield CompletionDelta(text=piece)
+                        for tc in msg.get("tool_calls") or []:
+                            fn = tc.get("function") or {}
+                            tool_calls.append(
+                                ToolCall(
+                                    id=f"ollama-{len(tool_calls)}",
+                                    name=fn.get("name", ""),
+                                    arguments=_as_dict(fn.get("arguments")),
+                                )
+                            )
+                        if chunk.get("done"):
+                            prompt_tokens = chunk.get("prompt_eval_count", 0) or 0
+                            eval_tokens = chunk.get("eval_count", 0) or 0
+                            stop_reason = chunk.get("done_reason")
+            except httpx.ConnectError as exc:
+                if policy.retry_exception(exc, attempt, emitted=emitted):
+                    continue
+                raise ProviderError(
+                    f"Cannot reach Ollama at {self._base_url}. Is it running? "
+                    "Start it with 'ollama serve'."
+                ) from exc
+            except httpx.TimeoutException as exc:
+                if policy.retry_exception(exc, attempt, emitted=emitted):
+                    continue
+                raise timeout_error(
+                    exc,
+                    endpoint=f"{self._base_url}/api/chat",
+                    timeout=self._timeout,
+                    section="ollama",
+                    connect_hint="Is it running? Start it with 'ollama serve'.",
+                ) from exc
+            except json.JSONDecodeError as exc:
+                # Ollama streams NDJSON: one JSON object per line. A truncated line used to
+                # escape as a bare JSONDecodeError naming neither the server nor the model.
+                raise ProviderError(
+                    f"{self.name}: {self._base_url}/api/chat returned a malformed NDJSON line "
+                    f"for model {self.model!r} — {exc}. The stream was probably truncated; "
+                    "retry, or check the Ollama server log."
+                ) from exc
+            except httpx.HTTPError as exc:
+                if policy.retry_exception(exc, attempt, emitted=emitted):
+                    continue
+                raise ProviderError(
+                    f"{self.name}: the connection to {self._base_url}/api/chat failed while "
+                    f"streaming model {self.model!r} — {type(exc).__name__}: {exc}. The server "
+                    "closed the stream early; retry, or check that 'ollama serve' is healthy."
+                ) from exc
 
-        completion = Completion(
-            text="".join(text_parts),
-            tool_calls=tool_calls,
-            usage=Usage(input_tokens=prompt_tokens, output_tokens=eval_tokens, cost_usd=0.0),
-            stop_reason=stop_reason,
-            model=self.model,
-        )
-        yield CompletionDelta(done=True, completion=completion)
+            completion = Completion(
+                text="".join(text_parts),
+                tool_calls=tool_calls,
+                usage=Usage(input_tokens=prompt_tokens, output_tokens=eval_tokens, cost_usd=0.0),
+                stop_reason=stop_reason,
+                model=self.model,
+            )
+            yield CompletionDelta(done=True, completion=completion)
+            return
 
 
 def _as_dict(arguments: Any) -> dict[str, Any]:

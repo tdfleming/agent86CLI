@@ -1,7 +1,8 @@
 """llama.cpp / LM Studio provider (Tier 3).
 
 Both expose an OpenAI-compatible server, so this is a thin specialization of
-:class:`OpenAIProvider` that points at the local endpoint and requires no API key.
+:class:`OpenAIProvider` that points at the local endpoint and requires no API key — which
+also means it inherits that provider's streaming timeouts and retry policy unchanged.
 """
 
 from __future__ import annotations

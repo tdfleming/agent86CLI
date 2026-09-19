@@ -18,6 +18,7 @@ from agent86.cognitive.base import UNRESOLVED, ModelProvider, ProviderError
 from agent86.cognitive.capabilities import apply_sampling_params
 from agent86.cognitive.http_timeouts import stream_timeout, timeout_error
 from agent86.cognitive.pricing import priced_usage
+from agent86.cognitive.retry import RetryPolicy, max_retries_for, retry_after_header
 from agent86.config import ProviderConfig
 from agent86.types import (
     Completion,
@@ -48,6 +49,7 @@ class OpenAIProvider(ModelProvider):
         # Tolerate a base_url given with or without the /v1 suffix.
         self._url = base + ("" if base.endswith("/v1") else "/v1") + "/chat/completions"
         self._timeout = stream_timeout(config)
+        self._max_retries = max_retries_for(config)
 
         if api_key is UNRESOLVED:
             from agent86.secrets import resolve_api_key
@@ -133,77 +135,98 @@ class OpenAIProvider(ModelProvider):
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        text_parts: list[str] = []
-        tool_frags: dict[int, dict[str, str]] = {}
-        prompt_tokens = 0
-        completion_tokens = 0
-        finish_reason: str | None = None
+        policy = RetryPolicy(self._max_retries, provider=self.name, model=self.model)
+        for attempt in policy.attempts():
+            # Per-attempt state: a retry must not inherit half a response from the last try.
+            text_parts: list[str] = []
+            tool_frags: dict[int, dict[str, str]] = {}
+            prompt_tokens = 0
+            completion_tokens = 0
+            finish_reason: str | None = None
+            # Once a delta has reached the consumer, retrying would duplicate that text in
+            # the transcript — so from here on a failure is surfaced, never retried.
+            emitted = False
 
-        try:
-            with httpx.stream(
-                "POST", self._url, json=payload, headers=headers, timeout=self._timeout
-            ) as resp:
-                if resp.status_code != 200:
-                    resp.read()
-                    raise ProviderError(f"HTTP {resp.status_code}: {resp.text.strip()[:400]}")
-                for line in resp.iter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[len("data:"):].strip()
-                    if data == "[DONE]":
-                        break
-                    chunk = json.loads(data)
-                    if usage := chunk.get("usage"):
-                        prompt_tokens = usage.get("prompt_tokens", prompt_tokens) or prompt_tokens
-                        completion_tokens = (
-                            usage.get("completion_tokens", completion_tokens) or completion_tokens
-                        )
-                    for choice in chunk.get("choices", []):
-                        delta = choice.get("delta", {})
-                        piece = delta.get("content")
-                        if piece:
-                            text_parts.append(piece)
-                            yield CompletionDelta(text=piece)
-                        for frag in delta.get("tool_calls", []) or []:
-                            self._accumulate(tool_frags, frag)
-                        if choice.get("finish_reason"):
-                            finish_reason = choice["finish_reason"]
-        except httpx.ConnectError as exc:
-            raise ProviderError(f"Cannot reach {self._url}: {exc}") from exc
-        except httpx.TimeoutException as exc:
-            raise timeout_error(
-                exc,
-                endpoint=self._url,
-                timeout=self._timeout,
-                section=None,
-            ) from exc
-        except json.JSONDecodeError as exc:
-            # A truncated or non-SSE line. Left raw, this surfaced to the loop as a bare
-            # JSONDecodeError with no hint about which endpoint produced it.
-            raise ProviderError(
-                f"{self.name}: {self._url} returned a malformed streaming chunk for model "
-                f"{self.model!r} — could not parse the SSE 'data:' line as JSON ({exc}). "
-                "The stream was probably truncated, or the endpoint is not OpenAI-compatible."
-            ) from exc
-        except httpx.HTTPError as exc:
-            # RemoteProtocolError / ReadError / anything else transport-level: the connection
-            # died part-way through the response.
-            raise ProviderError(
-                f"{self.name}: the connection to {self._url} failed while streaming model "
-                f"{self.model!r} — {type(exc).__name__}: {exc}. The server closed the stream "
-                "early; retry, or check the endpoint and network."
-            ) from exc
+            try:
+                with httpx.stream(
+                    "POST", self._url, json=payload, headers=headers, timeout=self._timeout
+                ) as resp:
+                    if resp.status_code != 200:
+                        resp.read()
+                        if policy.retry_status(
+                            resp.status_code, attempt, retry_after=retry_after_header(resp)
+                        ):
+                            continue
+                        raise ProviderError(f"HTTP {resp.status_code}: {resp.text.strip()[:400]}")
+                    for line in resp.iter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[len("data:"):].strip()
+                        if data == "[DONE]":
+                            break
+                        chunk = json.loads(data)
+                        if usage := chunk.get("usage"):
+                            prompt_tokens = (
+                                usage.get("prompt_tokens", prompt_tokens) or prompt_tokens
+                            )
+                            completion_tokens = (
+                                usage.get("completion_tokens", completion_tokens)
+                                or completion_tokens
+                            )
+                        for choice in chunk.get("choices", []):
+                            delta = choice.get("delta", {})
+                            piece = delta.get("content")
+                            if piece:
+                                text_parts.append(piece)
+                                emitted = True
+                                yield CompletionDelta(text=piece)
+                            for frag in delta.get("tool_calls", []) or []:
+                                self._accumulate(tool_frags, frag)
+                            if choice.get("finish_reason"):
+                                finish_reason = choice["finish_reason"]
+            except httpx.ConnectError as exc:
+                if policy.retry_exception(exc, attempt, emitted=emitted):
+                    continue
+                raise ProviderError(f"Cannot reach {self._url}: {exc}") from exc
+            except httpx.TimeoutException as exc:
+                if policy.retry_exception(exc, attempt, emitted=emitted):
+                    continue
+                raise timeout_error(
+                    exc,
+                    endpoint=self._url,
+                    timeout=self._timeout,
+                    section=None,
+                ) from exc
+            except json.JSONDecodeError as exc:
+                # A truncated or non-SSE line. Left raw, this surfaced to the loop as a bare
+                # JSONDecodeError with no hint about which endpoint produced it.
+                raise ProviderError(
+                    f"{self.name}: {self._url} returned a malformed streaming chunk for model "
+                    f"{self.model!r} — could not parse the SSE 'data:' line as JSON ({exc}). "
+                    "The stream was probably truncated, or the endpoint is not OpenAI-compatible."
+                ) from exc
+            except httpx.HTTPError as exc:
+                # RemoteProtocolError / ReadError / anything else transport-level: the
+                # connection died part-way through the response.
+                if policy.retry_exception(exc, attempt, emitted=emitted):
+                    continue
+                raise ProviderError(
+                    f"{self.name}: the connection to {self._url} failed while streaming model "
+                    f"{self.model!r} — {type(exc).__name__}: {exc}. The server closed the stream "
+                    "early; retry, or check the endpoint and network."
+                ) from exc
 
-        yield CompletionDelta(
-            done=True,
-            completion=Completion(
-                text="".join(text_parts),
-                tool_calls=self._assemble(tool_frags),
-                usage=priced_usage(self.model, prompt_tokens, completion_tokens),
-                stop_reason=finish_reason,
-                model=self.model,
-            ),
-        )
+            yield CompletionDelta(
+                done=True,
+                completion=Completion(
+                    text="".join(text_parts),
+                    tool_calls=self._assemble(tool_frags),
+                    usage=priced_usage(self.model, prompt_tokens, completion_tokens),
+                    stop_reason=finish_reason,
+                    model=self.model,
+                ),
+            )
+            return
 
     @staticmethod
     def _accumulate(frags: dict[int, dict[str, str]], frag: dict[str, Any]) -> None:
