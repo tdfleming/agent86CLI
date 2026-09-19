@@ -15,6 +15,7 @@ Every arrow crosses the deterministic harness; the model only ever occupies the 
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -108,7 +109,24 @@ class Harness:
         self.egress = EgressGuardrail(config.guardrails.egress)
         self.recorder: Recorder = build_recorder(config)
         self.tracer: Tracer = build_tracer(config.observability.otel)
+        # Set by `cancel()` from ANOTHER thread (the TUI's main thread, while `run_turn` is
+        # being driven by a worker). An Event, not a bool, so the flag is published safely
+        # across threads; `run_turn` clears it as its first act.
+        self._cancel = threading.Event()
         self._enforce_retention()
+
+    def cancel(self) -> None:
+        """Ask the in-flight turn to stop at its next safe point.
+
+        Safe points are: before each model call, per streamed delta, and between tool calls —
+        never mid-tool, so a half-written file or a half-sent request is impossible. Calling
+        this when no turn is running is harmless: `run_turn` clears the flag on entry.
+        """
+        self._cancel.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
 
     def _enforce_retention(self) -> None:
         """Auto-prune the flight-recorder log to its configured caps at startup."""
@@ -234,6 +252,8 @@ class Harness:
     def run_turn(self, user_text: str, state: AgentState) -> Iterator[CompletionDelta]:
         """Run one user turn to completion, streaming text and tool activity."""
         sid = state.session_id
+        # A cancel requested while no turn was running must not kill the next one.
+        self._cancel.clear()
         self.recorder.event(sid, "turn_start", task=user_text)
 
         # Ingress guardrail on the user's input.
@@ -263,6 +283,12 @@ class Harness:
         breaker = CircuitBreaker(self.config.limits, max_steps=_MAX_TURN_STEPS)
 
         while True:
+            # Cancellation point (a): never start another model call once cancelled — that is
+            # the expensive, long-latency step the user is actually trying to escape.
+            if self._cancel.is_set():
+                yield from self._cancelled(state, sid, breaker.steps)
+                return
+
             try:
                 breaker.before_step()
             except CircuitTripped as exc:
@@ -271,10 +297,26 @@ class Harness:
 
             completion = None
             with self.tracer.span("model_call", step=breaker.steps + 1, model=self.provider.model):
-                for delta in self.provider.stream(self._build_request(state, recall_note)):
-                    if delta.done and delta.completion is not None:
-                        completion = delta.completion
-                    yield delta
+                stream = self.provider.stream(self._build_request(state, recall_note))
+                try:
+                    for delta in stream:
+                        # Cancellation point (b): a long response should stop mid-flight, not
+                        # after the provider has finished streaming it.
+                        if self._cancel.is_set():
+                            break
+                        if delta.done and delta.completion is not None:
+                            completion = delta.completion
+                        yield delta
+                finally:
+                    # Breaking out of a generator leaves it suspended; close it so the
+                    # provider's own `finally` runs and the HTTP response is released.
+                    close = getattr(stream, "close", None)
+                    if close is not None:
+                        close()
+
+            if self._cancel.is_set():
+                yield from self._cancelled(state, sid, breaker.steps)
+                return
 
             if completion is None:  # pragma: no cover
                 raise HarnessError("Provider stream ended without a final completion.")
@@ -321,6 +363,12 @@ class Harness:
                 return
 
             for call in completion.tool_calls:
+                # Cancellation point (c): BETWEEN tool calls, never mid-execution — a tool
+                # that has started must be allowed to finish and be observed.
+                if self._cancel.is_set():
+                    state.record_step(step)
+                    yield from self._cancelled(state, sid, breaker.steps)
+                    return
                 yield CompletionDelta(text=f"\n[tool] {call.name}({_preview(call.arguments)})\n")
                 with self.tracer.span("tool_call", tool=call.name):
                     result = self._execute_tool(call, sid)
@@ -401,6 +449,19 @@ class Harness:
         if self.memory:
             self.memory.episodic.record_turn(state.session_id, task, outcome)
         self._persist(state)
+
+    def _cancelled(self, state: AgentState, sid: str, steps: int) -> Iterator[CompletionDelta]:
+        """Close out a user-cancelled turn: record it, persist it, and say so.
+
+        The conversation so far is deliberately KEPT — the user stopped the agent, they did not
+        undo it, and the partial exchange is what the next turn has to reason from. `AgentPhase`
+        has no CANCELLED member and is a cross-tier contract, so the phase stays ERROR and
+        "cancelled" is carried by the recorder's `status`/`reason` (greppable in the trace).
+        """
+        state.phase = AgentPhase.ERROR
+        self.recorder.event(sid, "turn_end", status="cancelled", reason="cancelled", steps=steps)
+        self._persist(state)
+        yield CompletionDelta(text="\n[cancelled]\n")
 
     def _abort(self, state: AgentState, sid: str, reason: str) -> None:
         state.phase = AgentPhase.ERROR

@@ -262,3 +262,198 @@ def test_remove_mcp_server_with_no_manager_is_noop():
     harness.remove_mcp_server("alpha")  # must not raise
 
     assert harness.mcp is None
+
+
+# ---- turn cancellation (Harness.cancel) ------------------------------------ #
+
+
+class _RecordingTool(Tool[EmptyArgs]):
+    """Records every invocation; optionally cancels the harness from inside `execute`."""
+
+    Args = EmptyArgs
+
+    def __init__(self, name: str, harness_box: dict | None = None):
+        self.name = name
+        self.description = f"test tool {name}"
+        self.side_effecting = False
+        self.runs = 0
+        self._harness_box = harness_box
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name, description=self.description,
+            parameters={"type": "object", "properties": {}}, side_effecting=False,
+        )
+
+    def execute(self, args: EmptyArgs, ctx: ToolContext) -> ToolResult:
+        self.runs += 1
+        if self._harness_box is not None:
+            self._harness_box["harness"].cancel()
+        return ToolResult(call_id="", name=self.name, content="ok")
+
+
+class _CapturingRecorder:
+    """Stand-in for `Recorder` that keeps every event in memory."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict]] = []
+
+    def event(self, session_id: str, kind: str, **data: object) -> None:
+        self.events.append((session_id, kind, dict(data)))
+
+    def close(self) -> None:
+        pass
+
+
+class _TwoToolCallProvider(ModelProvider):
+    """One completion carrying TWO tool calls, so the between-calls check is observable."""
+
+    name = "twotool"
+
+    def __init__(self, calls: list[ToolCall]):
+        self.model = "fake:twotool"
+        self._calls = calls
+        self.stream_count = 0
+
+    def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+        self.stream_count += 1
+        if self.stream_count == 1:
+            yield CompletionDelta(
+                done=True,
+                completion=Completion(
+                    text="", tool_calls=self._calls,
+                    usage=Usage(input_tokens=5, output_tokens=2),
+                    model=self.model, stop_reason="tool_use",
+                ),
+            )
+            return
+        yield CompletionDelta(text="second turn")
+        yield CompletionDelta(
+            done=True,
+            completion=Completion(
+                text="second turn", usage=Usage(input_tokens=1, output_tokens=1),
+                model=self.model,
+            ),
+        )
+
+
+def _turn_end(recorder: _CapturingRecorder) -> dict:
+    ends = [data for _, kind, data in recorder.events if kind == "turn_end"]
+    assert ends, "the turn never recorded a turn_end event"
+    return ends[-1]
+
+
+def test_cancel_before_a_tool_call_skips_the_rest_of_the_batch():
+    """Cancelling from inside tool #1 must stop tool #2 dead and end the turn."""
+    from agent86.tools.registry import ToolRegistry
+
+    box: dict = {}
+    first = _RecordingTool("stopper", harness_box=box)
+    second = _RecordingTool("never_runs")
+    registry = ToolRegistry()
+    registry.register(first)
+    registry.register(second)
+
+    provider = _TwoToolCallProvider(
+        [
+            ToolCall(id="a", name="stopper", arguments={}),
+            ToolCall(id="b", name="never_runs", arguments={}),
+        ]
+    )
+    harness = Harness(_config(), provider=provider, memory=None, registry=registry)
+    box["harness"] = harness
+    recorder = _CapturingRecorder()
+    harness.recorder = recorder
+    state = harness.new_session()
+
+    deltas = list(harness.run_turn("go", state))
+
+    assert first.runs == 1
+    assert second.runs == 0                       # the second call never executed
+    assert provider.stream_count == 1             # and no further model call was made
+    assert "[cancelled]" in "".join(d.text for d in deltas if d.text)
+    assert _turn_end(recorder)["status"] == "cancelled"
+    assert state.phase is AgentPhase.ERROR
+
+
+def test_cancel_from_a_tool_prevents_the_follow_up_model_call():
+    """The ToolThenTextProvider shape: turn 2 would normally stream a reply; cancel stops it."""
+    from agent86.tools.registry import ToolRegistry
+    from tests.support import ToolThenTextProvider
+
+    box: dict = {}
+    tool = _RecordingTool("stopper", harness_box=box)
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    provider = ToolThenTextProvider(ToolCall(id="a", name="stopper", arguments={}), reply="done")
+    harness = Harness(_config(), provider=provider, memory=None, registry=registry)
+    box["harness"] = harness
+    recorder = _CapturingRecorder()
+    harness.recorder = recorder
+    state = harness.new_session()
+
+    streamed = "".join(d.text for d in harness.run_turn("go", state) if d.text)
+
+    assert provider.calls == 1                    # the follow-up model call never happened
+    assert "done" not in streamed
+    assert streamed.endswith("[cancelled]\n")
+    assert _turn_end(recorder)["status"] == "cancelled"
+
+
+def test_cancel_mid_stream_closes_the_provider_generator():
+    """A cancel raised while the model is still streaming stops it and closes the generator."""
+
+    class _LongStream(ModelProvider):
+        name = "longstream"
+
+        def __init__(self) -> None:
+            self.model = "fake:long"
+            self.closed = False
+            self.emitted = 0
+            self.harness: Harness | None = None
+
+        def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+            try:
+                for i in range(50):
+                    self.emitted += 1
+                    if i == 1 and self.harness is not None:
+                        self.harness.cancel()
+                    yield CompletionDelta(text=f"chunk{i} ")
+                yield CompletionDelta(  # pragma: no cover - cancel lands first
+                    done=True,
+                    completion=Completion(
+                        text="all", usage=Usage(input_tokens=1, output_tokens=1),
+                        model=self.model,
+                    ),
+                )
+            finally:
+                self.closed = True
+
+    provider = _LongStream()
+    harness = Harness(_config(), provider=provider, memory=None)
+    provider.harness = harness
+    recorder = _CapturingRecorder()
+    harness.recorder = recorder
+    state = harness.new_session()
+
+    streamed = "".join(d.text for d in harness.run_turn("go", state) if d.text)
+
+    assert provider.emitted < 50                  # stopped early, mid-stream
+    assert provider.closed is True                # the generator's finally ran
+    assert streamed.endswith("[cancelled]\n")
+    assert _turn_end(recorder)["status"] == "cancelled"
+
+
+def test_cancel_at_idle_does_not_poison_the_next_turn():
+    """`cancel()` with no turn running is a no-op — run_turn clears the flag on entry."""
+    harness = Harness(_config(), provider=FakeProvider(), memory=None)
+    harness.cancel()
+    assert harness.cancelled is True
+
+    state = harness.new_session()
+    streamed = "".join(d.text for d in harness.run_turn("hi", state) if d.text)
+
+    assert "hello there" in streamed
+    assert "[cancelled]" not in streamed
+    assert state.phase is AgentPhase.DONE

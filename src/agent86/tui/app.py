@@ -9,6 +9,7 @@ whatever calls `run_tui` — never at `cli.py` module-import time (RESEARCH Pitf
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Any
 
 from rich.markup import MarkupError, escape
@@ -82,6 +83,9 @@ class Agent86App(App):
         Binding("up", "palette_up", show=False, priority=True),
         Binding("down", "palette_down", show=False, priority=True),
         Binding("escape", "palette_dismiss", show=False, priority=True),
+        # Overrides Textual's own `ctrl+c -> help_quit` (and `Input`'s ctrl+c copy binding,
+        # which priority=True beats): first press cancels a running turn, second press quits.
+        Binding("ctrl+c", "interrupt", show=False, priority=True),
     ]
 
     CSS = """
@@ -123,6 +127,15 @@ class Agent86App(App):
         super().__init__()
         self.repl = repl
         self._stream_buf = ""
+        # Turn/cancellation state. `_shutdown_event` is shared with the turn worker
+        # (turn_bridge): once set, a worker parked on an approval stops waiting and denies, so
+        # quitting can never hang on a modal nobody is left to answer.
+        # NB: do NOT name this `_closing` — `textual.message_pump.MessagePump._closing` is an
+        # internal bool, and shadowing it with a (truthy) Event wedges app startup.
+        self._turn_running = False
+        self._cancel_requested = False
+        self._shutdown_event = threading.Event()
+        self._pending_approvals: list[tuple[threading.Event, dict]] = []
         # D-04: live model catalogs are cached for this app session only — one fetch per
         # provider per launch, lazily on first use. No on-disk cache, no TTL, no invalidation.
         # RESEARCH Open Question 3: this lives on the App, not on _Repl/Harness — the plain
@@ -367,9 +380,17 @@ class Agent86App(App):
 
     def action_palette_dismiss(self) -> None:
         palette = self.query_one("#palette", OptionList)
-        if not palette.display:
+        if palette.display:
+            palette.display = False
+            return
+        # A modal (approval / picker / manager) owns Escape for as long as it is on top —
+        # same SkipAction fall-through as action_palette_up/_down.
+        if len(self.screen_stack) > 1:
             raise SkipAction()
-        palette.display = False
+        if self._turn_running and not self._cancel_requested:
+            self._request_cancel()
+            return
+        raise SkipAction()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id == "palette":
@@ -771,11 +792,59 @@ class Agent86App(App):
         self.query_one("#status", StatusFooter).status = self.repl.status
         self.query_one("#prompt", Input).disabled = True
         self._stream_buf = ""
+        self._turn_running = True
+        self._cancel_requested = False
         self._run_turn(line)
 
     @work(thread=True, exclusive=True)
     def _run_turn(self, line: str) -> None:
-        run_turn_worker(self.repl.harness, line, self.repl.state, self.post_message)
+        run_turn_worker(
+            self.repl.harness, line, self.repl.state, self.post_message, self._shutdown_event
+        )
+
+    # ---- cancellation / shutdown -------------------------------------------- #
+
+    def _request_cancel(self) -> None:
+        """Ask the harness to stop the in-flight turn at its next safe point."""
+        self._cancel_requested = True
+        cancel = getattr(self.repl.harness, "cancel", None)
+        if cancel is not None:
+            cancel()
+        self._write("[dim]cancelling…[/dim]")
+        self.repl.status.phase = "cancelling"
+        self.query_one("#status", StatusFooter).status = self.repl.status
+
+    def _shutdown_workers(self) -> None:
+        """Release every worker thread before the app goes away.
+
+        A thread blocked in `approval_cb` holds a `threading.Event` the app can no longer
+        resolve once its screens are unmounting — which used to hang interpreter exit. Set the
+        shared closing flag (the polled wait notices it), cancel the turn, and resolve any
+        still-pending approval as DENIED: the safe answer when nobody is there to give one.
+        """
+        self._shutdown_event.set()
+        cancel = getattr(self.repl.harness, "cancel", None)
+        if cancel is not None:
+            cancel()
+        pending, self._pending_approvals = self._pending_approvals, []
+        for event, box in pending:
+            box["ok"] = False
+            event.set()
+
+    def action_interrupt(self) -> None:
+        """Ctrl+C: cancel a running turn; quit if none is running (or on a second press)."""
+        if self._turn_running and not self._cancel_requested:
+            self._request_cancel()
+            return
+        self._shutdown_workers()
+        self.exit()
+
+    async def action_quit(self) -> None:
+        self._shutdown_workers()
+        await super().action_quit()
+
+    def on_unmount(self) -> None:
+        self._shutdown_workers()
 
     # ---- model catalog (session cache) -------------------------------------- #
 
@@ -862,7 +931,17 @@ class Agent86App(App):
         self.query_one("#status", StatusFooter).status = self.repl.status
 
     def on_approval_request(self, message: ApprovalRequest) -> None:
+        if self._shutdown_event.is_set():
+            # Mid-shutdown: never push a modal onto a screen stack that is unmounting.
+            message.box["ok"] = False
+            message.event.set()
+            return
+        entry = (message.event, message.box)
+        self._pending_approvals.append(entry)
+
         def _resolve(approved: bool | None) -> None:
+            if entry in self._pending_approvals:
+                self._pending_approvals.remove(entry)
             message.box["ok"] = bool(approved)
             message.event.set()
 
@@ -870,13 +949,16 @@ class Agent86App(App):
 
     def on_turn_done(self, message: TurnDone) -> None:
         self._flush_stream(prefix="[bold cyan]agent86[/bold cyan] ")
-        self.repl._refresh_status()
-        self.query_one("#status", StatusFooter).status = self.repl.status
-        self._reenable_input()
+        self._end_turn()
 
     def on_turn_error(self, message: TurnError) -> None:
         self._flush_stream()
         self._write(f"[red]error:[/red] {escape(str(message.error))}")
+        self._end_turn()
+
+    def _end_turn(self) -> None:
+        self._turn_running = False
+        self._cancel_requested = False
         self.repl._refresh_status()
         self.query_one("#status", StatusFooter).status = self.repl.status
         self._reenable_input()
