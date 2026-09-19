@@ -9,7 +9,7 @@ whatever calls `run_tui` — never at `cli.py` module-import time (RESEARCH Pitf
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.markup import MarkupError, escape
 from rich.text import Text
@@ -20,7 +20,6 @@ from textual.binding import Binding
 from textual.widgets import Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
-from agent86.config import Config
 from agent86.tui.commands import (
     COMMANDS,
     find_command,
@@ -61,6 +60,9 @@ from agent86.tui.screens.provider_manager import (
 from agent86.tui.screens.save_diff import SaveDiffModal
 from agent86.tui.turn_bridge import run_turn_worker
 from agent86.tui.widgets.status_footer import StatusFooter
+
+if TYPE_CHECKING:  # `ui.repl` must stay importable without textual — type-only.
+    from agent86.ui.repl import _Repl
 
 __all__ = ["Agent86App", "run_tui"]
 
@@ -117,7 +119,7 @@ class Agent86App(App):
     }
     """
 
-    def __init__(self, repl) -> None:  # noqa: ANN001
+    def __init__(self, repl: _Repl) -> None:
         super().__init__()
         self.repl = repl
         self._stream_buf = ""
@@ -907,9 +909,12 @@ class Agent86App(App):
         self.query_one("#status", StatusFooter).status = self.repl.status
 
 
-def run_tui(cfg: Config, resume: str | None = None) -> None:
-    """Build the harness/state/status (reusing `_Repl`) and run `Agent86App`."""
-    from agent86.ui.repl import _Repl
+def run_tui(repl: _Repl) -> None:
+    """Run `Agent86App` against an ALREADY-BUILT `_Repl`.
 
-    repl = _Repl(cfg, resume)
+    `run_repl` constructs the `_Repl` (and therefore the `Harness`) before choosing a loop, so
+    building a second one here started every MCP server twice, opened the memory DB twice, and
+    left the plain-loop fallback pointing at a different session than the TUI. The harness is
+    built exactly once per process; this function only owns the Textual app.
+    """
     Agent86App(repl).run()
