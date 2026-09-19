@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import textwrap
 
+import pytest
+from pydantic import ValidationError
+
 from agent86 import config as config_mod
 from agent86.config import Config, MCPServerConfig, _deep_merge, load_config
 from agent86.types import ApprovalMode
@@ -147,3 +150,125 @@ def test_build_mcp_returns_none_when_all_disabled(monkeypatch):
         }
     )
     assert build_mcp(cfg) is None
+
+
+# --- v0.7: mode enums + shared-contract fields ------------------------------------------------ #
+
+
+def test_mode_fields_are_str_enums():
+    """StrEnum keeps every existing `== "string"` comparison working."""
+    from agent86.config import EgressMode, IngressMode, RouterMode, SandboxMode
+
+    cfg = Config()
+    assert cfg.model.router is RouterMode.OFF
+    assert cfg.sandbox.mode is SandboxMode.SUBPROCESS
+    assert cfg.guardrails.ingress is IngressMode.WARN
+    assert cfg.guardrails.egress is EgressMode.WARN
+
+    # The comparisons scattered through router.py / executor.py / guardrails/*.py
+    assert cfg.model.router == "off"
+    assert cfg.sandbox.mode == "subprocess"
+    assert cfg.guardrails.ingress == "warn"
+    assert cfg.guardrails.egress == "warn"
+    assert Config(guardrails={"egress": "redact"}).guardrails.egress == "redact"
+    # ...and f-string rendering stays the bare value (banner / prompt / status line).
+    assert f"{cfg.sandbox.mode}" == "subprocess"
+    assert f"{cfg.model.router}" == "off"
+
+
+def test_legacy_toml_with_mode_keys_still_loads(monkeypatch, tmp_path):
+    user = tmp_path / "config.toml"
+    user.write_text(
+        textwrap.dedent(
+            """
+            [model]
+            router = "triage"
+            [sandbox]
+            mode = "docker"
+            [guardrails]
+            ingress = "block"
+            egress = "redact"
+            """
+        )
+    )
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", user)
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none.toml")
+
+    cfg = load_config()
+    assert cfg.model.router == "triage"
+    assert cfg.sandbox.mode == "docker"
+    assert cfg.guardrails.ingress == "block"
+    assert cfg.guardrails.egress == "redact"
+    # Round-trips back out as plain strings (what config_writer writes, what tomllib reads).
+    dumped = cfg.model_dump(mode="json")
+    assert dumped["sandbox"]["mode"] == "docker"
+    assert dumped["guardrails"]["egress"] == "redact"
+    assert dumped["model"]["router"] == "triage"
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "bad", "allowed"),
+    [
+        ("model", "router", "tirage", ["'off'", "'triage'"]),
+        ("sandbox", "mode", "dcoker", ["'subprocess'", "'docker'"]),
+        ("guardrails", "ingress", "blcok", ["'off'", "'warn'", "'block'"]),
+        ("guardrails", "egress", "redcat", ["'off'", "'warn'", "'redact'"]),
+    ],
+)
+def test_bad_mode_value_raises_naming_allowed_values(section, field, bad, allowed):
+    """A typo used to silently disable the feature; now it fails loudly and says why."""
+    with pytest.raises(ValidationError) as excinfo:
+        Config(**{section: {field: bad}})
+    message = str(excinfo.value)
+    assert field in message
+    for value in allowed:
+        assert value in message
+
+
+def test_shared_contract_defaults():
+    cfg = Config()
+    assert cfg.providers["anthropic"].max_retries == 2
+    assert cfg.agents.max_steps == 8
+    assert cfg.tools.web_allow_private is False
+    assert cfg.sandbox.env_passthrough == []
+    assert cfg.pricing.models == {}
+
+
+def test_shared_contract_fields_load_from_toml(monkeypatch, tmp_path):
+    user = tmp_path / "config.toml"
+    user.write_text(
+        textwrap.dedent(
+            """
+            [providers.anthropic]
+            max_retries = 5
+            [agents]
+            max_steps = 3
+            [tools]
+            web_allow_private = true
+            [sandbox]
+            env_passthrough = ["HTTPS_PROXY", "NO_PROXY"]
+
+            [pricing.models."anthropic:claude-sonnet-5"]
+            input_per_mtok = 3.0
+            output_per_mtok = 15.0
+            """
+        )
+    )
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", user)
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none.toml")
+
+    cfg = load_config()
+    assert cfg.providers["anthropic"].max_retries == 5
+    # Deep-merge keeps the other providers on the default retry budget.
+    assert cfg.providers["openai"].max_retries == 2
+    assert cfg.agents.max_steps == 3
+    assert cfg.tools.web_allow_private is True
+    assert cfg.sandbox.env_passthrough == ["HTTPS_PROXY", "NO_PROXY"]
+    assert cfg.pricing.models["anthropic:claude-sonnet-5"].input_per_mtok == 3.0
+
+    # ...and the loaded overrides reach the cost meter.
+    from agent86.cognitive import pricing
+
+    price = pricing.lookup("anthropic:claude-sonnet-5")
+    assert price is not None and price.source == "config"
+    pricing.set_overrides(None)

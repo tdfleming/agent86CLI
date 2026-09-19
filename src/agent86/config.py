@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,47 @@ PROJECT_CONFIG_PATH = Path(".agent86") / "config.toml"
 
 
 # --------------------------------------------------------------------------- #
+# Mode enums
+#
+# These live here rather than in types.py: they are *configuration* vocabulary, not the
+# cross-tier lingua franca. They are ``StrEnum``s (like ``ApprovalMode``) so every existing
+# string comparison keeps working — ``cfg.guardrails.egress == "redact"`` is still True and
+# f-strings still render the bare value — while a typo now fails validation with the allowed
+# values named, instead of silently disabling the feature.
+# --------------------------------------------------------------------------- #
+
+
+class RouterMode(StrEnum):
+    """Model-routing strategy (``[model] router``)."""
+
+    OFF = "off"  # every turn uses model.default
+    TRIAGE = "triage"  # a cheap model triages each turn and picks cheap vs frontier
+
+
+class SandboxMode(StrEnum):
+    """Where tool code runs (``[sandbox] mode``)."""
+
+    SUBPROCESS = "subprocess"  # local subprocess with resource limits
+    DOCKER = "docker"  # throwaway container (opt-in)
+
+
+class IngressMode(StrEnum):
+    """Scanning posture for user input (``[guardrails] ingress``)."""
+
+    OFF = "off"
+    WARN = "warn"  # scan and report findings
+    BLOCK = "block"  # additionally refuse turns carrying prompt injection
+
+
+class EgressMode(StrEnum):
+    """Scanning posture for model output (``[guardrails] egress``)."""
+
+    OFF = "off"
+    WARN = "warn"  # scan and report findings
+    REDACT = "redact"  # additionally rewrite secrets/PII out of the text
+
+
+# --------------------------------------------------------------------------- #
 # Config schema
 # --------------------------------------------------------------------------- #
 
@@ -45,7 +87,7 @@ class ModelRoute(BaseModel):
 
 class ModelConfig(BaseModel):
     default: str = "anthropic:claude-opus-4-8"
-    router: str = "off"  # "off" | "triage"
+    router: RouterMode = RouterMode.OFF
     route: ModelRoute = Field(default_factory=ModelRoute)
     # Optional per-model context-window overrides for the status-line gauge,
     # keyed by "provider:model" (e.g. "ollama:qwen2.5:3b" = 32768).
@@ -75,6 +117,9 @@ class ProviderConfig(BaseModel):
     # with long prompt-eval times; a genuinely wedged server still fails instead of hanging.
     connect_timeout_s: float = _DEFAULT_CONNECT_TIMEOUT_S
     read_timeout_s: float = _DEFAULT_READ_TIMEOUT_S
+    # How many times a transient provider failure (429, 5xx, connection error) is retried
+    # before the call is surfaced to the loop as an error. 0 disables retrying.
+    max_retries: int = 2
 
 
 def _default_user_agent() -> str:
@@ -89,20 +134,28 @@ class ToolsConfig(BaseModel):
     # bury the lead/relevant content in more tokens than a model can usefully attend to.
     # 0 = no web-specific cap (still bounded by the sandbox output limit). ~8k chars ≈ 2k tokens.
     web_max_chars: int = 8000
+    # Allow `web_fetch` to reach loopback, private (RFC1918), and link-local addresses.
+    # Off by default: a model that can fetch http://169.254.169.254/ or an intranet host is a
+    # server-side-request-forgery pivot. Turn it on only for local development targets.
+    web_allow_private: bool = False
 
 
 class SandboxConfig(BaseModel):
-    mode: str = "subprocess"  # "subprocess" | "docker"
+    mode: SandboxMode = SandboxMode.SUBPROCESS
     docker_image: str = "python:3.12-slim"
     docker_memory: str = "512m"
     docker_cpus: str = "1"
     docker_network: bool = False  # containers run with --network none by default
+    # Extra environment variable *names* forwarded into tool and MCP subprocesses, on top of
+    # the minimal built-in set. Names only — values are read from the parent environment at
+    # spawn time, so no secret is ever written to config.
+    env_passthrough: list[str] = Field(default_factory=list)
 
 
 class GuardrailsConfig(BaseModel):
     approval: ApprovalMode = ApprovalMode.ASK
-    ingress: str = "warn"  # off | warn | block   (scan user input for injection/PII)
-    egress: str = "warn"  # off | warn | redact   (scan model output for secrets/PII)
+    ingress: IngressMode = IngressMode.WARN  # scan user input for injection/PII
+    egress: EgressMode = EgressMode.WARN  # scan model output for secrets/PII
     scan_observations: bool = True  # scan tool outputs for injected instructions
 
 
@@ -171,6 +224,9 @@ class MCPConfig(BaseModel):
 class AgentsConfig(BaseModel):
     enabled: bool = True  # expose the `delegate` tool for sub-agent spawning
     max_depth: int = 2  # how deep delegation may nest (root=0)
+    # Per-sub-agent step cap, handed to that sub-agent's CircuitBreaker. Kept well below
+    # `limits.max_steps` so a delegated task cannot spend the whole turn's budget.
+    max_steps: int = 8
 
 
 class ModelPrice(BaseModel):
@@ -411,6 +467,10 @@ __all__ = [
     "ModelRoute",
     "PricingConfig",
     "ProviderConfig",
+    "RouterMode",
+    "SandboxMode",
+    "IngressMode",
+    "EgressMode",
     "SandboxConfig",
     "GuardrailsConfig",
     "MemoryConfig",

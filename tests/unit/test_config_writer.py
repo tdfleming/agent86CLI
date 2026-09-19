@@ -327,3 +327,65 @@ def test_forbidden_var_ref_partial_reference_still_rejected(tmp_path, monkeypatc
                 )
             ],
         )
+
+
+# --- v0.7: mode enums must round-trip as plain TOML strings ---------------------------------- #
+
+
+def test_mode_enums_round_trip_as_plain_strings(tmp_path, monkeypatch):
+    """`SandboxMode`/`EgressMode`/... are StrEnums; tomlkit must still see plain strings.
+
+    Both directions matter: a hand-edited value must validate on the way in, and a value the
+    writer emits must not leak a Python repr (`SandboxMode.DOCKER`) into the user's file.
+    """
+    import agent86.config as config_mod
+    import agent86.config_writer as config_writer
+    from agent86.config import EgressMode, SandboxMode
+
+    target = tmp_path / "config.toml"
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", target)
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none.toml")
+
+    edit = config_writer.plan_edit(
+        "user",
+        [
+            (["sandbox", "mode"], SandboxMode.DOCKER.value),
+            (["guardrails", "egress"], "redact"),
+            (["model", "router"], "triage"),
+        ],
+    )
+    cfg = config_writer.apply_edit(edit)
+
+    text = target.read_text()
+    assert 'mode = "docker"' in text
+    assert 'egress = "redact"' in text
+    assert "SandboxMode" not in text and "EgressMode" not in text
+
+    assert cfg.sandbox.mode is SandboxMode.DOCKER
+    assert cfg.guardrails.egress is EgressMode.REDACT
+    assert cfg.model.router == "triage"
+
+
+def test_pricing_override_round_trips(tmp_path, monkeypatch):
+    import agent86.config as config_mod
+    import agent86.config_writer as config_writer
+    from agent86.cognitive import pricing
+
+    target = tmp_path / "config.toml"
+    monkeypatch.setattr(config_writer, "USER_CONFIG_PATH", target)
+    monkeypatch.setattr(config_mod, "USER_CONFIG_PATH", target)
+    monkeypatch.setattr(config_mod, "PROJECT_CONFIG_PATH", tmp_path / "none.toml")
+
+    edit = config_writer.plan_edit(
+        "user",
+        [
+            (["pricing", "models", "my-finetune", "input_per_mtok"], 0.5),
+            (["pricing", "models", "my-finetune", "output_per_mtok"], 1.5),
+        ],
+    )
+    cfg = config_writer.apply_edit(edit)
+
+    assert cfg.pricing.models["my-finetune"].input_per_mtok == 0.5
+    assert pricing.estimate_cost("my-finetune", 1_000_000, 0) == 0.5
+    pricing.set_overrides(None)
