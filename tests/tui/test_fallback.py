@@ -1,8 +1,9 @@
 """Routing + graceful-fallback behavior of ``run_repl`` (Plan 01-05, TUI-01).
 
-Covers: ``--plain`` skips the TUI entirely, a TUI import/start failure falls back to the
-plain loop with a dim note (no exception propagates), and importing ``agent86.ui.repl``
-never pulls in ``textual``.
+Covers: ``--plain`` skips the TUI entirely, the TUI receives the already-built ``_Repl``
+(one harness per process), a TUI import/start failure falls back to the plain loop with a
+dim note (no exception propagates), and importing ``agent86.ui.repl`` never pulls in
+``textual``.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ class _PlainLoopSpy:
 
     def __init__(self, cfg, resume, harness=None):  # noqa: ANN001
         self.ran_plain_loop = False
+        self.startup_notes: list[str] = []
 
     def print_notes(self) -> None:
         pass
@@ -34,65 +36,74 @@ def cfg():
     return load_config()
 
 
-def test_plain_flag_skips_tui(monkeypatch, cfg):
-    spy_holder: dict = {}
+def _patch_repl(monkeypatch) -> dict:
+    """Swap ``_Repl`` for a spy; returns the holder the spy lands in."""
+    holder: dict = {}
 
     def _make_spy(c, resume, harness=None):  # noqa: ANN001
         spy = _PlainLoopSpy(c, resume, harness)
-        spy_holder["spy"] = spy
+        holder["spy"] = spy
         return spy
 
+    monkeypatch.setattr(repl_mod, "_Repl", _make_spy)
+    return holder
+
+
+def _install_fake_tui(monkeypatch, run_tui) -> None:
+    fake_module = type(sys)("agent86.tui.app")
+    fake_module.run_tui = run_tui
+    monkeypatch.setitem(sys.modules, "agent86.tui.app", fake_module)
+
+
+def test_plain_flag_skips_tui(monkeypatch, cfg):
+    holder = _patch_repl(monkeypatch)
     tui_called = {"called": False}
 
-    def _fake_run_tui(cfg, resume=None):  # noqa: ANN001
+    def _fake_run_tui(repl):  # noqa: ANN001
         tui_called["called"] = True
 
-    monkeypatch.setattr(repl_mod, "_Repl", _make_spy)
-    monkeypatch.setitem(
-        sys.modules,
-        "agent86.tui.app",
-        type(sys)("agent86.tui.app"),
-    )
-    sys.modules["agent86.tui.app"].run_tui = _fake_run_tui
+    _install_fake_tui(monkeypatch, _fake_run_tui)
 
     repl_mod.run_repl(cfg, plain=True)
 
-    assert spy_holder["spy"].ran_plain_loop is True
+    assert holder["spy"].ran_plain_loop is True
     assert tui_called["called"] is False
 
 
+def test_tui_receives_the_already_built_repl(monkeypatch, cfg):
+    """``run_tui(repl)`` — the harness is constructed once, in ``run_repl``."""
+    holder = _patch_repl(monkeypatch)
+    seen: dict = {}
+
+    def _fake_run_tui(repl):  # noqa: ANN001
+        seen["repl"] = repl
+
+    monkeypatch.setattr(repl_mod, "_use_tui", lambda cfg, plain: True)
+    _install_fake_tui(monkeypatch, _fake_run_tui)
+
+    repl_mod.run_repl(cfg)
+
+    assert seen["repl"] is holder["spy"]
+    assert holder["spy"].ran_plain_loop is False  # the TUI ran; no fallback
+
+
 def test_tui_start_failure_falls_back(monkeypatch, cfg):
-    spy_holder: dict = {}
+    holder = _patch_repl(monkeypatch)
 
-    def _make_spy(c, resume, harness=None):  # noqa: ANN001
-        spy = _PlainLoopSpy(c, resume, harness)
-        spy_holder["spy"] = spy
-        return spy
-
-    def _raising_run_tui(cfg, resume=None):  # noqa: ANN001
+    def _raising_run_tui(repl):  # noqa: ANN001
         raise RuntimeError("no tty")
 
-    monkeypatch.setattr(repl_mod, "_Repl", _make_spy)
-    monkeypatch.setattr(repl_mod, "_use_rich", lambda cfg, plain: True)
-    fake_module = type(sys)("agent86.tui.app")
-    fake_module.run_tui = _raising_run_tui
-    monkeypatch.setitem(sys.modules, "agent86.tui.app", fake_module)
+    monkeypatch.setattr(repl_mod, "_use_tui", lambda cfg, plain: True)
+    _install_fake_tui(monkeypatch, _raising_run_tui)
 
     repl_mod.run_repl(cfg)  # must not raise
 
-    assert spy_holder["spy"].ran_plain_loop is True
+    assert holder["spy"].ran_plain_loop is True
 
 
 def test_tui_import_failure_falls_back(monkeypatch, cfg):
-    spy_holder: dict = {}
-
-    def _make_spy(c, resume, harness=None):  # noqa: ANN001
-        spy = _PlainLoopSpy(c, resume, harness)
-        spy_holder["spy"] = spy
-        return spy
-
-    monkeypatch.setattr(repl_mod, "_Repl", _make_spy)
-    monkeypatch.setattr(repl_mod, "_use_rich", lambda cfg, plain: True)
+    holder = _patch_repl(monkeypatch)
+    monkeypatch.setattr(repl_mod, "_use_tui", lambda cfg, plain: True)
     # Force the lazy `from agent86.tui.app import run_tui` to raise ImportError.
     monkeypatch.delitem(sys.modules, "agent86.tui.app", raising=False)
 
@@ -107,7 +118,19 @@ def test_tui_import_failure_falls_back(monkeypatch, cfg):
 
     repl_mod.run_repl(cfg)  # must not raise
 
-    assert spy_holder["spy"].ran_plain_loop is True
+    assert holder["spy"].ran_plain_loop is True
+
+
+def test_use_tui_honours_config_and_plain_flag(cfg):
+    cfg.ui.tui = False
+    assert repl_mod._use_tui(cfg, plain=False) is False
+    cfg.ui.tui = True
+    assert repl_mod._use_tui(cfg, plain=True) is False
+
+
+def test_use_tui_respects_agent86_plain_env(monkeypatch, cfg):
+    monkeypatch.setenv("AGENT86_PLAIN", "1")
+    assert repl_mod._use_tui(cfg, plain=False) is False
 
 
 def test_repl_module_import_is_textual_free():

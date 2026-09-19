@@ -133,9 +133,29 @@ class LimitsConfig(BaseModel):
 
 
 class UIConfig(BaseModel):
-    status_line: bool = True  # show the persistent bottom status line (rich REPL)
-    spinner: bool = True  # animate a spinner while the agent is working
-    mode_cycle_key: str = "s-tab"  # prompt_toolkit key that cycles the approval mode
+    """Interactive-surface settings.
+
+    ``tui`` gates the full-screen Textual app: when it is false -- or stdin/stdout aren't a
+    TTY, or ``--plain`` / ``AGENT86_PLAIN`` is set -- the interactive entry point runs the
+    plain stdlib ``input()`` REPL instead. Pre-v0.6 configs spelled this ``status_line``
+    (it gated the prompt_toolkit status line, which the TUI replaced); that spelling is
+    still accepted and mapped onto ``tui``.
+    """
+
+    tui: bool = True  # use the full-screen Textual TUI when the terminal can host it
+    # Reserved: animate the TUI's working indicator. Currently always on -- the status
+    # footer renders the working state regardless.
+    spinner: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_status_line(cls, data: Any) -> Any:
+        """Map the pre-v0.6 ``status_line`` key onto ``tui`` (explicit ``tui`` wins)."""
+        if isinstance(data, dict) and "status_line" in data:
+            legacy = data["status_line"]
+            data = {k: v for k, v in data.items() if k != "status_line"}
+            data.setdefault("tui", legacy)
+        return data
 
 
 class SkillsConfig(BaseModel):

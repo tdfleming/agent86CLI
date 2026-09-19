@@ -1,8 +1,8 @@
-"""Status-line logic (v0.2).
+"""Status-line logic.
 
-Pure, unit-testable helpers behind the persistent bottom status line: per-model context-window
-lookup, context-fill percentage, and formatting. The prompt_toolkit wiring that renders this
-lives in ``ui.repl`` and stays thin so this logic can be tested headlessly.
+Pure, unit-testable helpers behind the persistent status line: per-model context-window
+lookup, context-fill percentage, and formatting. The widget that renders this lives in
+``agent86.tui.widgets.status_footer`` and stays thin so this logic can be tested headlessly.
 """
 
 from __future__ import annotations

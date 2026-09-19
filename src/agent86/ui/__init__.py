@@ -1,7 +1,6 @@
-"""User interface — the interactive REPL and rendering.
+"""User interface — the interactive entry point and shared status rendering.
 
-Rich + prompt_toolkit render streaming model output, tool-call panels, approval
-prompts, and a live cost/step meter. Phase 1 ships a minimal REPL inline in
-``agent86.cli``; the richer components (``repl.py``, ``render.py``) are extracted here
-as the loop matures (Phase 2+).
+``repl.py`` owns ``run_repl``: it builds the harness once and routes to either the
+full-screen Textual app (``agent86.tui``) or the plain stdlib ``input()`` loop.
+``status.py`` holds the pure status-line logic both surfaces render.
 """

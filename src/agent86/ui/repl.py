@@ -1,32 +1,27 @@
-"""The interactive REPL (v0.2).
+"""The interactive REPL.
 
-Two loops behind one entry point:
+One entry point, two surfaces:
 
-- ``_rich_loop`` — a prompt_toolkit prompt with a persistent bottom status line and a hotkey
-  (Shift+Tab) that cycles the approval mode, plus a spinner during processing. Turns run in a
-  worker thread so the spinner can animate through model latency and tool execution; streamed
-  output prints on the main thread.
-- ``_plain_loop`` — the dependable stdlib ``input()`` loop (no prompt_toolkit), used when the
-  terminal can't host the rich UI (piped stdin, ``--plain``, ``AGENT86_PLAIN``).
+- the full-screen Textual app (``agent86.tui.app``) — the default whenever ``[ui] tui`` is
+  on and stdin/stdout are a TTY;
+- ``_Repl.plain_loop`` — the dependable stdlib ``input()`` loop, used for ``--plain``,
+  ``AGENT86_PLAIN``, piped stdin, or when the TUI can't be imported/started.
 
-Both share command dispatch, so behavior is identical apart from presentation.
+Both surfaces share the same ``_Repl`` (harness, session state, status), so ``run_repl``
+builds it once and hands it to whichever loop runs.
 """
 
 from __future__ import annotations
 
 import os
-import queue
 import sys
-import threading
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 
 from agent86 import __version__
 from agent86.config import Config
 from agent86.guardrails.policy import cycle_mode, parse_mode
-from agent86.ui.spinner import Spinner
 from agent86.ui.status import StatusState, context_window_for, format_status_line
 
 console = Console()
@@ -50,7 +45,10 @@ def _banner(cfg: Config) -> Panel:
 
 
 def _tool_label(text: str) -> str | None:
-    """Derive a spinner label from a tool-announce line like '\\n[tool] name({...})'."""
+    """Derive a progress label from a tool-announce line like '\\n[tool] name({...})'.
+
+    Shared with ``agent86.tui.turn_bridge``, which labels its working indicator the same way.
+    """
     if "[tool] " in text and "(" in text and "->" not in text:
         name = text.split("[tool] ", 1)[1].split("(", 1)[0].strip()
         if name:
@@ -224,7 +222,7 @@ class _Repl:
         else:
             console.print("[dim]memory is disabled[/dim]")
 
-    # ---- loops -------------------------------------------------------- #
+    # ---- loop --------------------------------------------------------- #
 
     def plain_loop(self) -> None:
         from agent86.cognitive.base import ProviderError
@@ -264,137 +262,10 @@ class _Repl:
             console.print()  # blank line separating the response from the next prompt
             self._refresh_status()
 
-    def rich_loop(self) -> None:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.key_binding import KeyBindings
-
-        from agent86.cognitive.base import ProviderError
-        from agent86.orchestration.loop import HarnessError
-
-        kb = KeyBindings()
-
-        @kb.add(self.cfg.ui.mode_cycle_key)
-        def _cycle(event) -> None:  # noqa: ANN001
-            self._cycle_approval()
-            event.app.invalidate()
-
-        session: PromptSession = PromptSession(key_bindings=kb)
-        toolbar = self.status_line if self.cfg.ui.status_line else None
-        refresh = 0.5 if self.cfg.ui.status_line else None
-
-        while True:
-            try:
-                line = session.prompt("agent86> ", bottom_toolbar=toolbar, refresh_interval=refresh)
-                line = line.strip()
-            except EOFError:
-                console.print("[dim]bye[/dim]")
-                return
-            except KeyboardInterrupt:
-                continue
-
-            action = self.dispatch(line)
-            if action == "exit":
-                return
-            if action == "handled":
-                continue
-
-            console.print()  # blank line separating the question from the response
-            try:
-                self._run_turn_rich(line)
-            except (ProviderError, HarnessError) as exc:
-                console.print(f"\n[red]error:[/red] {exc}")
-            except KeyboardInterrupt:
-                console.print("\n[dim]interrupted[/dim]")
-            except Exception as exc:  # a turn blew up — report it, but keep the rich UI alive
-                console.print(f"\n[red]turn failed ({type(exc).__name__}):[/red] {exc}")
-            console.print()  # blank line separating the response from the next prompt
-            self._refresh_status()
-
-    def _run_turn_rich(self, line: str) -> None:
-        q: queue.Queue = queue.Queue()
-
-        def approval_cb(tool_name: str, preview: str) -> bool:
-            event = threading.Event()
-            box: dict[str, bool] = {}
-            q.put(("approval", tool_name, preview, event, box))
-            event.wait()
-            return box.get("ok", False)
-
-        self.harness.gate.prompt = approval_cb
-
-        def worker() -> None:
-            try:
-                for delta in self.harness.run_turn(line, self.state):
-                    q.put(("delta", delta))
-                q.put(("done",))
-            except BaseException as exc:  # deliver any error to the main thread
-                q.put(("error", exc))
-
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-
-        spinner = Spinner()
-        spinning = False
-        printed = False
-        prefix_shown = False
-        # The spinner draws with a carriage return, so it may only animate when the cursor is
-        # on a fresh line — otherwise inter-token gaps (common on slow local models) would let
-        # it overwrite the partial line of a multi-line response mid-stream.
-        at_line_start = True
-        label = "thinking"
-
-        try:
-            while True:
-                try:
-                    item = q.get(timeout=0.12)
-                except queue.Empty:
-                    if not spinning and at_line_start:
-                        spinner.start(label)
-                        spinning = True
-                    continue
-
-                if spinning:
-                    spinner.stop()
-                    spinning = False
-
-                kind = item[0]
-                if kind == "delta":
-                    text = item[1].text
-                    if text:
-                        if not prefix_shown:
-                            console.print("[bold cyan]agent86[/bold cyan] ", end="")
-                            prefix_shown = True
-                        _emit(text)
-                        printed = True
-                        at_line_start = text.endswith("\n")
-                        label = _tool_label(text) or ("thinking" if text.strip() else label)
-                elif kind == "approval":
-                    _, tool_name, preview, event, box = item
-                    console.print(
-                        f"\n[yellow]approve[/yellow] [bold]{tool_name}[/bold] [dim]{preview}[/dim]"
-                    )
-                    try:
-                        answer = input("  run it? [y/N] ").strip().lower()
-                    except (EOFError, KeyboardInterrupt):
-                        answer = ""
-                    box["ok"] = answer in ("y", "yes")
-                    event.set()
-                    at_line_start = True  # input() moved us to a fresh line
-                    label = "thinking"
-                elif kind == "done":
-                    break
-                elif kind == "error":
-                    raise item[1]
-        finally:
-            if spinning:
-                spinner.stop()
-
-        if not printed:
-            console.print("[bold cyan]agent86[/bold cyan] [dim](no response)[/dim]", end="")
-        console.print()
-
 
 def _print_help() -> None:
+    from rich.table import Table
+
     table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     table.add_row("[cyan]/help[/cyan]", "Show this help")
     table.add_row("[cyan]/config[/cyan]", "Show the resolved configuration")
@@ -412,14 +283,15 @@ def _print_help() -> None:
     console.print(table)
 
 
-def _use_rich(cfg: Config, plain: bool) -> bool:
+def _use_tui(cfg: Config, plain: bool) -> bool:
+    """Whether to launch the Textual TUI rather than the plain loop."""
     if plain or os.getenv("AGENT86_PLAIN"):
         return False
-    return bool(cfg.ui.status_line) and sys.stdin.isatty() and sys.stdout.isatty()
+    return bool(cfg.ui.tui) and sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> None:
-    """Entry point: build the harness, print the banner, and run the best available loop."""
+    """Entry point: build the harness once, then run the TUI or the plain loop on it."""
     from agent86.cognitive.base import ProviderError
 
     console.print(_banner(cfg))
@@ -435,14 +307,14 @@ def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> Non
 
     repl.print_notes()
 
-    if _use_rich(cfg, plain):
+    if _use_tui(cfg, plain):
         try:
             from agent86.tui.app import run_tui  # lazy: textual imported only here
         except ImportError as exc:
             console.print(f"[dim]TUI unavailable ({type(exc).__name__}); using plain REPL.[/dim]")
         else:
             try:
-                run_tui(cfg, resume=resume)
+                run_tui(repl)
                 return
             except Exception as exc:  # terminal can't host Textual, etc. -> fall back
                 console.print(
