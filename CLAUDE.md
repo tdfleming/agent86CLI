@@ -20,7 +20,7 @@ TOML or restarting.
 - **Compatibility**: The plain loop and `run --json` are the scripting/CI contract and must keep
   working unchanged. keyring absence (headless/CI) must silently fall through to env vars.
 - **Tech stack**: Python ≥3.11, Textual (TUI), keyring (secrets), tomlkit (config write-back),
-  prompt_toolkit (retained for plain loop), Rich, Typer, Pydantic v2.
+  Rich, Typer, Pydantic v2 (prompt_toolkit was dropped in v0.6.0; the plain loop uses stdlib input).
 - **Platform**: Primary dev/test on Windows 11 (console quirks already handled via UTF-8
   reconfigure in `cli.py`); must also work on macOS/Linux.
 
