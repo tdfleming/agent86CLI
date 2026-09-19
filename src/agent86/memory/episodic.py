@@ -7,11 +7,20 @@ recalls the most similar past episodes and injects them as context, so the agent
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
+
 from agent86.memory.store import Hit, MemoryStore
+from agent86.types import Message
 
 # Only surface recalled episodes above this cosine similarity — avoids noise from
 # unrelated past tasks.
 _MIN_SCORE = 0.35
+
+#: ``metadata["kind"]`` of an episode that is an archived compacted span rather than a turn.
+#: Held out of recall: replaying a raw transcript into a new turn's context is the opposite
+#: of what compaction is for.
+COMPACTION_KIND = "compaction"
 
 
 class EpisodicMemory:
@@ -23,8 +32,33 @@ class EpisodicMemory:
     ) -> int:
         return self.store.add_episode(session_id, task, outcome, metadata)
 
+    def record_compaction(
+        self, session_id: str, summary: str, dropped: Sequence[Message]
+    ) -> int:
+        """Archive the raw messages a compaction replaced, alongside the summary that replaced
+        them.
+
+        Compaction shrinks *working* memory; it must not destroy the record. The originals go
+        to the flight recorder verbatim (JSON, resurrectable), so `agent86 trace`/`memory`
+        can still answer "what did it actually say back then" after the live conversation has
+        moved on. Tagged ``kind="compaction"`` so :meth:`recall` skips it.
+        """
+        payload = json.dumps(
+            [m.model_dump(mode="json") for m in dropped], ensure_ascii=False, default=str
+        )
+        return self.store.add_episode(
+            session_id,
+            f"[compacted {len(dropped)} messages] {summary}",
+            payload,
+            {"kind": COMPACTION_KIND, "dropped": len(dropped), "summary": summary},
+        )
+
     def recall(self, task: str, k: int = 3, min_score: float = _MIN_SCORE) -> list[Hit]:
-        return [h for h in self.store.search_episodes(task, k) if h.score >= min_score]
+        return [
+            h
+            for h in self.store.search_episodes(task, k)
+            if h.score >= min_score and h.metadata.get("kind") != COMPACTION_KIND
+        ]
 
     def recall_note(self, task: str, k: int = 3) -> str | None:
         """A compact system-context note summarizing relevant past turns, or None."""
@@ -40,4 +74,4 @@ class EpisodicMemory:
         return "\n".join(lines)
 
 
-__all__ = ["EpisodicMemory"]
+__all__ = ["COMPACTION_KIND", "EpisodicMemory"]

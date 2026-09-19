@@ -22,16 +22,20 @@ from pathlib import Path
 
 from agent86.cognitive.base import ModelProvider
 from agent86.cognitive.prompt import build_system_prompt
-from agent86.config import Config, MCPServerConfig
+from agent86.config import CompactionMode, Config, MCPServerConfig
 from agent86.guardrails.egress import EgressGuardrail
 from agent86.guardrails.ingress import IngressGuardrail, wrap_untrusted
 from agent86.guardrails.policy import ApprovalGate, ApprovalPrompt
 from agent86.memory.system import MemorySystem, build_memory
 from agent86.memory.working import (
     MIN_CONVERSATION_TOKENS,
+    SUMMARY_MAX_TOKENS,
+    SUMMARY_SYSTEM_PROMPT,
     WorkingMemory,
+    apply_summary,
     conversation_budget,
     count_spec_tokens,
+    render_transcript,
 )
 from agent86.observability.recorder import Recorder, build_recorder
 from agent86.observability.tracing import Tracer, build_tracer
@@ -128,6 +132,8 @@ class Harness:
         # on `state.last_turn`; see `_begin_turn_summary` / `_close_turn_summary`.
         self._summary: TurnSummary | None = None
         self._turn_started = 0.0
+        # Re-entrancy guard: the summarizer's own model call must not trigger a compaction.
+        self._compacting = False
         self._enforce_retention()
 
     def cancel(self) -> None:
@@ -309,6 +315,121 @@ class Harness:
             kwargs["max_tokens"] = max_output_tokens_for(self._model_ref(), self.config)
         return CompletionRequest(**kwargs)
 
+    # ---- compaction ----------------------------------------------------- #
+
+    def _summary_provider(self) -> ModelProvider:
+        """The model that writes compaction summaries: the cheap route, else the current one.
+
+        Summarizing is exactly the bulk, low-judgement work triage routing exists for, and it
+        happens at the moment the turn is already expensive. When routing is off (or the cheap
+        model cannot be built) the current provider does it rather than the turn failing.
+        """
+        if self.router.enabled:
+            try:
+                return self.router.provider_for(self.config.model.route.cheap)
+            except Exception:  # unbuildable cheap model: not worth failing a turn over
+                pass
+        return self.provider
+
+    def _write_summary(self, prefix: list[Message]) -> tuple[str, Usage]:
+        """Ask the summarizer for a structured digest of ``prefix``. May raise."""
+        provider = self._summary_provider()
+        kwargs: dict = {
+            "model": provider.model,
+            "messages": [
+                Message(role=Role.SYSTEM, content=SUMMARY_SYSTEM_PROMPT),
+                Message(role=Role.USER, content=render_transcript(prefix)),
+            ],
+            "temperature": 0.0,
+            "stream": False,
+        }
+        if "max_tokens" in CompletionRequest.model_fields:
+            # A summary is a bounded artefact; there is no reason to let it run to the
+            # provider's default ceiling and cost more than the span it replaces.
+            kwargs["max_tokens"] = SUMMARY_MAX_TOKENS * 2
+        completion = provider.complete(CompletionRequest(**kwargs))
+        return completion.text.strip(), completion.usage
+
+    def _compact_if_needed(
+        self,
+        state: AgentState,
+        sid: str,
+        extra_system: str | None,
+        summary: TurnSummary,
+        breaker: CircuitBreaker,
+        protect_from: int,
+    ) -> None:
+        """Replace the oldest over-budget span with a summary, in place, before a model call.
+
+        Dropping the oldest turns (the pre-v0.8 behaviour, still available as
+        ``[limits] compaction = "drop"``) makes a long session forget its own goal: the first
+        thing to fall off the window is the user's original ask. Summarizing keeps the goal,
+        the decisions and the paths discovered at a fraction of the tokens.
+
+        This is called at most once per step (once per model call), and never re-entrantly,
+        so a summarizer that is itself expensive cannot start a compaction cascade. It must
+        never raise: any failure falls back to the drop behaviour ``fit`` already implements,
+        and says so in the trace.
+        """
+        if self.config.limits.compaction != CompactionMode.SUMMARIZE:
+            return
+        if self._compacting:
+            return
+
+        system_content = self._system_content(extra_system)
+        budget = self._context_budget(system_content, self.registry.specs())
+        counter = self.provider.count_tokens
+        if self.working.fits(state.messages, counter, budget):
+            return
+        cut = self.working.compaction_cut(
+            state.messages, counter, budget, protect_from=protect_from
+        )
+        if cut <= 0:
+            # Everything left is the current turn or its tool blocks: there is nothing old
+            # enough to compact, so `fit` trims and the provider's own limits take over.
+            return
+
+        prefix = state.messages[:cut]
+        dropped_tokens = counter(prefix)
+        self._compacting = True
+        try:
+            text, usage = self._write_summary(prefix)
+        except Exception as exc:  # a failed summary must never cost the user their turn
+            self.recorder.event(
+                sid, "compaction", status="failed", fallback="drop",
+                dropped=len(prefix), error=f"{type(exc).__name__}: {exc}",
+            )
+            return
+        finally:
+            self._compacting = False
+
+        if not text:
+            self.recorder.event(
+                sid, "compaction", status="empty", fallback="drop", dropped=len(prefix)
+            )
+            return
+
+        # The originals are archived before they leave the live conversation.
+        if self.memory:
+            try:
+                self.memory.episodic.record_compaction(sid, text, prefix)
+            except Exception:  # pragma: no cover - archival must not fail the turn
+                pass
+
+        state.messages = apply_summary(text, state.messages[cut:])
+        summary.compactions += 1
+        summary.add_usage(usage)
+        breaker.cost_usd += usage.cost_usd
+        summary_tokens = counter([Message(role=Role.USER, content=text)])
+        self.recorder.event(
+            sid, "compaction", status="ok", dropped=len(prefix),
+            dropped_tokens=dropped_tokens, summary_tokens=summary_tokens,
+            kept=len(state.messages), model=self._summary_provider().model,
+        )
+        # Persist immediately: a resume must see the compacted history, not a stale copy that
+        # would silently re-inflate the context on the next turn.
+        self._persist(state)
+
     # ---- the loop ------------------------------------------------------ #
 
     def run_turn(self, user_text: str, state: AgentState) -> Iterator[CompletionDelta]:
@@ -343,6 +464,9 @@ class Harness:
             self.recorder.event(sid, "route", model=self.provider.model)
 
         recall_note = self.memory.episodic.recall_note(user_text) if self.memory else None
+        # Where this turn begins in the history: compaction never reaches past it, so the ask
+        # the agent is answering right now can never be the thing that gets summarized away.
+        turn_start = len(state.messages)
         state.add_message(Message(role=Role.USER, content=user_text))
         # No private cap here: a hard-coded 12 silently overrode `limits.max_steps` (default
         # 40), so a long legitimate task died at 12 steps and raising the configured limit did
@@ -363,6 +487,10 @@ class Harness:
             except CircuitTripped as exc:
                 self._abort(state, sid, f"circuit tripped: {exc}")
                 raise HarnessError(f"Circuit tripped: {exc}") from None
+
+            # Compact BEFORE the request is built, so the model call sees the compacted
+            # history and the summary is what gets persisted. Once per step, never nested.
+            self._compact_if_needed(state, sid, recall_note, summary, breaker, turn_start)
 
             completion = None
             # Redact mode cannot stream: text inspected only after it has been shown to the

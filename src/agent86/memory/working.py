@@ -165,10 +165,93 @@ class WorkingMemory:
         return max(cut, 0)
 
 
+# --------------------------------------------------------------------------- #
+# Compaction — turning the dropped prefix into a summary instead of a hole
+# --------------------------------------------------------------------------- #
+
+#: Prefixed to the replacement message so a human reading a resumed session (and the model
+#: reading its own history) can see that the span was compacted, not forgotten.
+SUMMARY_HEADER = "[Conversation summary — earlier turns compacted]"
+
+#: Rough ceiling for the summary itself. Bigger than this and compaction stops paying for
+#: itself; smaller and the goal stops surviving.
+SUMMARY_MAX_TOKENS = 600
+
+#: The summarizer's instructions. Written for a *cheap* model: concrete, sectioned, and
+#: explicit that identifiers are to be copied rather than paraphrased — a summary that
+#: renames a file path is worse than no summary at all, because the agent will act on it.
+SUMMARY_SYSTEM_PROMPT = (
+    "You are compacting the earlier part of an agent's conversation so it fits in a context "
+    "window. Write a dense factual summary of the transcript below, under these headings:\n"
+    "GOAL: what the user is ultimately trying to achieve.\n"
+    "DECISIONS: choices already made and why, including anything ruled out.\n"
+    "FACTS: what was discovered — file paths, identifiers, commands, versions, numbers, "
+    "error messages.\n"
+    "OPEN: what is still unfinished or unverified.\n\n"
+    "Rules: reproduce every file path, identifier, command, URL and number EXACTLY as it "
+    "appears — never paraphrase, abbreviate or 'correct' one. Record only what the "
+    "transcript says; invent nothing. Omit pleasantries and narration. Be terse: aim for "
+    f"under {SUMMARY_MAX_TOKENS} tokens. Output the summary only, with no preamble."
+)
+
+#: Per-message cap when rendering the transcript handed to the summarizer. A single 200k-char
+#: tool observation would otherwise be the whole summarization request.
+_TRANSCRIPT_MESSAGE_CHARS = 2_000
+
+
+def _clip(text: str, limit: int = _TRANSCRIPT_MESSAGE_CHARS) -> str:
+    text = text or ""
+    return text if len(text) <= limit else f"{text[:limit]} ... [{len(text) - limit} more chars]"
+
+
+def render_transcript(messages: Sequence[Message]) -> str:
+    """Render a span of conversation as plain text for the summarizer.
+
+    Tool calls and their results are rendered explicitly — they are usually where the facts
+    worth keeping (the paths that exist, the command that worked) actually are.
+    """
+    lines: list[str] = []
+    for m in messages:
+        label = m.role.value.upper()
+        if m.role == Role.TOOL:
+            lines.append(f"{label} result of {m.name or '?'}: {_clip(m.content)}")
+            continue
+        if m.content:
+            lines.append(f"{label}: {_clip(m.content)}")
+        for call in m.tool_calls:
+            try:
+                args = json.dumps(call.arguments, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                args = str(call.arguments)
+            lines.append(f"{label} called {call.name}({_clip(args, 600)})")
+    return "\n".join(lines)
+
+
+def apply_summary(summary_text: str, rest: list[Message]) -> list[Message]:
+    """Return the compacted history: the summary, then everything that was kept.
+
+    The summary rides on a USER message rather than a new role, so no provider adapter has to
+    learn anything. It is *merged into* the first kept message when that is also a USER turn,
+    because two USER messages in a row is a shape some providers reject outright — Anthropic's
+    adapter additionally renders a TOOL result as a ``user`` message, so "consecutive user"
+    is easier to produce here than it looks.
+    """
+    content = f"{SUMMARY_HEADER}\n{summary_text.strip()}"
+    if rest and rest[0].role == Role.USER and not rest[0].tool_calls:
+        head = rest[0].model_copy(update={"content": f"{content}\n\n{rest[0].content}"})
+        return [head, *rest[1:]]
+    return [Message(role=Role.USER, content=content), *rest]
+
+
 __all__ = [
     "KEEP_RECENT",
     "MIN_CONVERSATION_TOKENS",
+    "SUMMARY_HEADER",
+    "SUMMARY_MAX_TOKENS",
+    "SUMMARY_SYSTEM_PROMPT",
     "WorkingMemory",
+    "apply_summary",
     "conversation_budget",
     "count_spec_tokens",
+    "render_transcript",
 ]
