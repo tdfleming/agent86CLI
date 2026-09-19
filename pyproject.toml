@@ -1,6 +1,6 @@
 [project]
 name = "agent86"
-version = "0.5.8"
+version = "0.6.0"
 description = "An agentic harness on the command line — connects to remote or local models and lets them use tools and skills."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,7 +13,6 @@ keywords = ["agent", "agentic", "harness", "llm", "cli", "mcp", "tools"]
 dependencies = [
     "typer>=0.12",
     "rich>=13.7",
-    "prompt_toolkit>=3.0",
     "textual>=1.0",  # core-but-lazy: imported only inside the TUI entry path (see agent86/tui)
     "keyring>=25.0",  # core-but-lazy: imported only inside agent86/secrets.py function bodies
     "tomlkit>=0.13",  # core-but-lazy: imported only inside agent86/config_writer.py function bodies
@@ -89,7 +88,8 @@ exclude_also = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+# CI runs mypy on 3.12; the local numpy stubs also require it.
+python_version = "3.12"
 packages = ["agent86"]
 strict = false
 warn_unused_ignores = true
