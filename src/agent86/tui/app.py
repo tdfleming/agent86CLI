@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from rich.markup import MarkupError, escape
+from rich.text import Text
 from textual import work
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
@@ -157,9 +159,30 @@ class Agent86App(App):
         self.query_one("#status", StatusFooter).status = self.repl.status
         log = self.query_one("#transcript", RichLog)
         for note in startup_notes(self.repl):
-            log.write(f"[dim]{note}[/dim]")
+            log.write(f"[dim]{escape(note)}[/dim]")
         self.query_one("#palette", OptionList).display = False
         self.query_one("#prompt", Input).focus()
+
+    # ---- transcript writing ------------------------------------------------ #
+
+    def _write(self, renderable: Any) -> None:
+        """Write a HARNESS-OWNED renderable; intentional markup is preserved.
+
+        Untrusted text must NEVER reach here unescaped — interpolate it through
+        ``rich.markup.escape`` (or use :meth:`_write_text`). The ``MarkupError`` guard is a
+        last-resort net for renderables built elsewhere (``commands.handle_command`` echoes the
+        typed line back, for instance), so a stray ``[`` can never raise on the main thread and
+        tear down the app.
+        """
+        log = self.query_one("#transcript", RichLog)
+        try:
+            log.write(renderable)
+        except MarkupError:
+            log.write(Text(str(renderable)))
+
+    def _write_text(self, text: str) -> None:
+        """Write untrusted text with markup interpretation fully disabled."""
+        self.query_one("#transcript", RichLog).write(Text(text))
 
     # ---- palette ----------------------------------------------------------- #
 
@@ -208,8 +231,9 @@ class Agent86App(App):
         Shared by typed Input submission and picker-chained selections (palette / /model /
         /mode) so both paths behave identically.
         """
-        log = self.query_one("#transcript", RichLog)
-        log.write(f"[bold]> {line}[/bold]")
+        # The echoed line is USER text: escape it. `"see [/path]"` would otherwise raise
+        # MarkupError on the main thread and take the whole app down.
+        self._write(f"[bold]> {escape(line)}[/bold]")
 
         # A bare needs_choice command (no argument) typed directly — not just palette-selected —
         # opens the same picker/chain as picking it from the palette (mirrors _select_palette).
@@ -232,7 +256,7 @@ class Agent86App(App):
             return
         # "handled" / "noop"
         if result.render is not None:
-            log.write(result.render)
+            self._write(result.render)
         self.query_one("#status", StatusFooter).status = self.repl.status
 
     # ---- /model typed bare-ref catalog fallback ------------------------------ #
@@ -263,20 +287,19 @@ class Agent86App(App):
         when the failure looks like a first-colon split AND the active provider's catalog vouches
         for `arg` verbatim (locked user decision). TUI-only — `ui/repl.py` and `run --json` keep
         strict parsing."""
-        log = self.query_one("#transcript", RichLog)
         before = self.repl.harness.provider
         result = handle_command(self.repl, f"/model {arg}")
         # set_model() replaces harness.provider on success and leaves it untouched on failure
         # (loop.py:130-143), so identity is an exact success signal — no dispatch duplication.
         if self.repl.harness.provider is not before:
             if result.render is not None:
-                log.write(result.render)
+                self._write(result.render)
             self.query_one("#status", StatusFooter).status = self.repl.status
             return
         provider = before.name
         if not self._is_bare_ref_candidate(arg, provider):
             if result.render is not None:
-                log.write(result.render)          # strict error, immediately, no fetch
+                self._write(result.render)        # strict error, immediately, no fetch
             return
         entries = self._catalog_cache.get(provider)
         if entries is not None:
@@ -302,24 +325,23 @@ class Agent86App(App):
     def _finish_model_fallback(
         self, arg: str, strict_error: Any, provider: str, entries: list[tuple[str, str]]
     ) -> None:
-        log = self.query_one("#transcript", RichLog)
         if not catalog_has_ref(arg, entries):
             # Catalog miss (typo, or a ref belonging to another provider): the strict error is
             # the RIGHT answer — surfacing it unchanged is the point of the locked decision.
             if strict_error is not None:
-                log.write(strict_error)
+                self._write(strict_error)
             return
         # Reuse 260813-adr's exact-prefix double-prefix guard so the typed and picker paths of
         # /model can never drift.
         full = prefix_catalog_refs(provider, [(arg, arg)])[0][0]
         if full == arg:                       # defensive: already prefixed, retry would re-fail
             if strict_error is not None:
-                log.write(strict_error)
+                self._write(strict_error)
             return
-        log.write(f"[dim]resolved to {full}[/dim]")
+        self._write(f"[dim]resolved to {escape(full)}[/dim]")
         retry = handle_command(self.repl, f"/model {full}")
         if retry.render is not None:
-            log.write(retry.render)
+            self._write(retry.render)
         self.query_one("#status", StatusFooter).status = self.repl.status
 
     # ---- palette selection + picker chaining -------------------------------- #
@@ -456,7 +478,7 @@ class Agent86App(App):
         try:
             parsed = ModelRef.parse(ref)
         except ValueError as exc:
-            self.query_one("#transcript", RichLog).write(f"[red]error:[/red] {exc}")
+            self._write(f"[red]error:[/red] {escape(str(exc))}")
             return
         self._pending_ref = ref
         # UAT gap 4: `None` means "the user explicitly supplied an empty key" to
@@ -469,21 +491,23 @@ class Agent86App(App):
         )
 
     def _on_test_done(self, outcome: TestOutcome) -> None:
-        log = self.query_one("#transcript", RichLog)
         if not outcome.ok and not outcome.override:
-            log.write(f"[red]connection test failed:[/red] {outcome.error}")
+            self._write(f"[red]connection test failed:[/red] {escape(str(outcome.error))}")
             return
         if not outcome.ok:
-            log.write(f"[yellow]saving anyway despite:[/yellow] {outcome.error}")
+            self._write(f"[yellow]saving anyway despite:[/yellow] {escape(str(outcome.error))}")
         # D-14: the key becomes persistent only now.
         if self._pending_key and self._pending_row is not None:
             from agent86.secrets import SecretStoreError, store_api_key
 
             try:
                 store_api_key(self._pending_row.name, self._pending_key)
-                log.write(f"[dim]key stored in the OS keyring for {self._pending_row.name}[/dim]")
+                self._write(
+                    f"[dim]key stored in the OS keyring for "
+                    f"{escape(self._pending_row.name)}[/dim]"
+                )
             except SecretStoreError as exc:
-                log.write(f"[red]could not store the key:[/red] {exc}")
+                self._write(f"[red]could not store the key:[/red] {escape(str(exc))}")
             finally:
                 self._pending_key = None
         # D-18 / success criterion 4: the switch applies to the next turn immediately.
@@ -504,18 +528,17 @@ class Agent86App(App):
         return changes
 
     def _on_save_confirmed(self, edit) -> None:  # noqa: ANN001 - ConfigEdit | None
-        log = self.query_one("#transcript", RichLog)
         if edit is None:
-            log.write("[dim]not saved — the model switch applies to this session only[/dim]")
+            self._write("[dim]not saved — the model switch applies to this session only[/dim]")
             return
         from agent86.config_writer import ConfigWriteError, apply_edit
 
         try:
             self.repl.cfg = apply_edit(edit)
         except ConfigWriteError as exc:
-            log.write(f"[red]could not save:[/red] {exc}")
+            self._write(f"[red]could not save:[/red] {escape(str(exc))}")
             return
-        log.write(f"[dim]saved to {edit.path}[/dim]")
+        self._write(f"[dim]saved to {escape(str(edit.path))}[/dim]")
 
     # ---- /config mcp chain -------------------------------------------------- #
 
@@ -573,7 +596,7 @@ class Agent86App(App):
         if not value or self._mcp_draft is None:
             # Cancelling a required secret aborts the whole add — connecting with an empty
             # credential would produce a misleading auth failure.
-            self.query_one("#transcript", RichLog).write("[dim]mcp: cancelled[/dim]")
+            self._write("[dim]mcp: cancelled[/dim]")
             self._mcp_draft = None
             return
         from agent86.tools.mcp_client import unresolved_var_refs
@@ -594,17 +617,20 @@ class Agent86App(App):
         )
 
     def _on_mcp_test_done(self, outcome: MCPTestOutcome) -> None:
-        log = self.query_one("#transcript", RichLog)
         draft = self._mcp_draft
         if draft is None:
             return
         if outcome.ok:
             self._mcp_started = draft.name       # the test left it mounted (D-13)
-            log.write(f"[dim]mcp: {draft.name} connected, {len(outcome.tools)} tools[/dim]")
+            self._write(
+                f"[dim]mcp: {escape(draft.name)} connected, {len(outcome.tools)} tools[/dim]"
+            )
         elif outcome.override:
-            log.write(f"[yellow]saving anyway despite:[/yellow] {outcome.error}")
+            self._write(f"[yellow]saving anyway despite:[/yellow] {escape(str(outcome.error))}")
         else:
-            log.write(f"[red]mcp connection test failed:[/red] {outcome.error}")
+            self._write(
+                f"[red]mcp connection test failed:[/red] {escape(str(outcome.error))}"
+            )
             self._mcp_draft = None
             return
         # D-14 precedent: a typed secret becomes persistent only once the test has passed
@@ -613,11 +639,14 @@ class Agent86App(App):
             from agent86.secrets import SecretStoreError, store_api_key
 
             for var_name, value in self._mcp_overrides.items():
+                safe_var = escape(var_name)
                 try:
                     store_api_key(var_name, value)
-                    log.write(f"[dim]stored ${{{var_name}}} in the OS keyring[/dim]")
+                    self._write(f"[dim]stored ${{{safe_var}}} in the OS keyring[/dim]")
                 except SecretStoreError as exc:
-                    log.write(f"[red]could not store ${{{var_name}}}:[/red] {exc}")
+                    self._write(
+                        f"[red]could not store ${{{safe_var}}}:[/red] {escape(str(exc))}"
+                    )
             self._mcp_overrides = {}
         self.push_screen(SaveDiffModal(self._mcp_changes(draft)), self._on_mcp_save_confirmed)
 
@@ -649,11 +678,10 @@ class Agent86App(App):
         return changes
 
     def _on_mcp_save_confirmed(self, edit) -> None:  # noqa: ANN001 - ConfigEdit | None
-        log = self.query_one("#transcript", RichLog)
         draft, self._mcp_draft = self._mcp_draft, None
         started, self._mcp_started = self._mcp_started, None
         if edit is None:
-            log.write("[dim]not saved[/dim]")
+            self._write("[dim]not saved[/dim]")
             # D-13: a cancelled add must not leave the just-started server running all session.
             if started and self.repl.harness.mcp is not None:
                 self.repl.harness.mcp.stop_server(started)
@@ -663,25 +691,27 @@ class Agent86App(App):
         try:
             self.repl.cfg = apply_edit(edit)
         except ConfigWriteError as exc:
-            log.write(f"[red]could not save:[/red] {exc}")
+            self._write(f"[red]could not save:[/red] {escape(str(exc))}")
             return
-        log.write(f"[dim]saved to {edit.path}[/dim]")
+        self._write(f"[dim]saved to {escape(str(edit.path))}[/dim]")
         if draft is None:
             return
         if draft.original_name:
             self.repl.harness.remove_mcp_server(draft.original_name)
         if started != draft.name:
-            # D-16: the config write succeeded; the live mount did not. Report both, never roll back.
-            log.write(
-                f"[yellow]saved, but {draft.name} is not running:[/yellow] "
+            # D-16: the config write succeeded; the live mount did not. Report both, never
+            # roll back.
+            self._write(
+                f"[yellow]saved, but {escape(draft.name)} is not running:[/yellow] "
                 "it will be available next launch"
             )
             return
         mounted, collisions = self.repl.harness.add_mcp_server(draft.name, draft.cfg)
-        line = f"[dim]mcp: {draft.name} mounted, {len(mounted)} tools live[/dim]"
+        line = f"[dim]mcp: {escape(draft.name)} mounted, {len(mounted)} tools live[/dim]"
         if collisions:
-            line += f" [yellow](name collisions, not mounted: {', '.join(collisions)})[/yellow]"
-        log.write(line)
+            joined = escape(", ".join(collisions))
+            line += f" [yellow](name collisions, not mounted: {joined})[/yellow]"
+        self._write(line)
 
     def _on_mcp_destructive(self, kind: str, name: str, srv) -> None:  # noqa: ANN001
         """Remove (D-10/D-11) and enable/disable (D-09/D-12) — both via the normal diff flow.
@@ -697,7 +727,9 @@ class Agent86App(App):
             # Re-enabling is an add: test the server before mounting it, reusing the whole
             # form-free part of the add chain.
             self._mcp_action = "add"
-            self._mcp_draft = MCPServerDraft(name=name, cfg=srv.model_copy(update={"enabled": True}))
+            self._mcp_draft = MCPServerDraft(
+                name=name, cfg=srv.model_copy(update={"enabled": True})
+            )
             self._prompt_next_var()
             return
         self._mcp_action = kind
@@ -709,24 +741,25 @@ class Agent86App(App):
         self.push_screen(SaveDiffModal(changes), self._on_mcp_unmount_confirmed)
 
     def _on_mcp_unmount_confirmed(self, edit) -> None:  # noqa: ANN001 - ConfigEdit | None
-        log = self.query_one("#transcript", RichLog)
         name, self._mcp_unmount = self._mcp_unmount, None
         if edit is None or name is None:
-            log.write("[dim]not saved[/dim]")
+            self._write("[dim]not saved[/dim]")
             return
         from agent86.config_writer import ConfigWriteError, apply_edit
 
         try:
             self.repl.cfg = apply_edit(edit)
         except ConfigWriteError as exc:
-            log.write(f"[red]could not save:[/red] {exc}")
+            self._write(f"[red]could not save:[/red] {escape(str(exc))}")
             return
-        log.write(f"[dim]saved to {edit.path}[/dim]")
+        self._write(f"[dim]saved to {escape(str(edit.path))}[/dim]")
         # D-14: unmount immediately — leaving a removed server's tools callable would let the
         # model invoke something the user just deleted.
         self.repl.harness.remove_mcp_server(name)
         verb = "removed" if self._mcp_action == "remove" else "disabled"
-        log.write(f"[dim]mcp: {name} {verb}; its tools are no longer available[/dim]")
+        self._write(
+            f"[dim]mcp: {escape(name)} {verb}; its tools are no longer available[/dim]"
+        )
 
     # ---- turn worker ------------------------------------------------------ #
 
@@ -750,9 +783,7 @@ class Agent86App(App):
         if cached is not None:
             self.post_message(CatalogReady(provider, cached, None, purpose))
             return
-        self.query_one("#transcript", RichLog).write(
-            f"[dim]fetching {provider} model catalog…[/dim]"
-        )
+        self._write(f"[dim]fetching {escape(provider)} model catalog…[/dim]")
         self._fetch_catalog(provider, api_key, purpose)
 
     @work(thread=True)
@@ -777,8 +808,8 @@ class Agent86App(App):
         if message.error is None:
             self._catalog_cache[message.provider] = message.entries
         else:
-            self.query_one("#transcript", RichLog).write(
-                f"[yellow]catalog unavailable:[/yellow] {message.error} "
+            self._write(
+                f"[yellow]catalog unavailable:[/yellow] {escape(str(message.error))} "
                 "[dim](enter a model name directly)[/dim]"
             )
         if message.purpose == "model_picker":
@@ -811,7 +842,9 @@ class Agent86App(App):
 
     def on_turn_delta(self, message: TurnDelta) -> None:
         self._stream_buf += message.text
-        self.query_one("#stream", Static).update(self._stream_buf)
+        # Model text is untrusted: a `Text` render means `[/path/to/file]` can neither raise
+        # MarkupError nor silently vanish into a style tag.
+        self.query_one("#stream", Static).update(Text(self._stream_buf))
         self.repl.status.working = True
         self.repl.status.phase = "thinking"
         self.query_one("#status", StatusFooter).status = self.repl.status
@@ -819,7 +852,9 @@ class Agent86App(App):
 
     def on_tool_announce(self, message: ToolAnnounce) -> None:
         self._flush_stream()
-        self.query_one("#transcript", RichLog).write(message.text.strip())
+        # `[tool] name({...})` is literal text, not markup — and the argument preview is
+        # model-authored. Rendering it as markup swallowed the `[tool]` label outright.
+        self._write_text(message.text.strip())
         self.repl.status.working = True
         self.repl.status.phase = message.label
         self.query_one("#status", StatusFooter).status = self.repl.status
@@ -839,14 +874,16 @@ class Agent86App(App):
 
     def on_turn_error(self, message: TurnError) -> None:
         self._flush_stream()
-        self.query_one("#transcript", RichLog).write(f"[red]error:[/red] {message.error}")
+        self._write(f"[red]error:[/red] {escape(str(message.error))}")
         self.repl._refresh_status()
         self.query_one("#status", StatusFooter).status = self.repl.status
         self._reenable_input()
 
     def _flush_stream(self, prefix: str = "") -> None:
         if self._stream_buf:
-            self.query_one("#transcript", RichLog).write(f"{prefix}{self._stream_buf}")
+            # The prefix is a harness-owned label (intentional markup); the buffer is model
+            # text and is always escaped.
+            self._write(f"{prefix}{escape(self._stream_buf)}")
         self.query_one("#stream", Static).update("")
         self._stream_buf = ""
 

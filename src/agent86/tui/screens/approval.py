@@ -7,6 +7,7 @@ Every dismissal path (approve, deny, Escape) resolves to an explicit `bool` via
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Container
 from textual.screen import ModalScreen
@@ -25,8 +26,13 @@ class ApprovalModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Container(id="approval-dialog"):
-            yield Label(f"Approve tool: {self._tool_name}?")
-            yield Static(self._preview, id="approval-preview")
+            # Both the tool name (MCP servers name their own tools) and the JSON argument
+            # preview are untrusted. `Static`/`Label` interpret markup by default, so a
+            # preview containing `[` would either raise MarkupError while composing the modal
+            # — on the main thread, with the worker still blocked — or silently hide the very
+            # arguments the user is being asked to approve. `Text` disables markup entirely.
+            yield Label(Text(f"Approve tool: {self._tool_name}?"))
+            yield Static(Text(self._preview), id="approval-preview")
             yield Button("Run it", id="approve", variant="warning")
             yield Button("Deny", id="deny", variant="error")
 
