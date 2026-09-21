@@ -96,12 +96,12 @@ platform-specific:
 
 ---
 
-## Review findings 2026-09-19 (deferred beyond v0.7; § Context & cost closed in v0.8)
+## Review findings 2026-09-19 (§ Context & cost closed in v0.8; §§ TUI and Skills & tools in v0.9)
 
 Raised during the v0.6.0 release review. None of these block a release; all of them are things a
-Claude-Code-like harness eventually wants. The v0.7 "trustworthy harness" items and the v0.8
-"context & cost" items are done and live in `.planning/PROJECT.md`; what remains below is the v0.9
-and v1.0 surface.
+Claude-Code-like harness eventually wants. The v0.7 "trustworthy harness", v0.8 "context & cost"
+and v0.9 "coding-agent UX" items are done and live in `.planning/PROJECT.md`; what remains below is
+the **v1.0** surface, plus what the shipped work opened behind it.
 
 ### Context & cost
 
@@ -135,31 +135,69 @@ What that work *opened*, still not built:
 
 ### TUI
 
-*The v0.9 "coding-agent UX" candidate set — see `.planning/PROJECT.md` § "Next milestone
-candidates".*
+**✅ Shipped in v0.9.0 (2026-09-21)** — all six original entries in this section are built; see
+`.planning/phases/08-coding-agent-ux/SUMMARY.md`:
 
-- **Markdown rendering in the transcript** — model output is written as escaped plain text; code
-  fences, lists, and tables deserve real rendering.
-- **Diff preview in the approval modal** — approving a `write_file`/`edit_file` should show the
-  diff being approved, not just the tool name and arguments.
-- **Prompt history and multi-line input** — up-arrow recall and a soft-wrap multi-line composer.
-- **`@file` mentions** — path autocomplete in the prompt that inlines a file's content.
-- **Session picker** — sessions persist and resume, but only by id on the command line; the app
-  should list and pick them.
-- **Tool-call collapsing** — long tool observations should fold to a one-line summary that can be
-  expanded.
+- ~~Markdown rendering in the transcript~~ → re-rendered once on completion, `[ui] markdown` (UX-01)
+- ~~Diff preview in the approval modal~~ → `Tool.preview`, on the modal *and* the plain loop (UX-06)
+- ~~Prompt history and multi-line input~~ → `PromptInput` + `PromptHistory`, shared file (UX-03)
+- ~~`@file` mentions~~ → jail-resolved, bounded, with palette completions (UX-04)
+- ~~Session picker~~ → named sessions, `/sessions`, `/resume`, `SessionPickerModal` (UX-05)
+- ~~Tool-call collapsing~~ → one block per call, `Ctrl+O` / `Ctrl+Shift+O` (UX-02)
+
+What that work *opened*, still not built:
+
+- **Click-to-toggle tool-call blocks.** A block is a *renderable that changes shape*, and the log
+  is re-rendered when it does, so toggling is keyboard-driven (`Ctrl+O` for the last,
+  `Ctrl+Shift+O` for all) rather than click-driven. That is a consequence of the transcript widget,
+  not of the block: a `RichLog` renders its content to strips and **cannot host interactive
+  children**, so there is nothing to attach a click handler to. Making a block clickable means a
+  widget-based transcript — a `VerticalScroll` of entry widgets, each a real `Collapsible` — and
+  the cost is not the migration itself but the surface area around it: every screen, test and
+  command that queries `#transcript` does so *as a `RichLog`* (`.write()`, `.clear()`), and the
+  streaming path appends a delta per token, which a widget per entry has to absorb without
+  reflowing the world. The shape of the change: keep an entry-widget container behind the same
+  `#transcript` id with a `RichLog`-compatible facade for the streaming writes, migrate the
+  finished-entry re-render to child widgets, and keep the keyboard bindings as the accessible path.
+  Worth doing when the transcript grows a second interactive element (an inline diff to approve,
+  say); not worth it for toggling alone.
+- **History *navigation* in the plain loop.** Both surfaces write the same `[ui] history_file`, and
+  the plain loop appends to it faithfully — but it can only append. Stdlib `input()` has no line
+  editor, so there is no Up-arrow there at all: the shared history is a record the TUI can walk and
+  the plain loop can only contribute to. Fixing it means `readline` (or `pyreadline3` on Windows,
+  which is a third-party dependency on the *plain* path — exactly the path kept dependency-free so
+  `run` and `--plain` start fast). A decision, not an implementation: either accept an optional
+  import that is absent more often than not, or accept that the plain loop is append-only. It is
+  documented as append-only today.
 
 ### Skills & tools
 
-*Also v0.9.*
+**✅ Shipped in v0.9.0 (2026-09-21)** — the original entry in this section is built:
 
-- **Agent Skills convention + `allowed-tools` enforcement** — align the `SKILL.md` frontmatter
-  with the wider convention, and actually enforce a skill's declared tool allowlist while it is
-  loaded (today it is documentation, not a gate).
+- ~~Agent Skills convention + `allowed-tools` enforcement~~ → frontmatter parsed to the convention
+  (a `---` line, block scalars, space-delimited `allowed-tools`, PyYAML optional), a five-root
+  first-root-wins search order, and `ToolRegistry.dispatch` refusing anything outside a non-empty
+  allowlist for the duration of the turn (SKILL-01)
+
+What that work *opened*, still not built:
+
+- **The sandbox jail has no read/write split.** `skill_roots()` is granted to the policy so a
+  skill's bundled resources — which for a user skill live outside the workspace — are readable
+  instead of a jail error on the first "see `reference.md`". But the grant goes into
+  **`allow_paths`**, and `allow_paths` is one list: a path on it is readable *and writable*. So
+  `~/.agent86/skills` and `~/.claude/skills` are now write-targets for `write_file`, `edit_file`
+  and `run_command`, which means a model can edit the instructions it is about to be given — and
+  `~/.claude/skills` is shared with another tool entirely. The intent was read-only, and the policy
+  has no way to express it. The shape of the fix: `SandboxPolicy` grows separate read and write
+  sets (`allow_read_paths` / `allow_write_paths`, with today's `allow_paths` seeding both for
+  compatibility), `skill_roots()` feeds only the read set, and the executor checks the set matching
+  the operation. Until then the exposure is bounded by the approval gate — every one of those tools
+  is side-effecting, so a write there is a call the user is asked about — but a user in `auto` mode
+  has no such protection.
 
 ### Observability
 
-*Candidates for v1.0, the release milestone.*
+*Candidates for v1.0, the release milestone — the next one, now that v0.9 has closed.*
 
 - **OTel exporter wiring** — spans are emitted but there is no configured exporter, so nothing
   leaves the process.
