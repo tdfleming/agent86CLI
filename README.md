@@ -12,11 +12,13 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**v0.9.0 — the full harness, a full-screen interactive TUI that works like a coding agent, cloud
-providers, remote MCP, a cost meter and security posture you can trust, and a context window spent
-deliberately.** A five-tier agentic harness that runs on remote or local models and uses tools,
-skills, MCP servers, and sub-agents. Every pillar and tier from *The Agentic Harness* is
-implemented, tested (1100 tests), and verified live against a local model.
+**v1.0.0 — complete against the architecture contract, and published.** A five-tier agentic
+harness that runs on remote or local models and uses tools, skills, MCP servers, and sub-agents:
+a full-screen interactive TUI that works like a coding agent, cloud providers, remote MCP, a cost
+meter and security posture you can trust, a context window spent deliberately, and a flight
+recorder you can leave on forever. Every pillar and tier from *The Agentic Harness* is
+implemented, tested (1,229 tests in the default run, plus 14 packaging tests that build and
+install a real wheel), and verified live against a local model.
 
 | Tier / Pillar | What's there |
 |---|---|
@@ -24,7 +26,7 @@ implemented, tested (1100 tests), and verified live against a local model.
 | **Tier 2 Orchestration** (Pillar 1) | ReAct loop, FSM state, dynamic routing, circuit breakers |
 | **Tier 3 Cognitive** | Anthropic · OpenAI-compatible (incl. built-in OpenRouter & Groq) · Ollama · llama.cpp/LM Studio; prompt compilation; token budgeting |
 | **Tier 4 Tools** (Pillar 3) | built-ins (`read_file` · `write_file` · **`edit_file`** · `list_dir` · `run_command` · `python_exec` · `web_fetch`) + memory/skill/delegate + MCP (stdio · SSE · streamable HTTP); **subprocess or Docker** sandbox |
-| **Tier 5 Guardrails/Obs** (Pillar 4) | ingress/egress scanning, HITL approvals, circuit breakers, flight recorder, OpenTelemetry |
+| **Tier 5 Guardrails/Obs** (Pillar 4) | ingress/egress scanning, HITL approvals, circuit breakers, a **redacted and rotated** flight recorder, OpenTelemetry spans with a **configured exporter**, `trace show` / `trace export` |
 | **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence, automatic retention/pruning |
 | **Multi-agent** | sub-agents via `delegate`, message envelopes, broker, supervisor orchestrator |
 | **Interactive TUI** | full-screen Textual app: Markdown transcript, collapsible tool-call blocks, multi-line prompt with persistent history and `@file` mentions, session picker, live status footer, slash-command palette, arrow-key pickers, diff-showing approval modal, in-app `/config model` + `/config mcp`; plain fallback for any terminal |
@@ -33,6 +35,12 @@ implemented, tested (1100 tests), and verified live against a local model.
 | **Cost & resilience** | real per-model price table + `[pricing.models]` overrides (`limits.max_cost_usd` actually trips), retries with backoff on transient provider failures, sub-agent spend rolled into the session total |
 | **Security** | `web_fetch` SSRF guard, cross-platform sandbox env allowlist, MCP stdio env scrubbing, process-tree kill on timeout |
 
+New in v1.0 — the **release** pass: the flight recorder redacts secret-shaped values and clips
+huge fields before anything reaches disk, rotates by size instead of growing forever, and can be
+exported (`agent86 trace export`, including a reconstructed OTLP span tree); OpenTelemetry spans
+reach a real exporter rather than the no-op global provider; the scripting contract is pinned by
+tests; the errors a first-run user hits name the fix; and `pip install agent86` replaces a git
+clone (see [Observability](#observability) and [docs/RELEASING.md](docs/RELEASING.md)).
 New in v0.9 — the **coding-agent UX** pass: a finished reply renders as Markdown with
 syntax-highlighted code, each tool call folds into one expandable line, the prompt is a multi-line
 composer with persistent history and `@file` mentions, sessions have names and a picker,
@@ -57,7 +65,10 @@ switching, automatic memory retention/pruning, and cleaner `web_fetch` (main-con
 model-friendly sizing).
 
 Optional heavy deps degrade gracefully: no torch → hash-embedder memory; no Docker → subprocess
-sandbox; no `mcp` → MCP disabled. Install extras as needed: `pip install -e ".[all]"`.
+sandbox; no `mcp` → MCP disabled; no `opentelemetry` → spans become no-ops with a note. The rule
+is the same every time — the feature degrades, the harness says so in one line, and the turn goes
+through — and there is one integration test per optional dependency holding it to that. Install
+extras as needed: `pip install "agent86[all]"`.
 
 Try it (with a running Ollama chat model, or provider API keys set):
 
@@ -644,7 +655,123 @@ max_steps = 8                           # per-sub-agent cap, clamped by limits.m
 A typo in any of the enum fields (`egress = "redcat"`) now fails validation with the allowed
 values named, rather than silently turning the guardrail off.
 
-## Install (development)
+## Observability
+
+Every turn is recorded twice: always to a local **flight recorder**, and — when you ask for it —
+to an OpenTelemetry collector.
+
+**The flight recorder** is an append-only JSONL file under `~/.agent86/traces`, tagged with the
+session id, covering turn boundaries, model calls, tool calls, guardrail hits and errors. It needs
+no collector and no network, and it is the thing `agent86 trace show` reads. Two properties make
+it safe to leave on forever:
+
+- **It redacts.** Everything the harness sees flows through it — your task text, the model's tool
+  arguments, whatever a tool read off disk — so a key pasted into a prompt, or a `.env` a tool
+  happened to `cat`, used to land in plain text in a file that outlives the session and gets
+  attached to bug reports. Every string, at any depth, is now rewritten with the *same* regexes
+  the guardrail tier uses (provider key shapes, credential assignments, key-shaped tokens) and a
+  match becomes a loud `***REDACTED***`. The big free-text fields — `arguments`, `task`,
+  `content`, `error`, `outcome`, and anything nested inside them — are clipped to
+  `[observability] max_field_chars` with a visible `…[truncated N chars]`, so a tool that returned
+  a 40 MB file doesn't become 40 MB of trace. Redaction never raises: a failure degrades to the
+  untouched event, because a trace that drops events is worse than a trace with a long line in it.
+  `redact = "none"` is the explicit local opt-out.
+- **It rotates.** The live file is capped at `max_trace_bytes` (50 MB); crossing it shifts
+  `trace.jsonl` → `trace.1.jsonl` … and drops the oldest generation past `keep_traces` (5).
+  Rotation happens *between* events — flush, then rename — so no event is ever half-written.
+  Reads stream rather than slurp and walk the rotated generations newest-first, so
+  `--kind tool_call -n 50` really shows fifty tool calls rather than whatever few survive the last
+  fifty events of any kind. `max_trace_bytes = 0` turns rotation off.
+
+**Reading it back:**
+
+```bash
+agent86 trace path                              # where it lives, plus the rotated generations
+agent86 trace show -s 0f3a91c2                  # one session
+agent86 trace show -k tool_call -k model_call   # only these kinds (repeatable)
+agent86 trace show --since 2h -n 200            # a window; 30m | 2h | 7d
+```
+
+`trace show` prints `time · session · kind · in · out · cost · detail`, with the token and cost
+columns filled only on a `model_call` (where they mean something) and a totals line underneath:
+`4,812 in / 1,003 out tokens, $0.0412 across 37 event(s)`.
+
+**Exporting it:**
+
+```bash
+agent86 trace export -s 0f3a91c2 -o session.jsonl      # the filtered events
+agent86 trace export -f json --since 7d                # one JSON array
+agent86 trace export -f otlp-json -o spans.json        # a reconstructed OTLP span tree
+```
+
+`otlp-json` rebuilds a span tree out of the recorder's own `turn_start` / `turn_end` /
+`model_call` / `tool_call` events, so a trace captured with **no collector running** can still be
+handed to one afterwards. Span ids are derived rather than random, so exporting the same trace
+twice produces the same output.
+
+**OpenTelemetry.** With `otel = true` and the `otel` extra installed, each turn is a `turn` span
+with a `model_call` child per provider call and a `tool_call` child per execution, carrying
+`gen_ai.*` attributes (`gen_ai.request.model`, `gen_ai.usage.input_tokens` / `output_tokens`,
+`gen_ai.response.finish_reasons`, `gen_ai.tool.name`) where the GenAI semantic conventions name
+one and `agent86.*` where they don't:
+
+```bash
+pip install "agent86[otel]"
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+agent86 run "hello"
+```
+
+```toml
+[observability]
+trace           = true                  # the JSONL flight recorder
+path            = "~/.agent86/traces"
+redact          = "secrets"             # secrets | none
+max_field_chars = 2000                  # clip for the big free-text fields
+max_trace_bytes = 50_000_000            # rotate past this; 0 disables rotation
+keep_traces     = 5                     # rotated generations kept
+otel            = false                 # emit OpenTelemetry spans (needs the `otel` extra)
+otel_exporter   = "otlp"                # otlp | console | none
+otel_endpoint   = "http://localhost:4317"   # overrides OTEL_EXPORTER_OTLP_ENDPOINT when set
+```
+
+The standard `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` are honoured — the
+exporters read them themselves, which is how every other instrumented process is configured — and
+`otel_endpoint` is the override for when config, not environment, is the source of truth. Spans go
+through a `BatchSpanProcessor`, flushed when the harness closes. `otel_exporter = "console"`
+pretty-prints to stderr for local debugging; `"none"` records spans and exports nothing.
+
+agent86 deliberately does **not** install its provider as the global OTel provider: it can be
+imported inside a host that owns its own tracing, and stealing the global provider would be a side
+effect of an import. Every failure path degrades to a one-line note — a missing extra, a missing
+collector, a broken exporter mean "no traces", never "no agent".
+
+## Install
+
+From PyPI:
+
+```bash
+pip install agent86
+uv tool install agent86      # or: install it as a standalone tool
+```
+
+Optional backends are extras — install what you need:
+
+```bash
+pip install "agent86[anthropic]"   # Claude
+pip install "agent86[openai]"      # OpenAI / OpenAI-compatible
+pip install "agent86[local]"       # sentence-transformers + sqlite-vec (semantic memory)
+pip install "agent86[mcp]"         # MCP client
+pip install "agent86[otel]"        # OpenTelemetry SDK + OTLP exporter
+pip install "agent86[docker]"      # Docker sandbox
+pip install "agent86[web]"         # readability extraction for web_fetch
+pip install "agent86[all]"         # everything
+```
+
+Releases are built and published from a `v*` tag by
+[`.github/workflows/release.yml`](.github/workflows/release.yml) using PyPI trusted publishing —
+the procedure and the one-time setup are in **[docs/RELEASING.md](docs/RELEASING.md)**.
+
+### From source (development)
 
 With [uv](https://docs.astral.sh/uv/) (recommended):
 
@@ -661,15 +788,8 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-Optional backends are extras — install what you need:
-
-```bash
-pip install -e ".[anthropic]"   # Claude
-pip install -e ".[openai]"      # OpenAI / OpenAI-compatible
-pip install -e ".[local]"       # sentence-transformers + sqlite-vec
-pip install -e ".[mcp]"         # MCP client
-pip install -e ".[all]"         # everything
-```
+The extras are the same from a checkout (`pip install -e ".[all]"`). `[dev]` adds pytest, ruff,
+mypy, `build` and `twine`.
 
 ## Usage
 
@@ -680,8 +800,41 @@ agent86 run "your goal"     # one-shot, scriptable
 agent86 run "goal" --json   # structured output for automation
 agent86 config path         # show resolved config location
 agent86 models              # list configured models
+agent86 trace show          # recent flight-recorder events
 agent86 --help
 ```
+
+### The scripting contract
+
+`run`, `run --json` and `--plain` are what a script or a CI job is allowed to depend on, and
+`tests/integration/test_scripting_contract.py` pins every promise below:
+
+- **`run --json` writes one JSON object to stdout**, with these five keys. New keys may be added
+  (`turn` was one, in v0.8); these may never be removed or renamed:
+
+  | Key | What it is |
+  |---|---|
+  | `session_id` | the session this turn belongs to — pass it back with `--session` |
+  | `output` | the final assistant text |
+  | `steps` | the steps the loop took, in order |
+  | `usage` | token usage and cost for the turn |
+  | `turn` | the per-turn summary — steps, tools, tokens, cost, duration |
+
+  ```bash
+  agent86 run --json "hello" | jq -r '.output'
+  agent86 run --json "hello" | jq '.turn'
+  ```
+
+- **A failure is exit code 1, a message on stderr, and nothing on stdout** — so
+  `agent86 run … > out.json` never leaves a half-file that parses as success.
+- **Approvals are explicit.** Piped (non-TTY) and without `--yes`, side-effecting tools are
+  declined; `--yes` runs them.
+- **`--session <id>` continues** an existing session rather than starting a new one.
+- **The egress guardrail applies to the JSON** as much as to streamed text.
+- **`--plain` and `run` never import Textual**, keyring, tomlkit, OpenTelemetry or torch — held by
+  an import-graph test and a cold-start budget (`AGENT86_SKIP_PERF=1` skips the wall-clock half on
+  a loaded runner).
+- **The read-only inspection commands work on a machine with no config and no API keys.**
 
 ## Design
 
