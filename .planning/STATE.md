@@ -1,7 +1,7 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.9
-milestone_name: Coding-agent UX
+milestone: v1.0
+milestone_name: Release
 status: complete
 last_updated: "2026-09-21"
 progress:
@@ -17,35 +17,74 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-09-21)
 
-**Core value:** The transcript and the prompt do for a coding session what the TUI already did for
-a chat session — on top of v0.8's "the context window and the token budget are spent well", v0.7's
-"what the harness reports is true", and v0.6's "run, configure and steer the agent entirely from
-the terminal app".
-**Current focus:** v0.9 milestone complete (1/1 phase) — released as v0.9.0.
-**Next:** v1.0 — the release milestone: a PyPI publish workflow (tagged release → trusted
-publishing), an OTel exporter actually wired up, and flight-recorder redaction and rotation.
+**Core value:** A tagged release publishes itself, the trace is safe to leave on forever *and*
+safe to hand to someone else, and the promises a script depends on are written down and enforced
+— on top of v0.9's "usable for code", v0.8's "the context window and the token budget are spent
+well", v0.7's "what the harness reports is true", and v0.6's "run, configure and steer the agent
+entirely from the terminal app".
+**Current focus:** v1.0 milestone complete (1/1 phase) — released as v1.0.0. The harness is
+complete against `docs/ARCHITECTURE.md`.
+**Next:** no milestone scoped — a **post-1.0 backlog**, in `docs/BACKLOG.md`. Nearest item is the
+`Development Status` classifier flip to `5 - Production/Stable`, due in the first release after
+1.0 is live on PyPI.
 
 ## Milestone
 
-**v0.9 — Coding-agent UX** (agent86 now at v0.9.0)
-1 phase | 8 requirements (UX-01…UX-06, TOOL-01, SKILL-01) | 1 phase complete
+**v1.0 — Release** (agent86 now at v1.0.0)
+1 phase | 9 requirements (OBS-01…OBS-04, PKG-01, PKG-02, HARD-01…HARD-03) | 1 phase complete
 
-Previous: **v0.8 — Context & cost** — 1 phase, 7 requirements, complete, released as v0.8.0.
-Before that: **v0.7 — Trustworthy harness** — 1 phase, 8 requirements, released as v0.7.0, and
+Previous: **v0.9 — Coding-agent UX** — 1 phase, 8 requirements, complete, released as v0.9.0.
+Before that: **v0.8 — Context & cost** — 1 phase, 7 requirements, released as v0.8.0;
+**v0.7 — Trustworthy harness** — 1 phase, 8 requirements, released as v0.7.0; and
 **v0.6 — Interactive** — 5 phases, 10 requirements, released as v0.6.0.
 
 ## Progress
 
 | Phase | Status | Plans | Progress |
 |-------|--------|-------|----------|
-| 8 — Coding-Agent UX | ● | n/a | 100% |
+| 9 — Release | ● | n/a | 100% |
 
+v0.9 (closed): 8 — Coding-Agent UX ● n/a.
 v0.8 (closed): 7 — Context & Cost ● n/a.
 v0.7 (closed): 6 — Trustworthy Harness ● n/a.
 v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette + Menus ● 4/4 ·
 3 — Secrets + Model Config ● 13/13 · 4 — MCP Config UI ● 8/8 · 5 — Packaging & Hardening ● n/a.
 
 ## Recent Activity
+
+- 2026-09-21 — **Phase 9 (Release) complete; v1.0 milestone complete at 1/1 phase and released as
+  v1.0.0.** Executed as a review-driven pass (see `phases/09-release/SUMMARY.md` for the
+  commit-by-commit breakdown grouped by workstream). **OBS-01/OBS-02 the recorder:** every event
+  now passes through `observability/redact.py` before it reaches the file — every string at any
+  depth rewritten with the guardrail tier's *own* regexes (imported, never re-spelled) to
+  `***REDACTED***`, and the big free-text fields clipped to `max_field_chars` with truncation
+  inherited into anything nested inside them, because the model chooses those key names. It never
+  raises: a redaction failure degrades to the untouched event, since a trace that drops events is
+  worse than a trace with a long line in it. The live file is capped at `max_trace_bytes` and
+  rotates *between* events (flush, then rename, retried for the Windows `PermissionError` a tail
+  or a scanner causes), and reads stream generation-by-generation so a filtered `-n` means N
+  *matching* events. **OBS-03 the exporter:** the tracer used to call `trace.get_tracer`, which
+  hands back the no-op global provider unless something else installed one — so with the extra
+  installed and the switch on, spans were created and dropped. It now builds its own
+  `TracerProvider` (Resource, an exporter chosen by `otel_exporter`, a `BatchSpanProcessor` flushed
+  from `Harness.close()`), honours the standard `OTEL_*` env vars with `otel_endpoint` as the
+  config override, and deliberately does **not** call `set_tracer_provider`: agent86 is importable
+  inside a host that owns its tracing, and stealing the global provider would be a side effect of
+  an import. **OBS-04 reading it back:** `trace export` (`-f jsonl|json|otlp-json`, the last
+  reconstructing a span tree with derived rather than random span ids) and `trace show` with
+  `-k/--kind`, `--since`, token/cost columns and totals, both over one filter-before-limit reader.
+  **PKG-01/PKG-02 shipping it:** complete PyPI metadata and a real `LICENSE`, an allowlisted sdist,
+  `tests/packaging/` asserting the built wheel behind a `packaging` marker (excluded by default;
+  CI's `package` job runs it on Ubuntu *and* Windows), and `release.yml` on `v*` — pre-flight,
+  build, `twine check`, packaging tests, trusted publishing through the `pypi` environment, then a
+  GitHub Release carrying that version's CHANGELOG section. No token in the repo; `docs/RELEASING.md`
+  is the procedure. **HARD-01/02/03 the edges:** the scripting contract stated by tests rather than
+  inferred (the five `run --json` keys, stderr-on-failure, declined approvals when piped,
+  `--session`, the lazy-import contract and a cold-start budget), subprocess smoke tests for every
+  command surface under an empty HOME, error messages that name the fix (including a
+  `MemoryStoreError` the harness degrades around instead of refusing to start), a session titled
+  from the typed line rather than an inlined `@file` block, and a degradation matrix with one test
+  per optional dependency.
 
 - 2026-09-21 — **Phase 8 (Coding-Agent UX) complete; v0.9 milestone complete at 1/1 phase and
   released as v0.9.0.** Executed as a review-driven pass rather than a numbered plan set (see
@@ -720,17 +759,20 @@ v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette
 
 ## Next Step
 
-The v0.9 "Coding-agent UX" milestone is complete and shipped as **v0.9.0** — 1/1 phase,
-8/8 requirements (UX-01…UX-06, TOOL-01, SKILL-01) Complete. Every v0.9 candidate recorded at the
-close of v0.8 shipped. The orchestrator tags the release after the final full-suite run.
+The v1.0 "Release" milestone is complete and shipped as **v1.0.0** — 1/1 phase, 9/9 requirements
+(OBS-01…OBS-04, PKG-01, PKG-02, HARD-01…HARD-03) Complete. Every v1.0 candidate recorded at the
+close of v0.9 shipped, and `docs/ARCHITECTURE.md` §15 no longer lists anything the contract
+specifies as built.
 
-**Next milestone: v1.0 — the release milestone.** v0.6 made the harness usable, v0.7 honest, v0.8
-frugal and v0.9 a coding agent; v1.0 is about shipping it: a **PyPI release workflow** (a tagged
-release builds and publishes via trusted publishing, rather than install-from-source only), an
-**OTel exporter** actually wired up (spans are emitted today but nothing leaves the process), and
-**flight-recorder redaction and rotation** (the recorder is append-only, unbounded and unredacted;
-it should scrub secrets on write and roll over by size/age). Candidates are recorded in
-`PROJECT.md` under **Next milestone candidates**.
+**The orchestrator tags the release**: `python scripts/check_release.py --tag v1.0.0` passes, and
+the tag push is what runs `release.yml` (pre-flight → build → `twine check` → packaging tests →
+trusted publishing → GitHub Release). Procedure and one-time trusted-publisher setup:
+`docs/RELEASING.md`. Nothing in this repository is tagged or pushed by the docs pass.
+
+**No next milestone is scoped** — v1.0 closed the programme, and what follows is a backlog rather
+than a plan. Nearest item: flip `Development Status` from `4 - Beta` to `5 - Production/Stable` in
+the first release *after* 1.0 is live on PyPI, since the classifier is a claim about a published
+artifact.
 
 Outstanding (non-blocking): what v0.9 opened, now in `docs/BACKLOG.md` § TUI / § "Skills & tools" —
 click-to-toggle tool blocks (needs a widget-based transcript, since a `RichLog` can't host

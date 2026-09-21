@@ -1,9 +1,14 @@
-# Requirements: agent86 Interactive Milestone (v0.6)
+# Requirements: agent86 v0.6 → v1.0
 
-**Defined:** 2026-07-19
-**Core Value:** The user can run, configure, and steer the agent entirely from within an
+**Defined:** 2026-07-19 (v0.6) · **Last milestone:** v1.0, complete 2026-09-21
+**Core Value (v0.6):** The user can run, configure, and steer the agent entirely from within an
 interactive terminal app — switching models, wiring up MCP servers, and watching live progress —
 without hand-editing TOML or restarting.
+
+This file states the v0.6 requirements in full, since they were the ones defined up front; the
+v0.7–v1.0 milestones were each executed as a single review-driven phase, and their requirements
+are stated in full in `PROJECT.md` § Requirements → Validated, with the reasoning in each phase's
+`phases/*/SUMMARY.md`. The traceability table below covers **all** of them.
 
 ## v1 Requirements
 
@@ -42,13 +47,15 @@ Requirements for the v0.6 interactive milestone. Each maps to exactly one roadma
 
 ## v2 Requirements
 
-Deferred — acknowledged but not in this milestone's roadmap.
+Deferred at v0.6 — two of the three have since shipped.
 
 ### Polish
 
-- **POL-01**: Theming / color schemes for the TUI
-- **POL-02**: Session picker UI (browse & resume prior sessions from a menu)
-- **POL-03**: In-app skills browser/manager
+- **POL-01**: Theming / color schemes for the TUI — *still deferred*
+- ~~**POL-02**: Session picker UI (browse & resume prior sessions from a menu)~~ — shipped in
+  v0.9 as UX-05 (`/sessions`, `/resume`, `SessionPickerModal`)
+- **POL-03**: In-app skills browser/manager — *still deferred*; `/skills` lists, but does not
+  manage
 
 ## Out of Scope
 
@@ -61,24 +68,50 @@ Deferred — acknowledged but not in this milestone's roadmap.
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| TUI-01 | Phase 1 | Complete |
-| TUI-02 | Phase 1 | Complete |
-| TUI-05 | Phase 1 | Complete |
-| TUI-03 | Phase 2 | Complete |
-| TUI-04 | Phase 2 | Complete |
-| SEC-01 | Phase 3 | Complete |
-| MODEL-01 | Phase 3 | Complete |
-| MODEL-02 | Phase 3 | Complete |
-| MCP-01 | Phase 4 | Complete |
-| TUI-06 | Phase 5 | Complete |
+Every requirement across every milestone, one row per phase group. All Complete.
+
+| Milestone | Phase | Requirements | Status |
+|---|---|---|---|
+| v0.6 Interactive | Phase 1 — TUI Skeleton + Live Status | TUI-01, TUI-02, TUI-05 | Complete |
+| v0.6 Interactive | Phase 2 — Command Palette + Menus | TUI-03, TUI-04 | Complete |
+| v0.6 Interactive | Phase 3 — Secrets + Model Config | SEC-01, MODEL-01, MODEL-02 | Complete |
+| v0.6 Interactive | Phase 4 — MCP Config UI | MCP-01 | Complete |
+| v0.6 Interactive | Phase 5 — Packaging & Hardening | TUI-06 | Complete |
+| v0.7 Trustworthy | Phase 6 — Trustworthy Harness | REL-01…REL-05, SEC-02, SEC-03, SEC-04 | Complete |
+| v0.8 Context & cost | Phase 7 — Context & Cost | CTX-01…CTX-04, COST-01, COST-02, COST-03 | Complete |
+| v0.9 Coding-agent UX | Phase 8 — Coding-Agent UX | UX-01…UX-06, TOOL-01, SKILL-01 | Complete |
+| v1.0 Release | Phase 9 — Release | OBS-01…OBS-04, PKG-01, PKG-02, HARD-01…HARD-03 | Complete |
+
+What each ID means, in one line:
+
+- **v0.7** — REL-01 real price table · REL-02 validated config enums · REL-03 survive a provider
+  failure (retry, then clean abort) · REL-04 `egress = "redact"` really redacts · REL-05 sub-agents
+  bounded and billed · SEC-02 `web_fetch` SSRF guard · SEC-03 cross-platform sandbox env allowlist
+  and process-tree kill · SEC-04 MCP stdio env scrubbing.
+- **v0.8** — CTX-01 budget against the model's real window · CTX-02 summarizing compaction ·
+  CTX-03 `max_tokens` continuation · CTX-04 parallel read-only tool calls · COST-01 Anthropic
+  prompt-cache breakpoints · COST-02 cache priced as cache · COST-03 a per-turn cost line
+  everywhere.
+- **v0.9** — UX-01 Markdown transcript · UX-02 collapsible tool-call blocks · UX-03 multi-line
+  prompt + persistent history · UX-04 `@file` mentions · UX-05 named sessions and a picker ·
+  UX-06 the approval prompt shows the change · TOOL-01 exact-match `edit_file` with diffs ·
+  SKILL-01 Agent Skills convention with `allowed-tools` enforced.
+- **v1.0** — OBS-01 trace redaction · OBS-02 trace rotation · OBS-03 a real OTel exporter ·
+  OBS-04 `trace export` and `trace show` filters/cost · PKG-01 PyPI metadata and packaging tests ·
+  PKG-02 the tag-driven release workflow · HARD-01 the scripting contract pinned by tests ·
+  HARD-02 errors that name the fix · HARD-03 a degradation matrix over every optional dependency.
 
 **Coverage:**
-- v1 requirements: 10 total
-- Mapped to phases: 10
-- Unmapped: 0 ✓
+
+| Milestone | Requirements | Mapped | Unmapped |
+|---|---|---|---|
+| v0.6 | 10 | 10 | 0 ✓ |
+| v0.7 | 8 | 8 | 0 ✓ |
+| v0.8 | 7 | 7 | 0 ✓ |
+| v0.9 | 8 | 8 | 0 ✓ |
+| v1.0 | 9 | 9 | 0 ✓ |
+| **Total** | **42** | **42** | **0 ✓** |
 
 ---
 *Requirements defined: 2026-07-19*
-*Last updated: 2026-07-19 after initial definition*
+*Last updated: 2026-09-21 — traceability extended from v0.6-only to every milestone through v1.0*

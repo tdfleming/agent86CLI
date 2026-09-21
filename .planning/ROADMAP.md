@@ -323,7 +323,70 @@ workstream.
 | *(the wiring pass)* PromptInput swapped in, mentions on submit, `/resume` → picker, `discover_skills(config, workspace)`, the gate given the tool context, `clear_skill()` per turn, and the plain loop's y/N approval | Wiring |
 
 ---
+
+# Roadmap: agent86 Release Milestone (v1.0)
+
+**Created:** 2026-09-21
+**Phases:** 1 | **Requirements mapped:** 9/9 ✓
+
+| # | Phase | Goal | Requirements | Success Criteria |
+|---|-------|------|--------------|------------------|
+| 9 | Release | 9/9 | Complete | 2026-09-21 |
+
+### Phase 9: Release
+**Goal:** ship it. The harness was complete against `docs/ARCHITECTURE.md` except for three rows
+in its own §15 not-built table — no configured OTel exporter, an unredacted and unbounded flight
+recorder, and no distribution — and those three were exactly the v1.0 candidates recorded at the
+close of v0.9 in `PROJECT.md` § "Next milestone candidates" and `docs/BACKLOG.md` §§
+"Observability" and "Release". Nothing here is new surface area.
+
+**Requirements:** OBS-01, OBS-02, OBS-03, OBS-04, PKG-01, PKG-02, HARD-01, HARD-02, HARD-03
+
+**Success criteria:**
+1. A key pasted into a prompt, or a `.env` a tool read, cannot reach the trace file; a 40 MB tool
+   observation cannot become 40 MB of trace.
+2. The trace file is bounded: it rotates by size, keeps a fixed number of generations, and never
+   half-writes an event across the rotation.
+3. `otel = true` with the extra installed actually delivers spans to a collector, and without the
+   extra degrades to a one-line note rather than a failure — without agent86 ever taking over the
+   process's global tracer provider.
+4. A trace captured with no collector running can be handed to one afterwards, and
+   `trace show --kind tool_call -n 50` shows fifty tool calls.
+5. `pip install agent86` works, and what it installs is asserted by tests that run against the
+   built wheel rather than the source tree.
+6. Pushing a `vX.Y.Z` tag builds, verifies and publishes the release, and cuts a GitHub Release
+   with that version's CHANGELOG section — with no publishing credential stored in the repository.
+7. The scripting contract (`run`, `run --json`, `--plain`) is stated by tests, not inferred; every
+   command surface starts on a machine with no config and no keys; and `run`/`--plain` still do
+   not import Textual, keyring, tomlkit, OpenTelemetry or torch.
+8. Every error a first-run user can hit names the fix, and every optional dependency can be
+   missing without the turn failing.
+
+**Status:** Complete (2026-09-21). Executed as a review-driven pass rather than a numbered plan
+set — see `phases/09-release/SUMMARY.md` for the commit-by-commit breakdown grouped by workstream.
+
+**Commits** (oldest-first, `04a64b6..`):
+
+| Commit | Workstream |
+|---|---|
+| `2ee8700` chore(packaging): complete PyPI metadata, MIT license, and sdist/wheel includes | Packaging |
+| `281403e` feat(observability): redact secrets and clip huge fields before the trace is written | Observability |
+| `816737e` fix(orchestration): title a session after the typed line, not the attachment | Hardening |
+| `b3b5217` feat(observability): rotate the flight recorder and stream reads back | Observability |
+| `753a63f` test(packaging): assert the built wheel, not the source tree | Packaging |
+| `e10dc51` build(release): add a release pre-flight that pins the version to one source | Packaging |
+| `ec9fff3` test(integration): pin the run --json scripting contract | Hardening |
+| `c3af5e8` test(integration): subprocess smoke for every command, plus a cold-start budget | Hardening |
+| `17c1e80` feat(observability): configure a real OTel provider and export spans | Observability |
+| `76aeeec` ci(release): publish on tag via trusted publishing, and gate packaging in CI | Packaging |
+| `8cd5013` feat(cli): agent86 trace export, plus --kind/--since and cost columns on trace show | Observability |
+| `f91077e` fix(cli): make the first-run failures say what to do next | Hardening |
+| `1e5f972` fix(observability): annotate the recorder's file handle for mypy | Observability |
+| `12fe2bd` test(integration): a degradation matrix for every optional dependency | Hardening |
+
+---
 *v0.6 roadmap created: 2026-07-19 · v0.6 complete: 2026-09-19 (5/5 phases)*
 *v0.7 roadmap created: 2026-09-19 · v0.7 complete: 2026-09-19 (1/1 phase, 8/8 requirements)*
 *v0.8 roadmap created: 2026-09-19 · v0.8 complete: 2026-09-19 (1/1 phase, 7/7 requirements)*
 *v0.9 roadmap created: 2026-09-21 · v0.9 complete: 2026-09-21 (1/1 phase, 8/8 requirements)*
+*v1.0 roadmap created: 2026-09-21 · v1.0 complete: 2026-09-21 (1/1 phase, 9/9 requirements)*

@@ -1,4 +1,4 @@
-# agent86 — Coding-Agent UX Milestone (v0.9)
+# agent86 — Release Milestone (v1.0)
 
 ## What This Is
 
@@ -18,15 +18,20 @@ arrived as raw Markdown source, ten tool calls buried the answer, the prompt was
 no memory, a file had to be read through a tool round trip, sessions were opaque 12-character ids,
 `edit_file` rewrote a file's line endings and answered "Edited a.py.", an approval showed 300
 characters of JSON, and a skill's `allowed-tools` was a comment.
+**v1.0 ships it.** The harness was feature-complete against `docs/ARCHITECTURE.md` except for
+three rows in its own not-built table — no configured OTel exporter, so spans went nowhere; a
+flight recorder that was append-only, unbounded and unredacted, which made the one file that saw
+every secret the one file nobody could safely share; and no distribution at all, so the install
+path was a git clone. v1.0 closes all three and makes the scripting contract something tests
+state rather than something a reader infers.
 
 ## Core Value
 
-The transcript and the prompt do for a coding session what the TUI already did for a chat session.
-A reply renders as Markdown with highlighted code, a tool call is one expandable line, the prompt
-is a multi-line composer with history and `@file` mentions, sessions have names and a picker, an
-edit is exact-match and shows its diff — at the approval prompt, before it happens — and a skill's
-declared tool allowlist is enforced.
+A tagged release publishes itself, the trace is safe to leave on forever *and* safe to hand to
+someone else, and the promises a script depends on are written down and enforced.
 
+Carried from v0.9: the transcript and the prompt do for a coding session what the TUI already did
+for a chat session.
 Carried from v0.8: the context window and the token budget are spent well, not merely measured
 accurately.
 Carried from v0.7: what the harness reports is true and what it claims to defend, it defends.
@@ -197,12 +202,73 @@ without hand-editing TOML or restarting.
   outside a non-empty allowlist, naming the skill and the list, with `use_skill` always callable
   and `clear_skill()` lifting the restriction at the end of every turn — Phase 8
 
+<!-- v1.0 "Release" — Phase 9. Shipped as v1.0.0 on 2026-09-21. -->
+
+- ✓ **OBS-01**: **The flight recorder redacts what it writes** — `observability/redact.py` is the
+  one gate between an event and the file; every string at any depth is rewritten with the
+  guardrail tier's own regexes (`guardrails/scanners.py` key shapes and credential assignments,
+  `secrets.py` key-shaped tokens, imported rather than re-spelled) to `***REDACTED***`, and the
+  big free-text fields (`arguments`, `task`, `content`, `error`, `outcome`, and anything nested
+  inside them) are clipped to `[observability] max_field_chars` with a visible truncation marker;
+  it never raises, degrading to the untouched event, and `redact = "none"` is the explicit
+  opt-out — Phase 9
+- ✓ **OBS-02**: **The flight recorder rotates** — the live file capped at
+  `[observability] max_trace_bytes` (50 MB), crossing it shifting `trace.jsonl` →
+  `trace.1.jsonl` … and dropping the oldest past `keep_traces` (5), rotation happening *between*
+  events (flush, then rename, retried for Windows' `PermissionError`) so no event is ever
+  half-written; `read_events` streams and `trace_generations` walks the generations newest-first,
+  so a filtered `-n` returns that many *matching* events — Phase 9
+- ✓ **OBS-03**: **OpenTelemetry spans reach an exporter** — `Tracer` builds its own
+  `TracerProvider` (a `Resource` with `service.name`/`service.version`, an exporter chosen by
+  `[observability] otel_exporter` = `otlp` | `console` | `none`, a `BatchSpanProcessor` flushed
+  from `Harness.close()`), honours `OTEL_EXPORTER_OTLP_ENDPOINT` / `_HEADERS` with
+  `otel_endpoint` as the config override, is deliberately **not** installed as the global
+  provider, degrades to a note on every failure path, and emits a `turn` → `model_call` /
+  `tool_call` tree with `gen_ai.*` attributes — Phase 9
+- ✓ **OBS-04**: **The trace can be read back and exported** — `agent86 trace export`
+  (`-s`, `-n`, `--since`, `-o`, `-f jsonl|json|otlp-json`, the last reconstructing a span tree
+  from the recorder's own events with derived rather than random span ids); `trace show` gains
+  `-k/--kind` (repeatable), `--since 30m|2h|7d`, token and cost columns filled only on a
+  `model_call`, and a totals line; both share one filter-before-limit reader — Phase 9
+- ✓ **PKG-01**: **The project is publishable** — complete PyPI metadata (classifiers, keywords,
+  `[project.urls]`), the MIT `LICENSE` file the metadata always claimed, an allowlisted sdist and
+  a wheel with development scaffolding excluded, `build`/`twine` in the dev extra, and
+  `tests/packaging/` asserting the *built artifact* (wheel contents, metadata, version equality,
+  the console entry point running from a throwaway venv) behind a `packaging` marker excluded from
+  the default run and opted into by CI's `package` job on Ubuntu and Windows — Phase 9
+- ✓ **PKG-02**: **A tagged release publishes itself** — `.github/workflows/release.yml` on `v*`:
+  `scripts/check_release.py` fail-fast (tag = `project.version` = `agent86.__version__`, a
+  CHANGELOG section with a body, `[Unreleased]` empty) → `uv build` → `twine check` → the
+  packaging tests → **trusted publishing** to PyPI through the `pypi` environment (OIDC, no token
+  in the repo) → a GitHub Release whose body is that version's CHANGELOG section via
+  `scripts/changelog_section.py`; `workflow_dispatch` rehearses the same pipeline against
+  TestPyPI, and the procedure is written down in `docs/RELEASING.md` — Phase 9
+- ✓ **HARD-01**: **The scripting contract is pinned by tests** — `run --json`'s keys
+  (`session_id`, `output`, `steps`, `usage`, `turn`) additive-only, a failure as exit 1 with the
+  message on stderr and nothing on stdout, approvals declined when piped without `--yes`,
+  `--session` continuing, egress applying to the JSON, the inspection commands working with no
+  config and no keys; plus subprocess smoke tests for every command surface and a cold-start
+  budget with an import-graph half that always runs (`AGENT86_SKIP_PERF` skips only the
+  wall-clock half) — Phase 9
+- ✓ **HARD-02**: **Errors name the fix** — a malformed `--model` ref caught alongside
+  `ProviderError` before any provider exists, a malformed config file named rather than raised
+  through every command, every model failure ending with `agent86 models` → `--model
+  provider:model`, memory-disabled / no-MCP-servers / unknown-skill each naming the config key or
+  command that changes them, a `MemoryStoreError` that names the file and offers the fixes while
+  the harness degrades to no memory with a visible note, and missing-key messages that still name
+  only the environment *variable* — Phase 9
+- ✓ **HARD-03**: **Graceful degradation is a matrix, not an anecdote** — one integration test per
+  optional dependency (`mcp`, `keyring`, `sentence-transformers`, Docker, `opentelemetry`,
+  `beautifulsoup4`, PyYAML), each hiding the parent package *and* any already-imported submodule,
+  building a real `Harness` around a fake provider and running a turn: the feature degrades, the
+  harness says so in one line, and the turn goes through — Phase 9
+
 ### Active
 
 <!-- This milestone. Hypotheses until shipped. -->
 
-_None — all 10 v0.6, all 8 v0.7, all 7 v0.8 and all 8 v0.9 requirements validated; v0.9 shipped
-as v0.9.0 on 2026-09-21._
+_None — all 10 v0.6, all 8 v0.7, all 7 v0.8, all 8 v0.9 and all 9 v1.0 requirements validated;
+v1.0 shipped as v1.0.0 on 2026-09-21._
 
 ### Out of Scope
 
@@ -297,23 +363,27 @@ as v0.9.0 on 2026-09-21._
 
 ## Next milestone candidates
 
-Every v0.9 candidate shipped. v0.6 made the harness usable, v0.7 made it honest, v0.8 made it
-frugal, v0.9 made it a coding agent; **v1.0** is the release milestone:
+Every v1.0 candidate shipped. v0.6 made the harness usable, v0.7 made it honest, v0.8 made it
+frugal, v0.9 made it a coding agent, and v1.0 shipped it — the harness is now complete against
+`docs/ARCHITECTURE.md`, so there is **no next milestone scoped**: what follows is a backlog, not a
+programme.
 
-- **PyPI release workflow** — a tagged release should build and publish via trusted publishing,
-  rather than the project being install-from-source only
-- **OTel exporter wiring** — spans are emitted but no exporter is configured, so nothing leaves
-  the process
-- **Trace redaction and rotation** — the flight recorder is append-only, unbounded and unredacted;
-  it should scrub secrets on write and roll over by size/age
+Post-1.0, in `docs/BACKLOG.md`:
 
-Smaller things v0.9 opened, all recorded in `docs/BACKLOG.md`: click-to-toggle tool blocks (needs a
-widget-based transcript — a `RichLog` can't host children), history *navigation* in the plain loop
-(needs `readline`), and a read/write split in the sandbox jail, since a skill root granted for
-reading is also writable today.
+- **Development Status classifier flip** — `4 - Beta` → `5 - Production/Stable` in the first
+  release after 1.0 is live on PyPI (the classifier is a claim about a published artifact)
+- **Click-to-toggle tool blocks** — needs a widget-based transcript; a `RichLog` can't host
+  interactive children
+- **History *navigation* in the plain loop** — needs `readline`, a dependency on exactly the path
+  kept dependency-free
+- **A read/write split in the sandbox jail** — a skill root granted for *reading* is writable too,
+  because `allow_paths` is one list
+- **A compaction-quality eval** — the summarizer is tested for shape, never for what it preserves
+- **Auto-sizing Ollama's `num_ctx`** to the hardware
+- **A per-turn `/cost` breakdown**
 
-Deferred further: see `docs/BACKLOG.md` § "Review findings 2026-09-19" (observability, release)
-and § "v0.7 review leftovers".
+Deferred further: see `docs/BACKLOG.md` § "Review findings 2026-09-19" and § "v0.7 review
+leftovers".
 
 ## Evolution
 
@@ -333,8 +403,8 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-21 after Phase 8 (Coding-Agent UX) — UX-01…UX-06, TOOL-01 and SKILL-01
-validated; the v0.9 Coding-Agent UX milestone is complete (1/1 phase, 8/8 requirements) and
-released as v0.9.0. The v0.8 Context & Cost milestone closed at 1/1 phase and 7/7 requirements;
-the v0.7 Trustworthy milestone at 1/1 phase and 8/8; the v0.6 Interactive milestone at 5/5 phases
-and 10/10.*
+*Last updated: 2026-09-21 after Phase 9 (Release) — OBS-01…OBS-04, PKG-01, PKG-02 and
+HARD-01…HARD-03 validated; the v1.0 Release milestone is complete (1/1 phase, 9/9 requirements)
+and released as v1.0.0. The v0.9 Coding-Agent UX milestone closed at 1/1 phase and 8/8
+requirements; the v0.8 Context & Cost milestone at 1/1 and 7/7; the v0.7 Trustworthy milestone at
+1/1 and 8/8; the v0.6 Interactive milestone at 5/5 phases and 10/10.*
