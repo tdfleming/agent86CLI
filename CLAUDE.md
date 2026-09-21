@@ -1,16 +1,41 @@
 ## Project
 
-**agent86 — Interactive Milestone (v0.6)**
+**agent86 — v1.0.0 (Release milestone, complete 2026-09-21)**
 
 agent86 is a Python agentic harness on the command line: it connects to remote or local
 models (Anthropic, OpenAI, OpenRouter, Groq, Ollama, llama.cpp) and lets them use tools,
-skills, and MCP servers. This milestone makes the interactive experience **Claude-Code-like** —
-a full-screen TUI with menus, in-CLI configuration of model connections and MCP servers, and a
-status line that stays live while a turn is processing.
+skills, and MCP servers. At **v1.0 it is complete against the contract in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — every tier, every pillar, and nothing left in
+that document's §15 "not built" table that the contract specifies as built. It is published to
+PyPI (`pip install agent86`) from a `v*` tag; see [docs/RELEASING.md](docs/RELEASING.md).
+
+One line per milestone:
+
+- **v0.6 — Interactive.** The full-screen Textual TUI became the default interactive UI, with a
+  command palette, arrow-key pickers, in-app `/config model` and `/config mcp`, keyring-backed
+  secrets, comment-preserving config write-back, and a status line live *while* a turn runs.
+- **v0.7 — Trustworthy.** What the harness reports became true: a real price table behind the
+  cost cap, provider retries with backoff, a clean abort for a failed stream, `egress = "redact"`
+  that actually redacts, sub-agent accounting, and four security fixes (SSRF, sandbox env,
+  MCP env, process-tree kill).
+- **v0.8 — Context & cost.** What the harness spends became deliberate: the conversation budgeted
+  against the model's *real* context window, summarizing compaction, `max_tokens` continuation,
+  parallel read-only tool calls, Anthropic prompt caching priced as cache, and a per-turn cost
+  line on every surface.
+- **v0.9 — Coding-agent UX.** A Markdown transcript with collapsible tool-call blocks, a
+  multi-line prompt with persistent history and `@file` mentions, named sessions with a picker,
+  exact-match `edit_file` answering with a diff, an approval prompt that shows the *change*, and
+  `allowed-tools` enforced as a gate.
+- **v1.0 — Release.** A redacted and rotated flight recorder, a real OpenTelemetry exporter
+  (spans previously went to the no-op global provider), `agent86 trace export` / `trace show`
+  filters and cost columns, PyPI packaging with a tag-driven trusted-publishing workflow, the
+  scripting contract pinned by tests, error messages that name the fix, and a degradation matrix
+  over every optional dependency.
 
 **Core Value:** The user can run, configure, and steer the agent entirely from within an interactive terminal
 app — switching models, wiring up MCP servers, and watching live progress — without hand-editing
-TOML or restarting.
+TOML or restarting; a tagged release publishes itself; and the trace is safe to leave on forever
+*and* safe to hand to someone else.
 
 ### Constraints
 
@@ -38,7 +63,8 @@ TOML or restarting.
 | **Testing** | pytest, pytest-asyncio | `tests/unit/`, `tests/integration/`, `tests/tui/` |
 | **Lint/Format** | Ruff (line-length 100) | `pyproject.toml` `[tool.ruff]` |
 | **Type-check** | mypy | Optional SDKs ignored in CI via overrides |
-| **Build** | hatchling | Console entry: `agent86` |
+| **Observability** | JSONL flight recorder + OpenTelemetry | `observability/` — redacted and rotated by default; OTel behind the `otel` extra, never the global provider |
+| **Build & release** | hatchling; `build` + `twine`; GitHub Actions | Console entry: `agent86`. A `v*` tag publishes to PyPI via trusted publishing — see `docs/RELEASING.md` |
 
 Install for dev: `uv pip install -e ".[dev]"`
 
