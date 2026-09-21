@@ -1,6 +1,6 @@
 [project]
 name = "agent86"
-version = "0.9.0"
+version = "1.0.0"
 description = "An agentic harness on the command line — connects to remote or local models and lets them use tools and skills."
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -8,7 +8,9 @@ license = { text = "MIT" }
 authors = [{ name = "Tony Fleming" }]
 keywords = ["agent", "agentic", "harness", "llm", "cli", "mcp", "tools"]
 classifiers = [
-    # Bumped to "5 - Production/Stable" once 1.0 has actually shipped to PyPI.
+    # Stays "4 - Beta" through the 1.0.0 tag: the classifier is a claim about a *published*
+    # artifact, and nothing is published at the moment a tag is cut. It flips to
+    # "5 - Production/Stable" in the first release after 1.0 is live on PyPI (docs/RELEASING.md).
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
