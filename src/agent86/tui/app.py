@@ -74,6 +74,7 @@ from agent86.tui.widgets.transcript import (
     ReplyEntry,
     TranscriptEntry,
     UserEntry,
+    compact_json,
     looks_like_markdown,
 )
 
@@ -314,11 +315,110 @@ class Agent86App(App):
         if palette.display:
             self._select_palette()
             return
-        line = event.value.strip()
+        value = event.value
         event.input.value = ""
+        self.submit_prompt(value)
+
+    # ---- hook points for the v0.9 wiring pass -------------------------------- #
+
+    def submit_prompt(self, text: str) -> None:
+        """Submit one line exactly as the prompt `Input` would.
+
+        The seam a replacement input widget calls: everything `Input.Submitted` does after
+        clearing the box lives here, so the two paths cannot drift.
+        """
+        line = text.strip()
         if not line:
             return
         self._dispatch_line(line)
+
+    def open_session_picker(self) -> None:
+        """Push the session picker, once someone builds it.
+
+        Placeholder: the screen lives in a module a parallel workstream owns, so the import is
+        lazy and a missing module is a transcript note, never a crash.
+        """
+        try:
+            from agent86.tui.screens.session_picker import (  # type: ignore[import-not-found, unused-ignore]  # noqa: E501
+                SessionPickerModal,
+            )
+        except ImportError:
+            self._write("[dim]the session picker is not available in this build[/dim]")
+            return
+        # getattr, not a module-level import: `commands.py` belongs to another workstream, and
+        # a picker with no list is still better than an AttributeError at the prompt.
+        from agent86.tui import commands as _commands
+
+        lister = getattr(_commands, "recent_sessions", None)
+        sessions = lister(self.repl) if lister is not None else None
+        self.push_screen(SessionPickerModal(sessions or ()), self._on_session_picked)
+
+    def _on_session_picked(self, choice: Any) -> None:
+        """Resolve whatever the picker hands back to an `AgentState`, then load it."""
+        if choice is None:
+            return
+        state = choice
+        if isinstance(choice, str):
+            state = self.repl.harness.resume(choice)
+            if state is None:
+                self._write(f"[dim]no session '{escape(choice)}' found[/dim]")
+                return
+        self.load_session(state)
+
+    def load_session(self, state: Any) -> None:
+        """Make `state` the live session and rebuild the transcript from its messages.
+
+        User prompts are echoed plain, assistant messages go through the Markdown path, and
+        every tool call becomes a collapsed block with its arguments and result attached.
+        """
+        self.repl.state = state
+        self._entries = []
+        self._reply = None
+        self._pending_tools = []
+        self._stream_buf = ""
+        self._stream_labelled = False
+        self.query_one("#stream", Static).update("")
+        self._entries.extend(self._entries_for(state))
+        self._rerender()
+        self.repl._refresh_status()
+        self.query_one("#status", StatusFooter).status = self.repl.status
+
+    def _entries_for(self, state: Any) -> list[TranscriptEntry]:
+        """Rebuild scrollback entries from a session's message history."""
+        entries: list[TranscriptEntry] = []
+        blocks: dict[str, ToolBlockEntry] = {}
+        for message in getattr(state, "messages", None) or []:
+            role = str(getattr(getattr(message, "role", ""), "value", getattr(message, "role", "")))
+            content = str(getattr(message, "content", "") or "")
+            if role == "user":
+                entries.append(UserEntry(content))
+            elif role == "assistant":
+                if content.strip():
+                    entries.append(
+                        ReplyEntry(
+                            text=content,
+                            markdown=self.markdown,
+                            code_theme=self._code_theme(),
+                            final=True,
+                        )
+                    )
+                for call in getattr(message, "tool_calls", None) or []:
+                    block = ToolBlockEntry(
+                        name=str(getattr(call, "name", "") or ""),
+                        args=getattr(call, "arguments", None),
+                        call_id=str(getattr(call, "id", "") or ""),
+                    )
+                    block.args_preview = compact_json(block.args)
+                    entries.append(block)
+                    if block.call_id:
+                        blocks[block.call_id] = block
+            elif role == "tool":
+                call_id = str(getattr(message, "tool_call_id", "") or "")
+                answered = blocks.get(call_id)
+                if answered is not None:
+                    first = content.strip().splitlines()
+                    answered.complete(first[0] if first else "(no output)", content, ok=True)
+        return entries
 
     # ---- line dispatch ------------------------------------------------------- #
 

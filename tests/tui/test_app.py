@@ -938,3 +938,73 @@ async def test_turn_error_renders_the_exception_type_and_message_escaped(tmp_pat
         assert "error: ValueError: bad [/x] response" in lines
         assert f"see agent86 trace show -s {repl.state.session_id}" in lines
         assert app.is_running
+
+
+async def test_submit_prompt_is_the_same_path_as_input_submission(tmp_path):
+    """The seam a replacement input widget calls — it must dispatch, not just echo."""
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        app.submit_prompt("   ")                      # blank lines are ignored
+        await pilot.pause()
+        assert app._turn_running is False
+
+        app.submit_prompt("  hi there  ")
+        await _wait_until(lambda: repl.status.working is False)
+        await pilot.pause()
+
+        lines = _plain_transcript(app)
+        assert "> hi there" in lines
+        assert "hello world" in lines
+
+
+async def test_open_session_picker_notes_a_missing_screen_instead_of_crashing(tmp_path):
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        app.open_session_picker()
+        await pilot.pause()
+
+        assert app.is_running
+        if len(app.screen_stack) == 1:                # the module isn't built yet
+            assert "session picker is not available" in _plain_transcript(app)
+        else:                                         # …or it is, and it opened
+            assert type(app.screen).__name__ == "SessionPickerModal"
+
+
+async def test_load_session_rebuilds_the_transcript_from_messages(tmp_path):
+    from agent86.types import Message, Role
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        saved = repl.harness.new_session()
+        saved.add_message(Message(role=Role.USER, content="what is in [/etc]?"))
+        saved.add_message(
+            Message(
+                role=Role.ASSISTANT,
+                content="",
+                tool_calls=[ToolCall(id="c9", name="list_dir", arguments={"path": "/etc"})],
+            )
+        )
+        saved.add_message(
+            Message(role=Role.TOOL, content="hosts\npasswd", tool_call_id="c9", name="list_dir")
+        )
+        saved.add_message(Message(role=Role.ASSISTANT, content="# Two files\n\n- alpha\n- beta"))
+
+        app.load_session(saved)
+        await pilot.pause()
+
+        assert repl.state is saved
+        lines = _plain_transcript(app)
+        assert "> what is in [/etc]?" in lines        # the echo is plain and intact
+        assert "list_dir(" in lines                   # the tool call became a block…
+        assert "passwd" not in lines                  # …collapsed to its summary line
+        assert "Two files" in lines                   # the answer rendered as Markdown
+        assert "# Two files" not in lines
+        blocks = app._tool_blocks()
+        assert len(blocks) == 1 and blocks[0].expanded is False
+        assert blocks[0].result == "hosts\npasswd"
