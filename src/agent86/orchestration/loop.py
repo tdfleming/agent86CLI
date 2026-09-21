@@ -39,7 +39,7 @@ from agent86.memory.working import (
     render_transcript,
 )
 from agent86.observability.recorder import Recorder, build_recorder
-from agent86.observability.tracing import Tracer, build_tracer
+from agent86.observability.tracing import Tracer, build_tracer, set_attributes
 from agent86.orchestration.circuit import CircuitBreaker, CircuitTripped
 from agent86.orchestration.router import ModelRouter
 from agent86.orchestration.state import AgentState, TurnSummary
@@ -207,7 +207,11 @@ class Harness:
         self.ingress = IngressGuardrail(config.guardrails.ingress)
         self.egress = EgressGuardrail(config.guardrails.egress)
         self.recorder: Recorder = build_recorder(config)
-        self.tracer: Tracer = build_tracer(config.observability.otel)
+        self.tracer: Tracer = build_tracer(
+            config.observability.otel,
+            exporter=str(config.observability.otel_exporter),
+            endpoint=config.observability.otel_endpoint,
+        )
         # Set by `cancel()` from ANOTHER thread (the TUI's main thread, while `run_turn` is
         # being driven by a worker). An Event, not a bool, so the flag is published safely
         # across threads; `run_turn` clears it as its first act.
@@ -560,10 +564,18 @@ class Harness:
         why.
         """
         self.context.clear_skill()
-        try:
-            yield from self._run_turn(user_text, state, display_text=display_text)
-        finally:
-            self.context.clear_skill()
+        # One `turn` span per user turn, parent of this turn's `model_call` and `tool_call`
+        # spans. Its closing attributes come from `state.last_turn`, which every exit path
+        # (done, cancelled, tripped, failed) stamps — so a backend sees the cost of an
+        # aborted turn too, not just a clean one.
+        with self.tracer.span(
+            "turn", **{"session.id": state.session_id, "gen_ai.request.model": self.provider.model}
+        ) as span:
+            try:
+                yield from self._run_turn(user_text, state, display_text=display_text)
+            finally:
+                self.context.clear_skill()
+                set_attributes(span, _turn_attributes(state, self.provider.model))
 
     def _run_turn(
         self, user_text: str, state: AgentState, *, display_text: str | None = None
@@ -646,7 +658,16 @@ class Harness:
             buffering = self.egress.mode == "redact"
             buffered: list[str] = []
             final_delta: CompletionDelta | None = None
-            with self.tracer.span("model_call", step=breaker.steps + 1, model=self.provider.model):
+            # GenAI semantic conventions where a name exists (`gen_ai.*`); `agent86.*` for the
+            # things the conventions have no word for, so a backend can group them anyway.
+            with self.tracer.span(
+                "model_call",
+                **{
+                    "gen_ai.system": self.provider.name,
+                    "gen_ai.request.model": self.provider.model,
+                    "agent86.step": breaker.steps + 1,
+                },
+            ) as model_span:
                 stream = self.provider.stream(self._build_request(state, recall_note))
                 try:
                     for delta in stream:
@@ -675,6 +696,7 @@ class Harness:
                     close = getattr(stream, "close", None)
                     if close is not None:
                         close()
+                    set_attributes(model_span, _model_call_attributes(completion))
 
             if self._cancel.is_set():
                 # Whatever was buffered still belongs to the user — redacted, then shown.
@@ -872,14 +894,19 @@ class Harness:
 
     def _dispatch_call(self, call, sid: str) -> ToolResult:
         """Run one approved call. Never raises — called from worker threads."""
-        try:
-            with self.tracer.span("tool_call", tool=call.name):
+        # The span wraps the error path too: a dispatch that blew up is exactly the tool call
+        # someone tracing this turn wants to find, so it must still close with `tool.ok`.
+        with self.tracer.span(
+            "tool_call", **{"tool.name": call.name, "gen_ai.tool.name": call.name}
+        ) as tool_span:
+            try:
                 result = self.registry.dispatch(call, self.context)
-        except Exception as exc:  # pragma: no cover - Tool.run already traps tool errors
-            result = ToolResult(
-                call_id=call.id, name=call.name, ok=False,
-                error=f"{type(exc).__name__}: {exc}",
-            )
+            except Exception as exc:  # pragma: no cover - Tool.run already traps tool errors
+                result = ToolResult(
+                    call_id=call.id, name=call.name, ok=False,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            set_attributes(tool_span, {"tool.ok": result.ok})
         self.recorder.event(
             sid, "tool_call", tool=call.name, ok=result.ok,
             arguments=call.arguments, error=result.error,
@@ -1122,10 +1149,52 @@ class Harness:
 
     def close(self) -> None:
         self.recorder.close()
+        # Flushes the BatchSpanProcessor: a short-lived `agent86 run` would otherwise exit
+        # with the turn's spans still sitting in the batch queue.
+        self.tracer.close()
         if self.mcp:
             self.mcp.close()
         if self.memory:
             self.memory.close()
+
+
+def _model_call_attributes(completion) -> dict[str, object]:
+    """Closing attributes for a ``model_call`` span.
+
+    Tolerant by construction: a stream that died before its final completion, or a provider
+    whose ``Usage`` lacks a field, must still close its span rather than raise inside the
+    ``finally`` that is already unwinding a failure.
+    """
+    if completion is None:
+        return {"agent86.completed": False}
+    usage = getattr(completion, "usage", None)
+    return {
+        "agent86.completed": True,
+        "gen_ai.usage.input_tokens": getattr(usage, "input_tokens", None),
+        "gen_ai.usage.output_tokens": getattr(usage, "output_tokens", None),
+        "gen_ai.response.finish_reasons": [completion.stop_reason]
+        if getattr(completion, "stop_reason", None)
+        else None,
+        "agent86.cost_usd": getattr(usage, "cost_usd", None),
+        "agent86.tool_calls": len(getattr(completion, "tool_calls", ()) or ()),
+    }
+
+
+def _turn_attributes(state: AgentState, model: str) -> dict[str, object]:
+    """Closing attributes for the ``turn`` span, read off ``state.last_turn``."""
+    summary = getattr(state, "last_turn", None)
+    if summary is None:
+        return {"gen_ai.request.model": model}
+    return {
+        "gen_ai.request.model": model,
+        "gen_ai.usage.input_tokens": getattr(summary, "input_tokens", None),
+        "gen_ai.usage.output_tokens": getattr(summary, "output_tokens", None),
+        "agent86.cost_usd": getattr(summary, "cost_usd", None),
+        "agent86.steps": getattr(summary, "steps", None),
+        "agent86.tool_calls": getattr(summary, "tool_calls", None),
+        "agent86.duration_s": getattr(summary, "duration_s", None),
+        "agent86.phase": str(getattr(state, "phase", "")) or None,
+    }
 
 
 def _preview(arguments: dict) -> str:

@@ -75,6 +75,15 @@ class EgressMode(StrEnum):
     REDACT = "redact"  # additionally rewrite secrets/PII out of the text
 
 
+class OtelExporter(StrEnum):
+    """Where OpenTelemetry spans go (``[observability] otel_exporter``). Only consulted
+    when ``otel = true`` and the ``otel`` extra is installed."""
+
+    OTLP = "otlp"  # a collector over gRPC (falls back to HTTP), honouring OTEL_* env vars
+    CONSOLE = "console"  # pretty-printed to stderr, for local debugging
+    NONE = "none"  # record spans but export nothing
+
+
 class RedactMode(StrEnum):
     """How much of an event the flight recorder is allowed to write (``[observability]
     redact``). The trace outlives the session and gets pasted into bug reports, so the
@@ -328,6 +337,10 @@ class ObservabilityConfig(BaseModel):
     trace: bool = True  # write the JSONL flight recorder
     path: str = "~/.agent86/traces"
     otel: bool = False  # emit OpenTelemetry spans (requires the 'otel' extra)
+    otel_exporter: OtelExporter = OtelExporter.OTLP
+    # Overrides OTEL_EXPORTER_OTLP_ENDPOINT when set; unset means "whatever the standard
+    # OTEL_* env vars say", which is how every other OTel-instrumented process is configured.
+    otel_endpoint: str | None = None
     # What the recorder is allowed to write. `secrets` rewrites key-shaped values and clips
     # the big free-text fields (task/arguments/content/error/outcome) to `max_field_chars`.
     redact: RedactMode = RedactMode.SECRETS
@@ -551,6 +564,7 @@ __all__ = [
     "MemoryConfig",
     "LimitsConfig",
     "ObservabilityConfig",
+    "OtelExporter",
     "UIConfig",
     "SkillsConfig",
     "MCPConfig",
