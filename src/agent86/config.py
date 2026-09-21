@@ -332,6 +332,11 @@ class ObservabilityConfig(BaseModel):
     # the big free-text fields (task/arguments/content/error/outcome) to `max_field_chars`.
     redact: RedactMode = RedactMode.SECRETS
     max_field_chars: int = 2000
+    # Rotation. The live trace is capped at `max_trace_bytes`; crossing it shifts
+    # trace.jsonl -> trace.1.jsonl ... trace.N.jsonl and drops the oldest generation.
+    # `max_trace_bytes = 0` disables rotation; `keep_traces = 0` keeps no history.
+    max_trace_bytes: int = 50_000_000
+    keep_traces: int = 5
 
     def resolved_path(self) -> Path:
         return Path(os.path.expanduser(self.path))
