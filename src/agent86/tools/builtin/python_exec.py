@@ -7,9 +7,14 @@ restricted subprocess here; Docker/WASM add stronger isolation in later phases.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from agent86.tools.base import Tool, ToolContext
+from agent86.tools.builtin.files import head_of
+from agent86.tools.builtin.shell import PREVIEW_MAX_LINES
 from agent86.types import ToolResult
 
 
@@ -20,9 +25,17 @@ class PythonExecTool(Tool["PythonExecTool.Args"]):
         "stderr, and exit code. Print results you want to see."
     )
     side_effecting = True
+    preview_lexer = "python"
 
     class Args(BaseModel):
         code: str = Field(..., description="Python source to execute. Use print() for output.")
+
+    def preview(self, arguments: Mapping[str, Any], ctx: ToolContext | None = None) -> str | None:
+        """The whole snippet: a 300-char JSON blob hides the line that matters."""
+        code = arguments.get("code")
+        if not isinstance(code, str):
+            return None
+        return head_of(code, PREVIEW_MAX_LINES)
 
     def execute(self, args: Args, ctx: ToolContext) -> ToolResult:
         executor = ctx.get_executor()

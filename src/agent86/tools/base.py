@@ -10,10 +10,10 @@ crashes the loop.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -76,6 +76,23 @@ class Tool(ABC, Generic[TArgs]):
     parallel_safe: bool = True
     #: Pydantic model describing this tool's arguments (bound to the generic ``TArgs``).
     Args: type[TArgs]
+    #: Rich lexer name for whatever ``preview`` returns ("diff", "python", "bash", …), so the
+    #: approval UI can highlight it without pattern-matching the text.
+    preview_lexer: str | None = None
+
+    def preview(self, arguments: Mapping[str, Any], ctx: ToolContext | None = None) -> str | None:
+        """Human-readable detail for the approval prompt — what this call would actually do.
+
+        Default ``None`` means "the argument summary says it all". Tools that mutate state
+        override it (``write_file``/``edit_file`` return a unified diff; ``run_command`` and
+        ``python_exec`` return the full command/code) so no side effect is ever approved
+        sight-unseen behind a truncated JSON blob.
+
+        Called with the **raw, unvalidated** arguments from the model — before ``Args``
+        validation — and with the ``ToolContext`` only when the caller has one. It must never
+        raise: return ``None`` when the arguments make no sense.
+        """
+        return None
 
     def spec(self) -> ToolSpec:
         """Advertise this tool to the model as a validated JSON-Schema function."""

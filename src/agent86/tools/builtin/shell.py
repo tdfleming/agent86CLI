@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from agent86.tools.base import Tool, ToolContext
+from agent86.tools.builtin.files import head_of
 from agent86.types import ToolResult
+
+#: A command long enough to hide something is capped, not truncated mid-token at 300 chars.
+PREVIEW_MAX_LINES = 60
 
 
 class RunCommandTool(Tool["RunCommandTool.Args"]):
@@ -15,9 +22,17 @@ class RunCommandTool(Tool["RunCommandTool.Args"]):
         "code. Runs under the sandbox: scrubbed environment, workspace cwd, and a timeout."
     )
     side_effecting = True
+    preview_lexer = "bash"
 
     class Args(BaseModel):
         command: str = Field(..., description="The shell command to execute.")
+
+    def preview(self, arguments: Mapping[str, Any], ctx: ToolContext | None = None) -> str | None:
+        """The whole command — the one thing the user must read before approving it."""
+        command = arguments.get("command")
+        if not isinstance(command, str):
+            return None
+        return head_of(command, PREVIEW_MAX_LINES)
 
     def execute(self, args: Args, ctx: ToolContext) -> ToolResult:
         result = ctx.get_executor().run(ctx.policy, shell_command=args.command)

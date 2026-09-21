@@ -156,3 +156,139 @@ def test_circuit_resets_errors_on_success():
     breaker.record_tool_result(True)  # reset
     breaker.record_tool_result(False)
     breaker.record_tool_result(False)  # only 2 in a row -> no trip
+
+
+# ---- approval previews (v0.9) ------------------------------------------ #
+
+
+def _preview_ctx(tmp_path):
+    from agent86.config import load_config
+    from agent86.tools.base import ToolContext
+    from agent86.tools.sandbox.policy import default_policy
+
+    cfg = load_config()
+    policy = default_policy(cfg, tmp_path)
+    return ToolContext(workspace=policy.workspace, policy=policy, config=cfg)
+
+
+def _ask(tmp_path, tool, arguments):
+    """Run one ASK decision and return the preview the prompt was handed."""
+    from agent86.guardrails.policy import ApprovalGate
+    from agent86.types import ApprovalMode, ToolCall
+
+    seen = {}
+
+    def prompt(name, preview):
+        seen["name"], seen["preview"] = name, preview
+        return True
+
+    gate = ApprovalGate(ApprovalMode.ASK, prompt=prompt, context=_preview_ctx(tmp_path))
+    assert gate.decide(tool, ToolCall(id="1", name=tool.name, arguments=arguments)).approved
+    return seen["preview"]
+
+
+def test_gate_preview_for_write_file_is_a_diff_of_the_real_file(tmp_path):
+    from agent86.tools.builtin.files import WriteFileTool
+
+    (tmp_path / "a.txt").write_text("one\ntwo\n", encoding="utf-8")
+    preview = _ask(tmp_path, WriteFileTool(), {"path": "a.txt", "content": "one\n2\n"})
+
+    assert preview.detail is not None
+    assert "-two" in preview.detail and "+2" in preview.detail
+    assert preview.lexer == "diff"
+    # The summary stays the one-line JSON the prompt has always shown.
+    assert preview.startswith('{"path": "a.txt"')
+
+
+def test_gate_preview_for_a_new_file_shows_its_first_lines(tmp_path):
+    from agent86.tools.builtin.files import WriteFileTool
+
+    preview = _ask(tmp_path, WriteFileTool(), {"path": "n.txt", "content": "alpha\nbeta\n"})
+    assert "new file: n.txt (2 lines)" in preview.detail
+    assert "alpha" in preview.detail
+
+
+def test_gate_preview_for_edit_file_shows_the_diff_before_it_runs(tmp_path):
+    from agent86.tools.builtin.files import EditFileTool
+
+    target = tmp_path / "a.py"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+    preview = _ask(tmp_path, EditFileTool(), {"path": "a.py", "old_string": "beta",
+                                              "new_string": "BETA"})
+
+    assert "-beta" in preview.detail and "+BETA" in preview.detail
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"  # preview never writes
+
+
+def test_gate_preview_for_edit_file_says_when_old_string_is_missing(tmp_path):
+    from agent86.tools.builtin.files import EditFileTool
+
+    (tmp_path / "a.py").write_text("alpha\n", encoding="utf-8")
+    preview = _ask(tmp_path, EditFileTool(), {"path": "a.py", "old_string": "nope",
+                                              "new_string": "x"})
+    assert "NOT found" in preview.detail
+
+
+def test_gate_preview_for_an_ambiguous_edit_names_the_count(tmp_path):
+    from agent86.tools.builtin.files import EditFileTool
+
+    (tmp_path / "a.py").write_text("x\nx\n", encoding="utf-8")
+    preview = _ask(tmp_path, EditFileTool(), {"path": "a.py", "old_string": "x",
+                                              "new_string": "y"})
+    assert "ambiguous" in preview.detail and "2 matches" in preview.detail
+
+
+def test_gate_preview_shows_the_whole_command_not_300_chars(tmp_path):
+    from agent86.tools.builtin.shell import RunCommandTool
+
+    command = "echo " + "a" * 500
+    preview = _ask(tmp_path, RunCommandTool(), {"command": command})
+
+    assert preview.detail == command  # untruncated, unlike the summary
+    assert len(preview) <= 320 and preview.endswith(" ...")
+    assert preview.lexer == "bash"
+
+
+def test_gate_preview_shows_the_whole_python_snippet(tmp_path):
+    from agent86.tools.builtin.python_exec import PythonExecTool
+
+    code = "\n".join(f"print({i})" for i in range(100))
+    preview = _ask(tmp_path, PythonExecTool(), {"code": code})
+
+    assert preview.lexer == "python"
+    assert preview.detail.count("\n") <= 60
+    assert "more lines" in preview.detail  # capped, with the elision made explicit
+
+
+def test_gate_preview_survives_a_tool_whose_preview_explodes(tmp_path):
+    from agent86.guardrails.policy import build_preview
+    from agent86.tools.builtin.files import WriteFileTool
+    from agent86.types import ToolCall
+
+    class Exploding(WriteFileTool):
+        def preview(self, arguments, ctx=None):
+            raise RuntimeError("boom")
+
+    preview = build_preview(Exploding(), ToolCall(id="1", name="write_file", arguments={"a": 1}))
+    assert preview.detail is None and preview == '{"a": 1}'
+
+
+def test_readonly_tools_are_never_previewed(tmp_path):
+    from agent86.guardrails.policy import ApprovalGate
+    from agent86.tools.builtin.files import ReadFileTool
+    from agent86.types import ApprovalMode, ToolCall
+
+    calls = []
+    gate = ApprovalGate(ApprovalMode.ASK, prompt=lambda n, p: calls.append(p) or True)
+    assert gate.decide(ReadFileTool(), ToolCall(id="1", name="read_file", arguments={})).approved
+    assert calls == []  # read-only: approved without ever reaching the prompt
+
+
+def test_preview_is_a_plain_string_to_callers_that_only_know_strings(tmp_path):
+    """The bridge, the plain loop, and every test double type this argument `str`."""
+    from agent86.guardrails.policy import ApprovalPreview
+
+    preview = ApprovalPreview('{"path": "a"}', detail="--- a\n+++ b", lexer="diff")
+    assert isinstance(preview, str)
+    assert f"{preview}" == '{"path": "a"}'
+    assert getattr(preview, "detail", None) == "--- a\n+++ b"
