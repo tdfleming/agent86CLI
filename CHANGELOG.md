@@ -6,6 +6,170 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-21
+
+The coding-agent-UX milestone. v0.8 made what the harness *spends* deliberate; v0.9 makes the
+transcript and the prompt do for a coding session what the TUI already did for a chat session. A
+finished reply renders as Markdown with syntax-highlighted code instead of arriving as its own
+source; a tool call is one collapsible line rather than two flat ones with the useful part thrown
+away; the prompt is a multi-line composer with persistent history and `@file` mentions; sessions
+have names, a listing, and a picker; `edit_file` does exact-match edits and answers with a unified
+diff; the approval prompt shows the *change*, not 300 characters of JSON; and a skill's
+`allowed-tools` is a gate rather than a comment. No breaking changes to the scripting contract:
+`run`, `run --json`, and `--plain` are unchanged.
+
+### Added
+
+- **Assistant replies render as Markdown.** The transcript wrote every reply as escaped plain
+  text, so headings, lists, tables, inline code and fenced blocks arrived as their own source. The
+  transcript widget stays a `RichLog` — append-only, cheap to stream into, and what every other
+  surface queries — but the app now keeps a *model* of the scrollback beside it: an ordered list of
+  entries, any of which may change how it renders after it was first written, replayed into the log
+  on a re-render. A reply streams in as plain escaped text (a half-written fence or table would
+  render as garbage, and re-parsing the document per delta is exactly the cost this avoids) and is
+  re-rendered as one `rich.markdown.Markdown` document when it completes — at turn end, at a
+  harness notice, or at the next tool call. Fenced code goes through `Syntax(word_wrap=True)`, so a
+  wide block wraps instead of blowing the layout, and Markdown never parses console markup, so
+  model text like `[/weird]` can neither raise `MarkupError` on the main thread nor vanish into a
+  style tag. The re-render is skipped entirely when the reply has no Markdown structure, so the
+  common short answer pays nothing. `[ui] markdown = false` turns it off. The user's own prompt
+  echo is never Markdown.
+- **Tool calls are collapsible blocks.** A call cost two flat lines — `[tool] name({...})` when it
+  started and `[tool] name -> summary` when it finished — with the arguments truncated at 160
+  characters and the result reduced to its first line. Ten calls in a turn buried the answer, and
+  what you most wanted (the full arguments, the full output) was exactly what had been thrown away.
+  One call is now one block: a dim `▸ name(args) → summary` line cropped to the terminal width,
+  expandable to the full arguments as pretty JSON and the full result text, capped at 200 lines
+  with a truncated tail. **`Ctrl+O`** toggles the last block, **`Ctrl+Shift+O`** toggles all of
+  them. The full data comes from the bridge rather than the delta lines: the loop appends the
+  assistant message (with `tool_calls`) before it announces a call and the `TOOL` message before it
+  summarises one, so `turn_bridge` looks both up in the session state and posts them with the
+  message — which also stopped result lines falling through to `TurnDelta` and reading as model
+  speech. A block is rendered when its result lands, so its header is never rewritten; its place in
+  the entry list is reserved at announce time, and a call the turn never observed is flushed at
+  turn end. Everything in a block renders through `rich.text.Text`, which is never markup-parsed.
+- **A multi-line prompt.** `tui/widgets/prompt_input.PromptInput` is a `TextArea` that keeps the
+  `Input` interface (`.value`, `.clear()`, a `Submitted` message whose `.input` aliases the
+  widget), so it drops into the app without reopening turn handling. **Enter** submits,
+  **Shift+Enter** and **Ctrl+J** insert a newline, **Up**/**Down** walk history from the first and
+  last line only (so they still move the cursor inside a draft), **Escape** clears the draft, and
+  the box grows to 8 rows before it scrolls.
+- **Persistent prompt history, shared by both surfaces.** `ui/history.PromptHistory` is a
+  Textual-free, stdlib-only record of submitted prompts following bash's rules: no blanks, no
+  lines with a **leading space**, no consecutive duplicates, capped at `[ui] history_size`, and
+  appended atomically (with a temp-file rewrite when the cap trims it). A missing, unwritable or
+  corrupt file degrades to "this session only" rather than stopping a REPL from starting. The plain
+  loop appends to the same `[ui] history_file`, so the two surfaces share one history; `_Repl.
+  history` is built lazily, so constructing a REPL never reads the user's real history file.
+- **`@path` mentions inline a file into the prompt.** `tui/mentions.expand_mentions` turns
+  `@src/app.py` — or `@"path with spaces"` — into a fenced block appended to the prompt, so a file
+  can be put in front of the model without spending a tool round trip on it. Every path goes
+  through `SandboxPolicy.resolve_within` first: a path outside the workspace jail is refused and
+  never opened — not stat'ed, not sniffed, not read. What is inlined stays bounded: `[tools]
+  mention_max_bytes` per file, at most 200 names for a directory listing, binaries refused, and a
+  fence long enough to survive backticks in the content. Refusals are surfaced to the user *and*
+  carried in the prompt, so neither side assumes a file arrived when it didn't.
+  `complete_mentions` offers up to 20 workspace-relative completions to the palette, directories
+  first, skipping `.git`/`.venv`/`node_modules`/`__pycache__`. The module imports no Textual, so
+  the plain loop expands mentions through the same seam and `--plain` pays nothing.
+- **Sessions have names, a listing, and a picker.** A session log you can't read is a log you never
+  go back to, and every past conversation was an opaque 12-character id. A session is now named
+  after the first thing the user said to it (collapsed, truncated to 60 characters), and that name
+  is what the listing, the picker and the resume note all show. `MemoryStore` gains `SessionInfo`,
+  `recent_sessions()` and `session_title()` so the UI never touches sqlite `Row`s;
+  `EpisodicMemory` exposes the same listing (recall answers "what happened in a turn like this";
+  this answers "what were we working on"). **`/sessions`** prints the recent sessions with the
+  active one highlighted, and **`/resume [id]`** loads one — accepting the 8-character prefix the
+  listing actually shows, and refusing an ambiguous prefix rather than guessing. `/resume` with no
+  argument opens `SessionPickerModal`: a filter `Input` over an `OptionList`, shaped like
+  `CatalogPickerModal`. Titles are user text, so options are built as Rich `Text` and the table
+  escapes them.
+- **`edit_file` does exact-match edits and answers with a diff.** It is the tool a coding agent
+  lives in, and the old one answered "Edited a.py." — no diff, no match count, and a whole-file
+  rewrite through `read_text`/`write_text` that silently converted a CRLF file's line endings and
+  dropped its BOM. The arguments are now `path`, `old_string`, `new_string`, `replace_all` (the
+  pre-v0.9 `old`/`new` names still work as aliases, so an older transcript does not hard-fail), and
+  a refusal names the count and the way out: "0 matches … copy the text verbatim", "3 matches …
+  add context, or pass `replace_all=true`". The file is decoded and re-encoded by the tool itself —
+  BOM detected and restored, CRLF normalised for matching and written back as CRLF, a mixed file
+  left verbatim, and a non-UTF-8 file refused rather than mangled by an `errors="replace"` round
+  trip. Both mutations answer with a unified diff (also in `metadata["diff"]`), and `write_file`
+  says "new file, N lines" when there was nothing to diff. `unified_diff_for()`, `head_of()` and
+  `read_file_text()` are shared helpers.
+- **The approval prompt shows what the side effect does.** The ASK gate handed the prompt a
+  300-character JSON dump of the arguments, so a `write_file` whose content ran past that cap — or
+  any `edit_file` at all — was approved sight-unseen; the user was answering "do you trust this
+  tool name?", not "do you want this change?". `Tool.preview(arguments, ctx)` is new on the ABC
+  (default `None`): `write_file` and `edit_file` return a unified diff against the file on disk
+  (and say so when `old_string` is missing or ambiguous, naming the count), `run_command` and
+  `python_exec` return the whole command or snippet capped at 60 lines instead of truncated
+  mid-token. It is called with the raw, unvalidated arguments and must never raise —
+  `build_preview` swallows and logs it if it does. `ApprovalPreview` is a `str` subclass carrying
+  `detail`/`lexer`, so the `(tool_name, preview) -> bool` contract every caller implements keeps
+  working untouched while a caller that knows about the detail renders it. The TUI modal shows the
+  detail in a scrollable `rich.syntax.Syntax` panel (never as console markup — a diff is full of
+  `[`) and takes `y`/`n` alongside `escape`. The plain loop prompts `y/N` with the same diff when
+  stdin is a TTY; `run` without `--yes` still declines, unchanged.
+- **The Agent Skills convention, with `allowed-tools` enforced.** Discovery now matches the
+  convention skills are actually written to. Frontmatter: the closing delimiter is a `---` on its
+  own **line** (splitting on the next three hyphens anywhere truncated any skill whose body had a
+  horizontal rule); block scalars (`>` folded, `|` literal), quoted values, and inline and block
+  lists are understood; PyYAML is used when it happens to be installed and a built-in mini parser
+  covers the same ground when it is not, because a skill must never need a dependency (both paths
+  are tested); `allowed-tools` is **space-delimited** per the convention, with commas, brackets and
+  YAML lists tolerated; `license` and `metadata` are carried. Discovery searches project
+  `.agent86/skills` → project `.claude/skills` → user `~/.agent86/skills` → `~/.claude/skills` →
+  `[skills] paths`, **first root wins**, so a project skill shadows a user skill and nothing
+  shadows the project; project roots resolve against an explicit `workspace` rather than the CWD.
+  `skill_roots()` feeds `default_policy`, so a skill's bundled resources — which for a user skill
+  live outside the workspace — are readable instead of a jail error on the first "see
+  reference.md". Enforcement: `use_skill` records the skill on `ToolContext` and
+  `ToolRegistry.dispatch` refuses anything outside a non-empty `allowed-tools`, naming the skill
+  and the list so the model can re-plan rather than retry. `use_skill` itself is always callable (a
+  skill that forgot to list it would be a one-way door), activating another skill replaces the
+  restriction, and `clear_skill()` lifts it at the end of every turn. The system prompt lists each
+  skill's `allowed-tools`, so the restriction is known before a refusal costs a step.
+- **New config fields**: `[ui] history_file` (`~/.agent86/history`), `[ui] history_size` (1000),
+  `[ui] markdown` (`true`), and `[tools] mention_max_bytes` (200000).
+
+### Changed
+
+- **A failed turn names the exception and points at the trace.** The line rendered as
+  `error: <str(exc)>`, which for a wrapped provider failure says what went wrong but never what
+  raised it, and left no way to get at the rest. It now leads with the exception **type**, keeps
+  the message (escaped), and is followed by a dim hint naming the command that has the whole story:
+  `see agent86 trace show -s <session>`.
+- **Harness notices are transcript entries, not raw writes.** `[compacted …]` and `[continuing …]`
+  are still dim and still set apart from model speech, but they are now `NoticeEntry` objects like
+  everything else in the scrollback — before this they would have been dropped by the first
+  re-render.
+- **The approval gate takes an optional tool context.** `ApprovalGate(..., context=)` is
+  preview-only; without it the file previews resolve against the CWD, which is the default
+  workspace.
+- **`MemoryStore.save_session`'s title semantics are documented and enforced**: `None` keeps the
+  existing name, a title given wins. `Harness._persist` names a session **once** — on the first
+  persist that has a user message to name it after — and asks the store first, so a compaction that
+  drops the opening message can't silently rename the conversation.
+- **The TUI app dispatches every prompt through one path.** `submit_prompt(text)` is everything
+  `Input.Submitted` did after clearing the box, so a replacement input widget has exactly one seam;
+  `open_session_picker()` pushes the picker lazily and guarded; and `load_session(state)` makes a
+  state live and rebuilds the transcript from its messages — prompts echoed plain, assistant turns
+  through the Markdown path, and every tool call a collapsed block with its arguments and result
+  attached.
+
+### Fixed
+
+- **`SessionPickerModal` no longer needs a session list to construct.** A required parameter made
+  `SessionPickerModal()` a `TypeError` at runtime and a mypy failure in a file the workstream must
+  not touch; it now defaults to an empty sequence, giving such a caller an honest "no saved sessions
+  yet" picker while real callers pass `tui.commands.recent_sessions(repl)`.
+- **A skill whose body contains a horizontal rule is no longer truncated.** Frontmatter parsing
+  split on the next three hyphens *anywhere* in the file rather than on a `---` line of its own.
+- **`edit_file` and `write_file` stop rewriting a file's encoding.** A CRLF file came back with LF
+  line endings and a BOM was dropped, both silently, because the tool round-tripped through
+  `read_text`/`write_text`. Line endings and the BOM are now preserved, a mixed file is left
+  verbatim, and a non-UTF-8 file is refused rather than mangled.
+
 ## [0.8.0] - 2026-09-19
 
 The context-and-cost milestone. v0.7 made what the harness *reports* true; v0.8 makes what it
@@ -828,6 +992,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[0.9.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.9.0
 [0.8.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.8.0
 [0.7.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.7.0
 [0.6.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.6.0
