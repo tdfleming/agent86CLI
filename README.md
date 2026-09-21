@@ -12,26 +12,33 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Status
 
-**v0.8.0 — the full harness, a full-screen interactive TUI, cloud providers, remote MCP, a cost
-meter and security posture you can trust, and a context window spent deliberately.** A five-tier
-agentic harness that runs on remote or local models and uses tools, skills, MCP servers, and
-sub-agents. Every pillar and tier from *The Agentic Harness* is implemented, tested (860+ tests),
-and verified live against a local model.
+**v0.9.0 — the full harness, a full-screen interactive TUI that works like a coding agent, cloud
+providers, remote MCP, a cost meter and security posture you can trust, and a context window spent
+deliberately.** A five-tier agentic harness that runs on remote or local models and uses tools,
+skills, MCP servers, and sub-agents. Every pillar and tier from *The Agentic Harness* is
+implemented, tested (1079 tests), and verified live against a local model.
 
 | Tier / Pillar | What's there |
 |---|---|
 | **Tier 1 Gateway** | the CLI/TUI entry point + input sanitization (session lifecycle lives in `orchestration/`) |
 | **Tier 2 Orchestration** (Pillar 1) | ReAct loop, FSM state, dynamic routing, circuit breakers |
 | **Tier 3 Cognitive** | Anthropic · OpenAI-compatible (incl. built-in OpenRouter & Groq) · Ollama · llama.cpp/LM Studio; prompt compilation; token budgeting |
-| **Tier 4 Tools** (Pillar 3) | built-ins (files, shell, python, web) + memory/skill/delegate + MCP (stdio · SSE · streamable HTTP); **subprocess or Docker** sandbox |
+| **Tier 4 Tools** (Pillar 3) | built-ins (`read_file` · `write_file` · **`edit_file`** · `list_dir` · `run_command` · `python_exec` · `web_fetch`) + memory/skill/delegate + MCP (stdio · SSE · streamable HTTP); **subprocess or Docker** sandbox |
 | **Tier 5 Guardrails/Obs** (Pillar 4) | ingress/egress scanning, HITL approvals, circuit breakers, flight recorder, OpenTelemetry |
 | **Pillar 2 Memory** | working + episodic + semantic (SQLite + sqlite-vec), session persistence, automatic retention/pruning |
 | **Multi-agent** | sub-agents via `delegate`, message envelopes, broker, supervisor orchestrator |
-| **Interactive TUI** | full-screen Textual app: scrollable transcript, live status footer, slash-command palette, arrow-key pickers, approval modal, in-app `/config model` + `/config mcp`; plain fallback for any terminal |
+| **Interactive TUI** | full-screen Textual app: Markdown transcript, collapsible tool-call blocks, multi-line prompt with persistent history and `@file` mentions, session picker, live status footer, slash-command palette, arrow-key pickers, diff-showing approval modal, in-app `/config model` + `/config mcp`; plain fallback for any terminal |
+| **Skills** (Pillar 3) | the Agent Skills convention — `SKILL.md` frontmatter, progressive disclosure, a five-root search order, and `allowed-tools` enforced as a gate for the turn |
 | **Context & cost** | the conversation budgeted against the model's **real** context window, summarizing compaction of the oldest span, `max_tokens` continuation, parallel read-only tool calls, Anthropic prompt caching, cache-aware pricing, and a per-turn cost line |
 | **Cost & resilience** | real per-model price table + `[pricing.models]` overrides (`limits.max_cost_usd` actually trips), retries with backoff on transient provider failures, sub-agent spend rolled into the session total |
 | **Security** | `web_fetch` SSRF guard, cross-platform sandbox env allowlist, MCP stdio env scrubbing, process-tree kill on timeout |
 
+New in v0.9 — the **coding-agent UX** pass: a finished reply renders as Markdown with
+syntax-highlighted code, each tool call folds into one expandable line, the prompt is a multi-line
+composer with persistent history and `@file` mentions, sessions have names and a picker,
+`edit_file` does exact-match edits and answers with a unified diff, the approval prompt shows the
+*change* rather than 300 characters of JSON, and a skill's `allowed-tools` is a real gate (see
+[Interactive TUI](#interactive-tui) and [Skills](#skills)).
 New in v0.8 — the **context & cost** pass: the conversation is budgeted against the model's real
 context window instead of a flat 8000 tokens, the span that no longer fits is *summarized* rather
 than forgotten, an answer truncated at the output cap continues instead of stopping mid-sentence,
@@ -75,7 +82,7 @@ frontier = "anthropic:claude-opus-4-8"
 ## Interactive TUI
 
 Running `agent86` with no subcommand opens a full-screen [Textual](https://textual.textualize.io)
-app: a scrollable transcript, a prompt input, and a footer status bar that stays **live while a
+app: a Markdown transcript, a multi-line prompt, and a footer status bar that stays **live while a
 turn runs** — active model, a context gauge measured against the window the harness actually
 budgets against, `tok <in>/<out>` (plus `(1.9k cached)` once a session has prompt-cache traffic),
 session cost, sandbox and approval mode, and the current phase. Turns execute on a worker thread,
@@ -97,15 +104,110 @@ of demanding a typed argument:
 ```
 /help    /config    /config model    /config mcp    /models    /model <provider:model>
 /tools   /skills    /memory          /mode [ask|auto|deny]     /cost    /clear    /exit
+/sessions          /resume [id]
 ```
 
 | Key | What it does |
 |---|---|
-| `Escape` | dismiss the palette; otherwise cancel the running turn |
+| `Enter` | submit the prompt |
+| `Shift+Enter` / `Ctrl+J` | insert a newline instead of submitting |
+| `↑` / `↓` | walk the prompt history (from the first/last line); move through the palette or a picker |
+| `Escape` | clear the draft; dismiss the palette; otherwise cancel the running turn |
+| `Ctrl+O` | expand/collapse the **last** tool-call block |
+| `Ctrl+Shift+O` | expand/collapse **every** tool-call block |
 | `Ctrl+C` | cancel the running turn; quit if none is running (or on a second press) |
 | `Ctrl+Q` | quit |
 | `Shift+Tab` | cycle the approval mode (`ask` → `auto` → `deny`) live |
-| `↑` / `↓` | move through the palette or a picker |
+
+### The transcript
+
+A finished reply is re-rendered as **Markdown** — headings, lists, tables, inline code, and fenced
+blocks with syntax highlighting — rather than arriving as its own source. It *streams* as plain
+escaped text (a half-written fence or table renders as garbage, and re-parsing the document on
+every delta is exactly the cost this avoids) and is re-parsed once when the reply completes. A
+reply with no Markdown structure is left alone, so a short answer pays nothing. `[ui] markdown =
+false` turns it off.
+
+A tool call is **one collapsible block** rather than two flat lines with the interesting part
+truncated away:
+
+```
+▸ read_file({"path": "src/agent86/tui/app.py"}) → 1284 lines
+```
+
+`Ctrl+O` expands the last block, `Ctrl+Shift+O` expands them all, to the full arguments as pretty
+JSON and the full result text (capped at 200 lines with a truncated tail). The data comes from the
+session state, not from the display lines, so nothing you might want was thrown away on the way in.
+Toggling is keyboard-driven rather than click-driven — see the note in `docs/BACKLOG.md`.
+
+A turn that fails names the exception **type**, keeps its message, and tells you where the rest is:
+
+```
+error: ProviderError: stream ended without a stop reason
+  see agent86 trace show -s 0f3a91c2
+```
+
+### The prompt
+
+The prompt is a multi-line composer. **Enter** submits; **Shift+Enter** and **Ctrl+J** add a
+newline; the box grows to 8 rows before it scrolls; **Escape** clears the draft. **Up**/**Down**
+walk a **persistent history** — kept in `[ui] history_file`, capped at `[ui] history_size`, and
+shared with the plain loop, which appends to the same file. History follows bash's rules: blanks,
+consecutive duplicates, and any line typed with a **leading space** are not recorded. A missing or
+unwritable history file degrades to "this session only" rather than refusing to start.
+
+**`@file` mentions** put a file in front of the model without spending a tool round trip on it:
+
+```
+what does @src/agent86/tui/app.py do with @"docs/ARCHITECTURE.md"?
+```
+
+Each path is resolved **inside the workspace jail** before anything is opened — a path outside it
+is refused and never read, not even stat'ed — then inlined as a fenced block appended to the
+prompt. A directory is listed (up to 200 names) instead of read; binaries are refused; a file over
+`[tools] mention_max_bytes` is refused with a note telling the model to read it with a tool
+instead. Refusals are shown to you *and* carried in the prompt, so neither side assumes a file
+arrived when it didn't. The palette completes `@` paths as you type (directories first,
+`.git`/`.venv`/`node_modules`/`__pycache__` skipped). Mentions work in `--plain` too.
+
+### Sessions
+
+Sessions are named after the first thing you said to them (truncated to 60 characters), so the
+history is readable rather than a wall of 12-character ids:
+
+```
+/sessions          # recent sessions, the active one highlighted
+/resume 0f3a91c2   # by id, or the 8-character prefix the listing shows
+/resume            # arrow-key picker with a type-to-filter box
+```
+
+An ambiguous prefix is refused rather than guessed at. Resuming rebuilds the transcript from the
+session's messages — prompts plain, replies through the Markdown path, and every tool call a
+collapsed block with its arguments and result attached.
+
+### Approving a change
+
+In `ask` mode a side-effecting tool raises a modal showing **what the call does**, not just its
+name and 300 characters of JSON. `write_file` and `edit_file` render a unified diff against the
+file on disk (syntax-highlighted, scrollable, and never parsed as console markup — a diff is full
+of `[`); `run_command` and `python_exec` show the whole command or snippet, capped at 60 lines
+rather than truncated mid-token. `y`/`n` answer it, as does `Escape`.
+
+The plain loop asks the same question at the terminal with the same diff when stdin is a TTY:
+
+```
+edit_file wants to run:
+--- src/agent86/config.py
++++ src/agent86/config.py
+@@ -156,6 +156,7 @@
+     web_allow_private: bool = False
++    mention_max_bytes: int = 200_000
+Approve? [y/N]
+```
+
+`agent86 run` without `--yes` is non-interactive and still declines, unchanged.
+
+### Configuring from inside the app
 
 **`/config model`** walks the whole provider setup in-app: a provider manager lists what's
 configured, a type-to-filter catalog picker browses the provider's live model list (with a
@@ -121,13 +223,23 @@ the server's tools are mounted into the running session **without a restart**.
 Both write through a comment-preserving TOML writer, defaulting to user scope
 (`~/.agent86/config.toml`) with a project-scope option.
 
-**Plain mode.** `--plain`, `AGENT86_PLAIN=1`, or a non-TTY stdin/stdout runs the dependable
-stdlib `input()` loop instead — same slash-commands (they share one registry), no full-screen
-app. `run` and `run --json` are unaffected and never import Textual.
+### Plain mode
+
+`--plain`, `AGENT86_PLAIN=1`, or a non-TTY stdin/stdout runs the dependable stdlib `input()` loop
+instead — same slash-commands (they share one registry), no full-screen app. It shares the TUI's
+prompt history file, expands `@path` mentions through the same module, and asks for approval with
+the same diff; what it doesn't have is a line editor, so history is append-only there (see
+`docs/BACKLOG.md`). `run` and `run --json` are unaffected and never import Textual.
 
 ```toml
 [ui]
-tui = true       # false forces the plain loop (pre-v0.6 `status_line` is still accepted)
+tui          = true                  # false forces the plain loop (pre-v0.6 `status_line` works too)
+markdown     = true                  # re-render a finished reply as Markdown in the transcript
+history_file = "~/.agent86/history"  # shared by the TUI and the plain loop
+history_size = 1000                  # entries kept; the oldest are dropped past the cap
+
+[tools]
+mention_max_bytes = 200_000          # largest file an `@path` mention may inline
 ```
 
 ## Configuring model providers
@@ -215,6 +327,71 @@ Set exactly one of `command` (stdio) or `url` (sse/http); `transport` is inferre
 given explicitly (`stdio` | `sse` | `http`). Add `enabled = false` to keep a server configured but
 unmounted. Inspect with `agent86 mcp list` and `agent86 mcp tools`. Requires the `mcp` extra
 (`pip install -e ".[mcp]"`).
+
+## Skills
+
+A skill is a folder with a `SKILL.md` in it: YAML frontmatter the harness reads, and a body of
+instructions the model loads **on demand**. Only each skill's `name` and `description` sit in the
+system prompt; the full instructions arrive when the model calls `use_skill`, so a dozen skills
+cost a dozen lines of context rather than a dozen documents.
+
+```
+.agent86/skills/release-notes/
+├── SKILL.md          # frontmatter + instructions
+└── reference.md      # resources the skill may point at
+```
+
+```markdown
+---
+name: release-notes
+description: >
+  Draft the CHANGELOG entry for a release from the commit range,
+  grouped Added / Changed / Fixed.
+allowed-tools: run_command read_file edit_file
+---
+
+1. `git log --stat <base>..HEAD` for the range.
+2. Group by workstream, not by commit order.
+...
+```
+
+Frontmatter follows the **Agent Skills convention**: the closing delimiter is a `---` on its own
+line (so a horizontal rule in the body no longer truncates the skill), block scalars (`>` folded,
+`|` literal), quoted values, and inline or block lists all parse. PyYAML is used when it happens to
+be installed and a built-in mini parser covers the same ground when it is not — a skill must never
+need a dependency. `license` and `metadata` are carried through.
+
+**Search order** — first root wins, so a project skill shadows a user skill and nothing shadows the
+project:
+
+| # | Root | Scope |
+|---|---|---|
+| 1 | `./.agent86/skills` | project |
+| 2 | `./.claude/skills` | project |
+| 3 | `~/.agent86/skills` | user |
+| 4 | `~/.claude/skills` | user |
+| 5 | `[skills] paths` | extra directories from config |
+
+Project roots resolve against the workspace, not the process CWD. Every existing root is also
+granted to the sandbox policy, so a skill's bundled resources — which for a user skill live outside
+the workspace — are readable instead of a jail error on the first "see `reference.md`".
+
+**`allowed-tools` is a gate, not a comment.** While a skill is active, `ToolRegistry.dispatch`
+refuses any tool outside a non-empty `allowed-tools`, naming the skill and the list so the model
+can re-plan rather than retry. The list is **space-delimited** per the convention (commas,
+brackets, and YAML lists are tolerated). `use_skill` itself is always callable — a skill that
+forgot to list it would be a one-way door — activating another skill replaces the restriction, and
+the restriction is lifted at the end of every turn. The system prompt names each skill's
+`allowed-tools`, so the model knows the boundary before a refusal costs it a step.
+
+```toml
+[skills]
+enabled = true
+paths   = ["/opt/shared-skills"]   # searched after the four conventional roots
+```
+
+Inspect what's discovered with `agent86 skills list` / `agent86 skills show <name>`, or `/skills`
+in the app.
 
 ## Context management
 
