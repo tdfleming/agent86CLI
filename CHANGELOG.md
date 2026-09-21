@@ -6,6 +6,178 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-21
+
+The release milestone. v0.6 made the harness usable, v0.7 made what it reports true, v0.8 made
+what it spends deliberate, and v0.9 made it usable for code; **1.0 marks it complete against the
+contract in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — every tier and every pillar
+implemented, and the last three rows of §15's "described above, deliberately not built" table
+closed: a configured OpenTelemetry exporter, a redacted and rotated flight recorder, and a real
+distribution. The trace is now safe to leave on forever *and* safe to paste into a bug report;
+spans reach a collector instead of the floor; `pip install agent86` replaces a git clone; and a
+tagged release builds, verifies and publishes itself with no API token stored in the repository.
+The scripting contract is unchanged — and is now pinned by tests that say exactly what it is.
+
+### Added
+
+- **The flight recorder redacts what it writes.** Everything the harness sees flowed through an
+  append-only file under `~/.agent86/traces` that nothing pruned for content: the user's task
+  text, the model's tool arguments, and whatever a tool happened to read off disk. A key pasted
+  into a prompt, or a `.env` a tool `cat`-ed, landed there in plain text, in a file that outlives
+  the session and gets attached to bug reports. `observability/redact.redact_event` is now the one
+  gate between an event and the file. Every string, at any depth, is rewritten against the *same*
+  regexes the guardrail tier already uses — `guardrails/scanners.py` for the provider key shapes
+  and credential assignments, `secrets.py` for the key-shaped-token catch-all, imported rather
+  than re-spelled, so there is one place to fix when a provider invents a new prefix — and a match
+  becomes a deliberately loud `***REDACTED***`. The big free-text fields (`arguments`, `task`,
+  `content`, `error`, `outcome`, and anything nested inside them, because the model chooses those
+  key names and we cannot enumerate them) are clipped to `[observability] max_field_chars` with a
+  visible `…[truncated N chars]` marker, so a tool that returned a 40 MB file does not become
+  40 MB of trace. It never raises: a value that cannot be walked falls back to `str()`, and a
+  redaction failure degrades to the untouched event, because a trace that drops events is worse
+  than a trace with a long line in it. `[observability] redact = "none"` is the explicit,
+  local opt-out.
+- **The flight recorder rotates.** The live file is capped at `[observability] max_trace_bytes`
+  (50 MB); crossing it shifts `trace.jsonl` → `trace.1.jsonl` … `trace.N.jsonl` and drops the
+  oldest generation past `[observability] keep_traces` (5). Rotation happens *between* events —
+  flush, then rename — so no event is ever half-written, and the rename retries briefly on
+  Windows, where another process holding the file open (a tail, an editor, a virus scanner) fails
+  it with `PermissionError`; giving up is safe, since the writer just keeps appending and tries
+  again at the next crossing. `max_trace_bytes = 0` disables rotation. Reading back streams rather
+  than slurping: `read_events` keeps at most `limit` records in memory, and `trace_generations`
+  walks the rotated files newest-first when the tail of the live file does not hold enough
+  matching events — so `trace show --kind tool_call -n 50` really shows fifty tool calls rather
+  than whatever few survive the last fifty events of any kind.
+- **A real OpenTelemetry exporter.** `otel = true` used to call `trace.get_tracer`, which returns
+  a handle on the **no-op** global provider unless something else in the process has already
+  installed one — so with the extra installed and the switch on, spans were created and dropped on
+  the floor. The tracer now builds its own `TracerProvider`: a `Resource` carrying
+  `service.name = "agent86"` and `service.version`, an exporter chosen by
+  `[observability] otel_exporter` (`otlp` over gRPC, falling back to HTTP when only the HTTP
+  exporter is installed; `console` to stderr for local debugging; `none` to record without
+  exporting), and a `BatchSpanProcessor` flushed by `Harness.close()`. The standard
+  `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` are honoured — the exporters read
+  them themselves, which is how every other instrumented process is configured — and
+  `[observability] otel_endpoint` overrides them when config, not environment, is the source of
+  truth. The provider is deliberately **not** installed as the global one: agent86 can be
+  imported inside a host that owns its own tracing, and stealing the global provider from it would
+  be a side effect of an import. Every failure path is swallowed onto `Tracer.note` — a missing
+  collector, a missing extra, a broken exporter — so the degradation is "no traces", never "no
+  agent", and the surface can say *why*. Nothing imports `opentelemetry` at module scope.
+- **A span tree worth exporting.** A turn is one `turn` span carrying `session.id` and
+  `gen_ai.request.model`, with a `model_call` child per provider call (`gen_ai.system`,
+  `gen_ai.request.model`, `gen_ai.usage.input_tokens` / `output_tokens`,
+  `gen_ai.response.finish_reasons`) and a `tool_call` child per execution (`tool.name`,
+  `gen_ai.tool.name`) — GenAI semantic conventions where a name exists, `agent86.*` where one
+  doesn't.
+- **`agent86 trace export`.** The recorder's own events, filtered and written somewhere useful:
+  `-s/--session` for one session, `-n/--limit`, `--since 2h`, `-o/--out` to write a file instead
+  of stdout, and `-f/--format` choosing `jsonl` (the filtered events), `json` (one array), or
+  **`otlp-json`** — a span tree reconstructed from the recorder's own `turn_start` / `turn_end` /
+  `model_call` / `tool_call` events into the OTLP JSON shape, so a trace captured with no
+  collector running can still be handed to one afterwards. Span ids are derived rather than
+  random, so exporting the same trace twice produces the same output.
+- **`agent86 trace show` filters, and says what the turn cost.** `-k/--kind` (repeatable) selects
+  event kinds and `--since 30m|2h|7d` selects a window, both applied *before* the limit. The table
+  gains `in` / `out` / `cost` columns — filled only on a `model_call`, where they are meaningful —
+  and a totals line underneath: `N in / N out tokens, $X across N event(s)`.
+- **PyPI-ready packaging.** Full metadata — classifiers (audience, OS, Python 3.11/3.12/3.13,
+  topics, `Typing :: Typed`), keywords, an explicit `license`, and the `[project.urls]` block
+  (Homepage, Repository, Documentation, Changelog, Issues) — plus the **MIT `LICENSE` file** the
+  metadata had always claimed. The sdist is an allowlist (source, `README.md`, `CHANGELOG.md`,
+  `LICENSE`, `docs/ARCHITECTURE.md`) and development scaffolding — `.github`, `.planning`,
+  `.claude`, `tests`, caches — is excluded from both artifacts. `build` and `twine` join the `dev`
+  extra.
+- **`tests/packaging/`** — tests that assert the *built artifact*, not the source tree: the wheel's
+  contents and metadata, the version equality between `pyproject.toml` and `agent86.__version__`,
+  and the `agent86` console entry point actually running from a throwaway venv the wheel was
+  installed into. They build real distributions, so they carry a `packaging` marker and are
+  excluded from the default run (`addopts = "-m 'not packaging'"`); CI runs them in a dedicated
+  `package` job on Ubuntu **and** Windows, and the release workflow runs them against the
+  artifacts it is about to publish.
+- **A release workflow.** Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`:
+  `scripts/check_release.py` first and fail-fast (the tag, `project.version` and
+  `agent86.__version__` all name the same version; `CHANGELOG.md` has a `## [<version>]` section
+  with a body; `## [Unreleased]` is empty), then `uv build`, `twine check`, the packaging tests,
+  **trusted publishing** to PyPI through the `pypi` environment — OIDC, so no API token is stored
+  in this repository — and finally a GitHub Release whose body is that version's CHANGELOG
+  section, extracted by `scripts/changelog_section.py` (which shares the parser with the
+  pre-flight, so the check and the extraction cannot disagree). `workflow_dispatch` runs the same
+  pipeline against **TestPyPI**, so the publish path can be rehearsed without burning a version
+  number on PyPI, where a filename can never be reused. The procedure, and the one-time
+  trusted-publisher setup, are written down in **[docs/RELEASING.md](docs/RELEASING.md)**.
+- **The scripting contract, pinned by tests.** `tests/integration/test_scripting_contract.py`
+  states what a script or a CI job is allowed to depend on and fails if it changes:
+  `run --json` writes **one** JSON object with the keys `session_id`, `output`, `steps`, `usage`
+  and `turn` (new keys may be added; these five may never be removed or renamed); the egress
+  guardrail applies to that JSON as much as to streamed text; a provider failure is exit code 1
+  with the message on **stderr** and nothing on stdout, so `run … > out.json` never leaves a
+  half-file that parses as success; piped and without `--yes`, side-effecting tools are declined;
+  `--session` continues rather than starting fresh; `--plain` never imports Textual; and the
+  read-only inspection commands work on a machine with no config and no keys.
+- **Smoke tests and a cold-start budget.** Every command surface is started in a *real*
+  subprocess under a temp HOME with no config and no API keys — the state a first-time user or a
+  CI runner is actually in — with a deliberately absolute bar: exit 0, no traceback. Alongside
+  them, `run` and `--plain` are held to their import contract (`textual`, `keyring`, `tomlkit`,
+  `opentelemetry`, `torch` never appear in the import graph) and to a wall-clock cold-start
+  budget. The import-graph half is deterministic and always runs; `AGENT86_SKIP_PERF=1` skips the
+  wall-clock half on a slow or loaded runner.
+- **A degradation matrix.** One integration test per optional dependency — `mcp`, `keyring`,
+  `sentence-transformers`, Docker, `opentelemetry`, `beautifulsoup4`, PyYAML — each hiding it (the
+  parent package *and* any already-imported submodule, so a cached `opentelemetry.sdk.trace`
+  cannot sneak the import back in), building a real `Harness` around a fake provider, and running
+  a turn. The rule is the same every time: the feature degrades, the harness says so in a one-line
+  note, and the turn goes through.
+- **New config fields**: `[observability] otel_exporter` (`"otlp"`), `otel_endpoint` (`None`),
+  `redact` (`"secrets"`), `max_field_chars` (2000), `max_trace_bytes` (50,000,000) and
+  `keep_traces` (5). All six are additive with defaults; an existing config keeps working, and
+  starts getting a redacted, bounded trace for free.
+
+### Changed
+
+- **Errors say what to do next.** An audit of the user-facing failure paths found three that
+  reached the user as a Rich traceback rather than a sentence, and several that named a symptom
+  without naming a fix. A malformed `--model` ref fails in `ModelRef.parse` with a `ValueError`
+  *before* any provider exists, so `run` and `run_repl` now catch it alongside `ProviderError`; a
+  config file that does not parse used to break every command, including the `config path` one
+  would run to find the file, and is now a message naming the file and the fallback; and every
+  model failure ends with the same next step — run `agent86 models`, then `--model
+  provider:model`. Memory-disabled, no-MCP-servers and unknown-skill each name the config key or
+  command that changes them. Missing-key messages continue to name the environment **variable**
+  and never its value, and a test now holds `agent86 models` to that.
+- **`Harness.run_turn` takes `display_text`.** The model gets the expanded prompt — `@file`
+  mentions and all — while the trace's `turn_start` records the line the user actually typed. The
+  parameter is keyword-only and defaults to the expanded text, so every existing caller is
+  unaffected.
+- **`Development Status` stays `4 - Beta` until 1.0 is on PyPI.** The classifier is a claim about
+  a *published* artifact, and nothing is published at the moment the tag is cut; it flips to
+  `5 - Production/Stable` in the first release after the first successful publish. The comment
+  above it in `pyproject.toml` says so.
+
+### Fixed
+
+- **A session is titled after what you typed, not after the file you attached.** A prompt whose
+  first line was short and whose body was an inlined `@file` block named the session after the
+  file's contents — 60 characters of somebody's `config.toml` — because `run_turn` only ever saw
+  the expanded text. The typed line now flows through as `display_text` and is what titles the
+  session and what the trace records; the model still receives the expansion.
+- **A memory database that will not open no longer refuses to start the harness.** A locked file
+  (a second agent86 running) or an unwritable home raised a bare `sqlite3` error several frames
+  deep. `MemoryStoreError` now names the file and offers all three fixes, and the harness
+  **degrades to no memory with a visible note** rather than declining to run.
+- **The recorder's file handle is annotated**, so `mypy` no longer infers it from the first
+  assignment and rejects the rotation path.
+
+### Security
+
+- **Secrets no longer reach the trace file.** This is the substantive security change in 1.0: the
+  flight recorder was the one place in the harness where a credential could come to rest in plain
+  text on disk without anyone choosing to put it there, and `redact = "secrets"` is the default
+  rather than the opt-in.
+- **No publishing credential lives in this repository.** The release workflow uses PyPI trusted
+  publishing (OIDC) through GitHub environments, so there is no long-lived API token to leak,
+  rotate, or scope wrongly.
+
 ## [0.9.0] - 2026-09-21
 
 The coding-agent-UX milestone. v0.8 made what the harness *spends* deliberate; v0.9 makes the
@@ -992,6 +1164,7 @@ degrade gracefully, so the harness runs anywhere.
   optional extras (`anthropic`, `openai`, `local`, `mcp`, `otel`, `docker`, `all`); GitHub
   Actions running ruff and pytest on Ubuntu (3.11/3.12/3.13) and Windows (3.12). 93 tests.
 
+[1.0.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v1.0.0
 [0.9.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.9.0
 [0.8.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.8.0
 [0.7.0]: https://github.com/tdfleming/agent86CLI/releases/tag/v0.7.0
