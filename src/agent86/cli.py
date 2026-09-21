@@ -120,8 +120,9 @@ def run(
 ) -> None:
     """Run a single goal non-interactively (scriptable).
 
-    Without --yes, side-effecting tools are declined (no TTY to approve them); read-only
-    tools always run. Pass --yes to let the agent act autonomously.
+    Piped or in CI, side-effecting tools are declined without --yes (there is no terminal to
+    approve them at); read-only tools always run. Pass --yes to let the agent act
+    autonomously. Typed at a terminal, each side-effecting call asks y/N instead.
     """
     import json as _json
 
@@ -138,6 +139,13 @@ def run(
     except ProviderError as exc:
         err_console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from None
+
+    # A TTY-attached `agent86 run` can be asked; a piped one cannot, and is left exactly as
+    # it was — declining under `ask` unless --yes said otherwise. `ui.repl` imports no
+    # Textual, so this costs the one-shot path nothing.
+    from agent86.ui.repl import install_approval_prompt
+
+    install_approval_prompt(harness)
 
     if not as_json:
         if harness.memory_note:

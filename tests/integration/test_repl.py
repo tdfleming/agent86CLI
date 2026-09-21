@@ -518,3 +518,103 @@ def test_resume_note_names_the_session(tmp_path):
 
     resumed = _Repl(repl.cfg, resume=saved.session_id, harness=harness)
     assert any("the named conversation" in n for n in resumed.resume_notes)
+
+
+# ---- the plain loop's approval prompt ------------------------------------ #
+
+
+def _tty(monkeypatch, interactive: bool = True) -> None:
+    """Make (or unmake) stdin look like a terminal, whatever pytest captured it with."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: interactive))
+
+
+def _write_repl(tmp_path, approval=ApprovalMode.ASK):
+    """A _Repl whose one turn asks to write `out.txt`."""
+    from agent86.types import ToolCall
+    from tests.support import ToolThenTextProvider
+
+    cfg = load_config()
+    cfg.guardrails.approval = approval
+    cfg.ui.history_file = str(tmp_path / "history")
+    call = ToolCall(id="c1", name="write_file", arguments={"path": "out.txt", "content": "hi\n"})
+    harness = Harness(
+        cfg, provider=ToolThenTextProvider(call, reply="done"), memory=None, workspace=tmp_path
+    )
+    return _Repl(cfg, resume=None, harness=harness), harness
+
+
+def test_plain_loop_asks_before_a_side_effect_and_runs_it_on_yes(tmp_path, monkeypatch, capsys):
+    """Without a prompt installed, `ask` mode declined every write in the plain loop."""
+    _tty(monkeypatch)
+    repl, harness = _write_repl(tmp_path)
+    _drive(repl, monkeypatch, ["write the file", "y"])
+    out = capsys.readouterr().out
+
+    assert harness.gate.prompt is not None
+    assert "approve write_file?" in out
+    # The preview detail — the diff of what would be written — is shown ABOVE the question.
+    assert "new file: out.txt" in out
+    assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "hi\n"
+
+
+def test_plain_loop_declines_on_anything_but_yes(tmp_path, monkeypatch, capsys):
+    _tty(monkeypatch)
+    repl, _ = _write_repl(tmp_path)
+    _drive(repl, monkeypatch, ["write the file", ""])
+    out = capsys.readouterr().out
+
+    assert "declined by user" in out
+    assert not (tmp_path / "out.txt").exists()
+
+
+def test_no_prompt_is_installed_without_a_tty(tmp_path, monkeypatch, capsys):
+    """Piped stdin / CI keeps the old behaviour: decline, rather than block on a question."""
+    _tty(monkeypatch, interactive=False)
+    repl, harness = _write_repl(tmp_path)
+    _drive(repl, monkeypatch, ["write the file"])
+    capsys.readouterr()
+
+    assert harness.gate.prompt is None
+    assert not (tmp_path / "out.txt").exists()
+
+
+def test_auto_mode_never_reaches_the_prompt(tmp_path, monkeypatch, capsys):
+    _tty(monkeypatch)
+    repl, _ = _write_repl(tmp_path, approval=ApprovalMode.AUTO)
+    _drive(repl, monkeypatch, ["write the file"])
+    out = capsys.readouterr().out
+
+    assert "approve write_file?" not in out
+    assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "hi\n"
+
+
+def test_approval_prompt_declines_when_stdin_ends(monkeypatch, capsys):
+    from agent86.ui.repl import approval_prompt
+
+    def _eof(_prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", _eof)
+    assert approval_prompt("run_command", "ls") is False
+
+
+def test_approval_prompt_caps_a_runaway_detail(monkeypatch, capsys):
+    from agent86.guardrails.policy import ApprovalPreview
+    from agent86.ui.repl import APPROVAL_DETAIL_LINES, approval_prompt
+
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
+    detail = "\n".join(f"line {i}" for i in range(APPROVAL_DETAIL_LINES + 50))
+    assert approval_prompt("write_file", ApprovalPreview("{}", detail)) is True
+    out = capsys.readouterr().out
+    assert "truncated (50 more lines)" in out
+
+
+def test_install_approval_prompt_leaves_an_existing_one_alone(tmp_path, monkeypatch):
+    from agent86.ui.repl import install_approval_prompt
+
+    _tty(monkeypatch)
+    _, harness = _write_repl(tmp_path)
+    harness.gate.prompt = lambda name, preview: True
+    assert install_approval_prompt(harness) is False

@@ -22,6 +22,7 @@ import sys
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from agent86 import __version__
 from agent86.config import Config
@@ -78,6 +79,86 @@ def notice_text(text: str) -> str | None:
     if stripped.startswith(NOTICE_PREFIXES):
         return stripped
     return None
+
+
+#: Most lines of a preview `detail` shown before the y/N question. A 4000-line diff is not
+#: more informative than its first 40 lines plus the file it applies to — and it would scroll
+#: the question itself off the terminal, which is the one thing that must stay visible.
+APPROVAL_DETAIL_LINES = 40
+
+
+def approval_prompt(tool_name: str, preview: str) -> bool:
+    """Ask on stdin whether one side-effecting tool call may run. Default: **no**.
+
+    The ``ApprovalPrompt`` the plain loop (and a TTY-attached ``agent86 run``) installs on
+    the gate. Without one, ``ApprovalGate`` has no way to ask and declines every
+    side-effecting call — which is right for CI and wrong for a person sitting at a
+    terminal.
+
+    ``preview`` is an :class:`~agent86.guardrails.policy.ApprovalPreview`: a ``str`` whose
+    value is the one-line argument summary, carrying the tool's own ``detail`` (a unified
+    diff for a write, the full command for a shell call) and a Pygments ``lexer`` for it.
+    The detail is printed ABOVE the question — approving a write sight-unseen is the thing
+    this prompt exists to prevent. A plain ``str`` from a test double simply has no detail.
+    """
+    detail = getattr(preview, "detail", None) or str(preview)
+    lexer = getattr(preview, "lexer", None)
+    console.print()
+    console.print(_approval_detail(detail, lexer))
+    # Text(), never markup: the tool name may come from an MCP server and the summary is the
+    # model's own JSON.
+    console.print(Text.assemble(("approve ", "bold yellow"), (f"{tool_name}?", "bold")))
+    try:
+        answer = input("  [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        # stdin went away (or the user hit Ctrl+C at the question): decline, which is the
+        # safe answer whenever nobody is there to give one.
+        console.print("[dim]declined[/dim]")
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def _approval_detail(detail: str, lexer: str | None):  # noqa: ANN202 - Rich renderable
+    """The preview body, syntax-highlighted when the tool named a lexer, capped either way."""
+    body = _cap_lines(detail, APPROVAL_DETAIL_LINES)
+    if lexer:
+        from rich.syntax import Syntax
+
+        try:
+            # Built from the raw string, so the detail is highlighted without ever being
+            # parsed as console markup.
+            return Syntax(body, lexer, theme="ansi_dark", word_wrap=True,
+                          background_color="default")
+        except Exception:  # noqa: BLE001 - unknown lexer: plain text still tells the truth
+            pass
+    return Text(body)
+
+
+def _cap_lines(text: str, limit: int) -> str:
+    lines = text.splitlines()
+    if len(lines) <= limit:
+        return text
+    return "\n".join([*lines[:limit], f"… truncated ({len(lines) - limit} more lines)"])
+
+
+def install_approval_prompt(harness) -> bool:  # noqa: ANN001 - Harness, kept import-free
+    """Give ``harness``'s gate a stdin prompt when there is a terminal to ask at.
+
+    Returns whether one was installed. Non-interactive callers (a piped stdin, CI, a cron
+    job) deliberately get nothing: the gate then declines every side-effecting call under
+    ``ask``, and ``--yes`` / ``approval = "auto"`` is the explicit way to say otherwise. A
+    gate that already has a prompt (the TUI's bridge) is left alone.
+    """
+    if harness.gate.prompt is not None:
+        return False
+    try:
+        interactive = sys.stdin.isatty()
+    except (AttributeError, ValueError):  # a detached/closed stdin
+        interactive = False
+    if not interactive:
+        return False
+    harness.gate.prompt = approval_prompt
+    return True
 
 
 def _tool_label(text: str) -> str | None:
@@ -262,6 +343,12 @@ class _Repl:
         from agent86.cognitive.base import ProviderError
         from agent86.orchestration.loop import HarnessError
 
+        # The gate had no way to ask here, so `ask` mode declined every write, every shell
+        # call and every MCP side effect — with the only clue being "approval required but no
+        # prompt available" buried in a tool result. Installed here rather than in
+        # `run_repl` so the TUI's own fallback into this loop gets it too.
+        install_approval_prompt(self.harness)
+
         while True:
             try:
                 raw = input("agent86> ")
@@ -368,4 +455,4 @@ def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> Non
     repl.plain_loop()
 
 
-__all__ = ["run_repl"]
+__all__ = ["approval_prompt", "install_approval_prompt", "run_repl"]
