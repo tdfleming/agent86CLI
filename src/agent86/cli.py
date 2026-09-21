@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -40,6 +41,34 @@ def _emit(text: str) -> None:
     """
     sys.stdout.write(text)
     sys.stdout.flush()
+
+
+#: What to do next when a model cannot be built — a bad ref, an unknown provider prefix, a
+#: missing key. Every one of those is recoverable, and the recovery is the same two moves, so
+#: the message says them rather than leaving the user to guess which of the three went wrong.
+MODEL_HELP = (
+    "Run `agent86 models` to see the configured providers and which of them has a key, "
+    "then pick one with `--model provider:model`."
+)
+
+
+def _load(overrides: dict | None = None) -> Config:
+    """``load_config``, but a malformed config file is a message rather than a traceback.
+
+    A stray character in ``config.toml`` broke *every* command with a Rich traceback that
+    named the parse error and not the file — including the ``config path`` one would run to
+    find out where the file even is.
+    """
+    try:
+        return load_config(overrides)
+    except ValueError as exc:
+        err_console.print(f"[red]error:[/red] {escape(str(exc))}")
+        err_console.print(
+            "[dim]Fix the TOML, or move that file aside to fall back to the defaults. "
+            "`agent86 config path` lists every layer that is read.[/dim]"
+        )
+        raise typer.Exit(code=1) from None
+
 
 app = typer.Typer(
     name="agent86",
@@ -92,7 +121,7 @@ def main(
     if approval:
         overrides.setdefault("guardrails", {})["approval"] = approval
 
-    cfg = load_config(overrides or None)
+    cfg = _load(overrides or None)
     ctx.obj = cfg
 
     if ctx.invoked_subcommand is None:
@@ -130,14 +159,18 @@ def run(
     from agent86.orchestration.loop import Harness, HarnessError
     from agent86.types import ApprovalMode
 
-    cfg: Config = ctx.obj or load_config()
+    cfg: Config = ctx.obj or _load()
     if yes:
         cfg.guardrails.approval = ApprovalMode.AUTO
 
     try:
         harness = Harness(cfg)
-    except ProviderError as exc:
-        err_console.print(f"[red]error:[/red] {exc}")
+    except (ProviderError, ValueError) as exc:
+        # ValueError too: a malformed `--model` ref (no colon, empty half) fails in
+        # `ModelRef.parse` before any provider is constructed, and used to reach the user as
+        # a Rich traceback instead of a sentence telling them what to type.
+        err_console.print(f"[red]error:[/red] {escape(str(exc))}")
+        err_console.print(f"[dim]{MODEL_HELP}[/dim]")
         raise typer.Exit(code=1) from None
 
     # A TTY-attached `agent86 run` can be asked; a piped one cannot, and is left exactly as
@@ -164,7 +197,9 @@ def run(
                 if not as_json:
                     _emit(delta.text)
     except (ProviderError, HarnessError) as exc:
-        err_console.print(f"\n[red]error:[/red] {exc}")
+        err_console.print(f"\n[red]error:[/red] {escape(str(exc))}")
+        if isinstance(exc, ProviderError):
+            err_console.print(f"[dim]{MODEL_HELP}[/dim]")
         raise typer.Exit(code=1) from None
 
     if as_json:
@@ -205,7 +240,7 @@ app.add_typer(config_app, name="config")
 def config_default(ctx: typer.Context) -> None:
     """With no subcommand: show providers, key source, and OS keyring status."""
     if ctx.invoked_subcommand is None:
-        _list_models(load_config())
+        _list_models(_load())
 
 
 @config_app.command("path")
@@ -223,7 +258,7 @@ def config_path_cmd() -> None:
 @config_app.command("show")
 def config_show_cmd() -> None:
     """Print the fully-resolved configuration."""
-    _show_config(load_config())
+    _show_config(_load())
 
 
 def _show_config(cfg: Config) -> None:
@@ -238,7 +273,7 @@ def _show_config(cfg: Config) -> None:
 @app.command()
 def models(ctx: typer.Context) -> None:
     """List configured models and providers."""
-    cfg: Config = ctx.obj or load_config()
+    cfg: Config = ctx.obj or _load()
     _list_models(cfg)
 
 
@@ -302,15 +337,26 @@ app.add_typer(memory_app, name="memory")
 
 
 def _open_memory():
+    from agent86.memory.store import MemoryStoreError
     from agent86.memory.system import build_memory
 
-    cfg = load_config()
-    mem = build_memory(cfg)
+    cfg = _load()
+    try:
+        mem = build_memory(cfg)
+    except MemoryStoreError as exc:
+        # Already actionable (which file, why, what to change); printed without a traceback
+        # because a locked or unwritable db is a configuration problem, not a crash.
+        err_console.print(f"[red]error:[/red] {escape(str(exc))}")
+        raise typer.Exit(code=1) from None
     if mem is None:
-        err_console.print("[yellow]Memory is disabled in config.[/yellow]")
+        err_console.print(
+            "[yellow]Memory is disabled in config.[/yellow] "
+            r"Set `\[memory] enabled = true` to turn it on "
+            "(`agent86 config path` shows which file to edit)."
+        )
         raise typer.Exit(code=1)
     if mem.note:
-        err_console.print(f"[dim]memory: {mem.note}[/dim]")
+        err_console.print(f"[dim]memory: {escape(mem.note)}[/dim]")
     return mem
 
 
@@ -459,7 +505,7 @@ def skills_list_cmd() -> None:
     """List discovered skills."""
     from agent86.skills.loader import default_skill_paths, discover_skills
 
-    cfg = load_config()
+    cfg = _load()
     skills = discover_skills(cfg)
     if not skills:
         paths = ", ".join(str(p) for p in default_skill_paths(cfg))
@@ -478,11 +524,14 @@ def skills_show_cmd(name: str = typer.Argument(..., help="Skill name.")) -> None
     """Show a skill's full instructions."""
     from agent86.skills.loader import discover_skills
 
-    skills = discover_skills(load_config())
+    skills = discover_skills(_load())
     skill = skills.get(name)
     if skill is None:
         known = ", ".join(skills) or "(none)"
-        err_console.print(f"[red]No skill named '{name}'.[/red] Known: {known}")
+        err_console.print(
+            f"[red]No skill named '{escape(name)}'.[/red] Known: {escape(known)}. "
+            "Run `agent86 skills list` to see where they were discovered from."
+        )
         raise typer.Exit(code=1)
     console.print(f"[bold]{skill.name}[/bold] - {skill.description}\n")
     console.print(skill.instructions())
@@ -497,9 +546,12 @@ app.add_typer(mcp_app, name="mcp")
 @mcp_app.command("list")
 def mcp_list_cmd(ctx: typer.Context) -> None:
     """List configured MCP servers."""
-    cfg: Config = load_config()
+    cfg: Config = _load()
     if not cfg.mcp_servers:
-        console.print("[dim]No MCP servers configured.[/dim]")
+        console.print(
+            "[dim]No MCP servers configured.[/dim] Add one with `/config mcp` in the REPL, "
+            r"or an `\[mcp_servers.<name>]` block in the file `agent86 config path` names."
+        )
         return
     table = Table(show_header=True, header_style="bold")
     table.add_column("Name")
@@ -517,10 +569,13 @@ def mcp_tools_cmd() -> None:
     """Start configured MCP servers and list the tools they expose."""
     from agent86.tools.mcp_client import build_mcp
 
-    cfg = load_config()
+    cfg = _load()
     manager = build_mcp(cfg)
     if manager is None:
-        console.print("[dim]No MCP servers configured (or MCP disabled).[/dim]")
+        console.print(
+            "[dim]No MCP servers configured (or MCP disabled).[/dim] "
+            "`agent86 mcp list` shows what is configured and whether each is enabled."
+        )
         return
     # One line per degradation, not one joined blob: with several bad servers a single
     # newline-joined note is easy to skim past, and only the last one reads as the failure.
@@ -542,38 +597,396 @@ def mcp_tools_cmd() -> None:
 trace_app = typer.Typer(help="Inspect the flight-data recorder.")
 app.add_typer(trace_app, name="trace")
 
+#: Event kinds the OTLP reconstruction understands. Everything else (guardrail hits,
+#: compactions, routing decisions) stays in the JSONL views, where it is greppable.
+_SPAN_KINDS = ("turn_start", "turn_end", "model_call", "tool_call")
+
+
+def _trace_path(cfg: Config):
+    return cfg.observability.resolved_path() / "trace.jsonl"
+
+
+def _parse_since(since: str) -> float:
+    """``30s`` / ``15m`` / ``2h`` / ``7d`` → seconds. A bare number means seconds."""
+    import re
+
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smhdw]?)\s*", since, re.I)
+    if not match:
+        raise typer.BadParameter(f"{since!r} is not a duration (try 30s, 15m, 2h, 7d)")
+    scale = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    return float(match.group(1)) * scale[match.group(2).lower()]
+
+
+def _read_trace(
+    path,
+    *,
+    session: str | None = None,
+    kinds: tuple[str, ...] | None = None,
+    after_ts: float | None = None,
+    limit: int = 50,
+    keep: int = 5,
+) -> list[dict]:
+    """The tail of the trace matching every filter, in chronological order.
+
+    Filtering happens *before* the limit is applied and streams generation by generation,
+    so ``--kind tool_call -n 50`` really shows fifty tool calls rather than whatever few
+    survive the last fifty events of any kind.
+    """
+    from collections import deque
+
+    from agent86.observability.recorder import iter_events, trace_generations
+
+    if limit <= 0:
+        return []
+    events: list[dict] = []
+    for generation in trace_generations(path, keep):
+        remaining = limit - len(events)
+        if remaining <= 0:
+            break
+        chunk: deque = deque(maxlen=remaining)
+        for record in iter_events(generation):
+            if session and record.get("session") != session:
+                continue
+            if kinds and record.get("kind") not in kinds:
+                continue
+            if after_ts is not None:
+                try:
+                    if float(record.get("ts", 0)) < after_ts:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            chunk.append(record)
+        events = list(chunk) + events
+    return events
+
+
+def _clock(ts) -> str:
+    import time as _time
+
+    try:
+        return _time.strftime("%H:%M:%S", _time.localtime(float(ts)))
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def _money(value) -> str:
+    try:
+        return f"${float(value):.4f}"
+    except (TypeError, ValueError):
+        return ""
+
 
 @trace_app.command("path")
 def trace_path_cmd() -> None:
     """Show the trace file location."""
+    from agent86.observability.recorder import trace_generations
+
     cfg = load_config()
-    path = cfg.observability.resolved_path() / "trace.jsonl"
+    path = _trace_path(cfg)
     exists = "exists" if path.exists() else "not found"
     console.print(f"{path} ({exists})")
+    rotated = [p for p in trace_generations(path, cfg.observability.keep_traces) if p != path]
+    for older in rotated:
+        console.print(f"[dim]{older} ({older.stat().st_size:,} bytes)[/dim]")
 
 
 @trace_app.command("show")
 def trace_show_cmd(
     session: str | None = typer.Option(None, "--session", "-s", help="Filter to one session."),
     limit: int = typer.Option(50, "--limit", "-n", help="Max events to show."),
+    kind: Annotated[
+        list[str] | None,
+        typer.Option("--kind", "-k", help="Only this event kind (repeatable), e.g. -k tool_call."),
+    ] = None,
+    since: str | None = typer.Option(
+        None, "--since", help="Only events newer than this duration, e.g. 30m, 2h, 7d."
+    ),
 ) -> None:
     """Show recent events from the flight recorder."""
-    from agent86.observability.recorder import read_events
+    import time as _time
 
     cfg = load_config()
-    path = cfg.observability.resolved_path() / "trace.jsonl"
-    events = read_events(path, session_id=session, limit=limit)
+    after_ts = _time.time() - _parse_since(since) if since else None
+    events = _read_trace(
+        _trace_path(cfg),
+        session=session,
+        kinds=tuple(kind) if kind else None,
+        after_ts=after_ts,
+        limit=limit,
+        keep=cfg.observability.keep_traces,
+    )
     if not events:
         console.print("[dim]no trace events[/dim]")
         return
     table = Table(show_header=True, header_style="bold")
+    table.add_column("time")
     table.add_column("session")
     table.add_column("kind")
+    table.add_column("in", justify="right")
+    table.add_column("out", justify="right")
+    table.add_column("cost", justify="right")
     table.add_column("detail", overflow="fold")
+    # Token and cost columns are only meaningful on a model_call; leaving them blank
+    # elsewhere keeps the table readable and the totals honest.
+    spent = 0.0
+    tokens_in = tokens_out = 0
     for ev in events:
-        detail = {k: v for k, v in ev.items() if k not in ("ts", "session", "kind")}
-        table.add_row(str(ev.get("session", ""))[:12], str(ev.get("kind", "")), str(detail)[:100])
+        is_call = ev.get("kind") == "model_call"
+        cost = ev.get("cost_usd") if is_call else None
+        if is_call:
+            spent += float(cost or 0.0)
+            tokens_in += int(ev.get("input_tokens") or 0)
+            tokens_out += int(ev.get("output_tokens") or 0)
+        skip = ("ts", "session", "kind", "input_tokens", "output_tokens", "cost_usd")
+        detail = {k: v for k, v in ev.items() if k not in skip}
+        table.add_row(
+            _clock(ev.get("ts")),
+            str(ev.get("session", ""))[:12],
+            str(ev.get("kind", "")),
+            str(ev.get("input_tokens", "")) if is_call else "",
+            str(ev.get("output_tokens", "")) if is_call else "",
+            _money(cost) if is_call and cost is not None else "",
+            escape(str(detail)[:100]),
+        )
     console.print(table)
+    if tokens_in or tokens_out or spent:
+        console.print(
+            f"[dim]{tokens_in:,} in / {tokens_out:,} out tokens, {_money(spent)} "
+            f"across {len(events)} event(s)[/dim]"
+        )
+
+
+@trace_app.command("export")
+def trace_export_cmd(
+    session: str | None = typer.Option(
+        None, "--session", "-s", help="Export one session (default: every session in the trace)."
+    ),
+    fmt: str = typer.Option(
+        "jsonl", "--format", "-f", help="jsonl (filtered events) | json (one array) | otlp-json."
+    ),
+    out: str | None = typer.Option(
+        None, "--out", "-o", help="Write here instead of stdout."
+    ),
+    limit: int = typer.Option(100_000, "--limit", "-n", help="Max events to consider."),
+    since: str | None = typer.Option(
+        None, "--since", help="Only events newer than this duration, e.g. 2h."
+    ),
+) -> None:
+    """Export the trace: raw events, or spans reconstructed into the OTLP JSON shape.
+
+    otlp-json rebuilds a span tree from the recorder's own turn_start / turn_end /
+    model_call / tool_call events, so a trace captured with no collector running can
+    still be handed to one afterwards.
+    """
+    import json
+    import time as _time
+
+    choice = fmt.lower().replace("_", "-")
+    if choice not in ("jsonl", "json", "otlp-json"):
+        raise typer.BadParameter(f"unknown format {fmt!r} (jsonl | json | otlp-json)")
+
+    cfg = load_config()
+    events = _read_trace(
+        _trace_path(cfg),
+        session=session,
+        kinds=_SPAN_KINDS if choice == "otlp-json" else None,
+        after_ts=(_time.time() - _parse_since(since)) if since else None,
+        limit=limit,
+        keep=cfg.observability.keep_traces,
+    )
+
+    if choice == "jsonl":
+        text = "".join(json.dumps(ev, ensure_ascii=False) + "\n" for ev in events)
+    elif choice == "json":
+        text = json.dumps(events, ensure_ascii=False, indent=2) + "\n"
+    else:
+        text = json.dumps(otlp_document(events), ensure_ascii=False, indent=2) + "\n"
+
+    if out is None:
+        sys.stdout.write(text)
+        return
+    from pathlib import Path
+
+    target = Path(out).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    console.print(f"Wrote {len(events)} event(s) to {target} ({choice}).")
+
+
+# --------------------------------------------------------------------------- #
+# OTLP JSON reconstruction
+# --------------------------------------------------------------------------- #
+
+
+def _otlp_id(*parts: object, width: int = 16) -> str:
+    """A stable hex id derived from the event's own identity.
+
+    The recorder never wrote span ids — it predates the tracer — so they are *derived*:
+    the same trace exported twice produces the same ids, which is what makes re-exporting
+    into a collector idempotent.
+    """
+    import hashlib
+
+    digest = hashlib.sha1(":".join(str(p) for p in parts).encode("utf-8")).hexdigest()
+    return digest[:width]
+
+
+def _otlp_value(value: object) -> dict:
+    if isinstance(value, bool):
+        return {"boolValue": value}
+    if isinstance(value, int):
+        return {"intValue": str(value)}  # OTLP JSON carries 64-bit ints as strings
+    if isinstance(value, float):
+        return {"doubleValue": value}
+    if isinstance(value, (list, tuple)):
+        return {"arrayValue": {"values": [_otlp_value(v) for v in value]}}
+    return {"stringValue": str(value)}
+
+
+def _otlp_attributes(attributes: dict) -> list[dict]:
+    return [
+        {"key": key, "value": _otlp_value(value)}
+        for key, value in attributes.items()
+        if value is not None
+    ]
+
+
+def _nanos(ts) -> str:
+    try:
+        return str(int(float(ts) * 1_000_000_000))
+    except (TypeError, ValueError):
+        return "0"
+
+
+def _span(
+    *, name, trace_id, span_id, parent, start, end, attributes, status=0
+) -> dict:
+    span = {
+        "traceId": trace_id,
+        "spanId": span_id,
+        "name": name,
+        "kind": 1,  # SPAN_KIND_INTERNAL
+        "startTimeUnixNano": _nanos(start),
+        "endTimeUnixNano": _nanos(end),
+        "attributes": _otlp_attributes(attributes),
+        "status": {"code": status},
+    }
+    if parent:
+        span["parentSpanId"] = parent
+    return span
+
+
+def _session_spans(session: str, events: list[dict]) -> list[dict]:
+    """Rebuild one session's span tree from its chronological events."""
+    trace_id = _otlp_id(session, width=32)
+    spans: list[dict] = []
+    turn_id: str | None = None
+    turn_start: float = 0.0
+    turn_attrs: dict = {}
+    turns = 0
+    previous = events[0].get("ts", 0.0) if events else 0.0
+
+    def close_turn(ts, extra: dict, status: int) -> None:
+        nonlocal turn_id
+        if turn_id is None:
+            return
+        spans.append(
+            _span(
+                name="turn", trace_id=trace_id, span_id=turn_id, parent=None,
+                start=turn_start, end=ts,
+                attributes={"session.id": session, **turn_attrs, **extra},
+                status=status,
+            )
+        )
+        turn_id = None
+
+    for index, event in enumerate(events):
+        kind = event.get("kind")
+        ts = event.get("ts", previous)
+        if kind == "turn_start":
+            close_turn(ts, {}, 0)  # a turn with no turn_end (a crash) still gets a span
+            turns += 1
+            turn_id = _otlp_id(session, "turn", turns)
+            turn_start = ts
+            turn_attrs = {"agent86.task": event.get("task")}
+        elif kind == "turn_end":
+            status = 2 if event.get("status") in ("error", "blocked") else 1
+            close_turn(
+                ts,
+                {
+                    "agent86.status": event.get("status"),
+                    "agent86.steps": event.get("steps"),
+                    "agent86.reason": event.get("reason"),
+                },
+                status,
+            )
+        elif kind == "model_call":
+            spans.append(
+                _span(
+                    name="model_call", trace_id=trace_id,
+                    span_id=_otlp_id(session, "model", index), parent=turn_id,
+                    start=previous, end=ts,
+                    attributes={
+                        "gen_ai.request.model": event.get("model"),
+                        "gen_ai.usage.input_tokens": event.get("input_tokens"),
+                        "gen_ai.usage.output_tokens": event.get("output_tokens"),
+                        "gen_ai.response.finish_reasons": (
+                            [event["stop_reason"]] if event.get("stop_reason") else None
+                        ),
+                        "agent86.cost_usd": event.get("cost_usd"),
+                        "agent86.step": event.get("step"),
+                    },
+                    status=1,
+                )
+            )
+        elif kind == "tool_call":
+            ok = bool(event.get("ok"))
+            spans.append(
+                _span(
+                    name="tool_call", trace_id=trace_id,
+                    span_id=_otlp_id(session, "tool", index), parent=turn_id,
+                    start=previous, end=ts,
+                    attributes={
+                        "tool.name": event.get("tool"),
+                        "gen_ai.tool.name": event.get("tool"),
+                        "tool.ok": ok,
+                        "agent86.error": event.get("error"),
+                    },
+                    status=1 if ok else 2,
+                )
+            )
+        previous = ts
+
+    close_turn(previous, {"agent86.status": "unfinished"}, 0)
+    return spans
+
+
+def otlp_document(events: list[dict]) -> dict:
+    """Wrap reconstructed spans in the OTLP/JSON envelope a collector accepts."""
+    from agent86 import __version__
+
+    by_session: dict[str, list[dict]] = {}
+    for event in events:
+        by_session.setdefault(str(event.get("session", "unknown")), []).append(event)
+
+    spans: list[dict] = []
+    for session, session_events in by_session.items():
+        spans.extend(_session_spans(session, session_events))
+
+    return {
+        "resourceSpans": [
+            {
+                "resource": {
+                    "attributes": _otlp_attributes(
+                        {"service.name": "agent86", "service.version": __version__}
+                    )
+                },
+                "scopeSpans": [
+                    {"scope": {"name": "agent86", "version": __version__}, "spans": spans}
+                ],
+            }
+        ]
+    }
 
 
 if __name__ == "__main__":
