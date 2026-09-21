@@ -23,9 +23,11 @@ from textual.widgets.option_list import Option
 
 from agent86.tui.commands import (
     COMMANDS,
+    NO_MEMORY_NOTE,
     find_command,
     find_command_for_line,
     handle_command,
+    recent_sessions,
     startup_notes,
 )
 from agent86.tui.messages import (
@@ -62,6 +64,7 @@ from agent86.tui.screens.provider_manager import (
     provider_rows,
 )
 from agent86.tui.screens.save_diff import SaveDiffModal
+from agent86.tui.screens.session_picker import SessionPickerModal
 from agent86.tui.turn_bridge import run_turn_worker
 from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.tui.widgets.status_footer import StatusFooter
@@ -421,34 +424,27 @@ class Agent86App(App):
     def open_session_picker(self) -> None:
         """Push the session picker, once someone builds it.
 
-        Placeholder: the screen lives in a module a parallel workstream owns, so the import is
-        lazy and a missing module is a transcript note, never a crash.
+        `/resume` with no argument lands here (typed or palette-selected). Both empty cases
+        are transcript notes rather than an empty picker: a modal offering nothing is a dead
+        end the user has to escape out of.
         """
-        try:
-            from agent86.tui.screens.session_picker import (  # type: ignore[import-not-found, unused-ignore]  # noqa: E501
-                SessionPickerModal,
-            )
-        except ImportError:
-            self._write("[dim]the session picker is not available in this build[/dim]")
+        sessions = recent_sessions(self.repl)
+        if sessions is None:
+            self._write(f"[dim]{escape(NO_MEMORY_NOTE)}[/dim]")
             return
-        # getattr, not a module-level import: `commands.py` belongs to another workstream, and
-        # a picker with no list is still better than an AttributeError at the prompt.
-        from agent86.tui import commands as _commands
-
-        lister = getattr(_commands, "recent_sessions", None)
-        sessions = lister(self.repl) if lister is not None else None
-        self.push_screen(SessionPickerModal(sessions or ()), self._on_session_picked)
-
-    def _on_session_picked(self, choice: Any) -> None:
-        """Resolve whatever the picker hands back to an `AgentState`, then load it."""
-        if choice is None:
+        if not sessions:
+            self._write("[dim]no saved sessions yet[/dim]")
             return
-        state = choice
-        if isinstance(choice, str):
-            state = self.repl.harness.resume(choice)
-            if state is None:
-                self._write(f"[dim]no session '{escape(choice)}' found[/dim]")
-                return
+        self.push_screen(SessionPickerModal(sessions), self._on_session_picked)
+
+    def _on_session_picked(self, session_id: str | None) -> None:
+        """Load the picked session. The picker dismisses with an id, or None on cancel."""
+        if session_id is None:
+            return
+        state = self.repl.harness.resume(session_id)
+        if state is None:
+            self._write(f"[dim]no session '{escape(session_id)}' found[/dim]")
+            return
         self.load_session(state)
 
     def load_session(self, state: Any) -> None:
@@ -465,9 +461,28 @@ class Agent86App(App):
         self._stream_labelled = False
         self.query_one("#stream", Static).update("")
         self._entries.extend(self._entries_for(state))
+        # Which conversation did I just walk back into? An id alone doesn't say, so the note
+        # carries the stored title too — user text, hence `Text`, never markup.
+        self._entries.append(RawEntry(Text(self._resumed_note(state), style="dim")))
         self._rerender()
+        # The footer reads the live session off `repl.state`/`repl.status`, so it has to be
+        # refreshed AFTER the swap or it keeps showing the session that was replaced.
         self.repl._refresh_status()
         self.query_one("#status", StatusFooter).status = self.repl.status
+
+    def _resumed_note(self, state: Any) -> str:
+        """The one-line "you are now here" note a rebuilt transcript opens with."""
+        session_id = str(getattr(state, "session_id", "") or "")
+        title = None
+        memory = getattr(self.repl.harness, "memory", None)
+        if memory is not None:
+            try:
+                title = memory.store.session_title(session_id)
+            except Exception:  # noqa: BLE001 - a broken log must not break the resume
+                title = None
+        messages = len(getattr(state, "messages", None) or [])
+        note = f"resumed session {session_id} ({messages} messages)"
+        return f"{note} - {title}" if title else note
 
     def _entries_for(self, state: Any) -> list[TranscriptEntry]:
         """Rebuild scrollback entries from a session's message history."""
@@ -711,6 +726,8 @@ class Agent86App(App):
             self._open_provider_manager()
         elif entry.needs_choice == "config_mcp":
             self._open_mcp_manager()
+        elif entry.needs_choice == "resume":
+            self.open_session_picker()
         else:
             self._dispatch_line(entry.name)
 

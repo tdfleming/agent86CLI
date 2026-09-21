@@ -960,7 +960,9 @@ async def test_submit_prompt_is_the_same_path_as_input_submission(tmp_path):
         assert "hello world" in lines
 
 
-async def test_open_session_picker_notes_a_missing_screen_instead_of_crashing(tmp_path):
+async def test_open_session_picker_notes_disabled_memory_instead_of_an_empty_modal(tmp_path):
+    """`_make_repl` builds the harness with `memory=None`: there is nothing to resume, and a
+    picker offering nothing is a dead end the user has to escape out of."""
     repl = _make_repl(tmp_path, make_text_provider("hello world"))
     app = Agent86App(repl)
     async with app.run_test(size=(140, 24)) as pilot:
@@ -969,10 +971,8 @@ async def test_open_session_picker_notes_a_missing_screen_instead_of_crashing(tm
         await pilot.pause()
 
         assert app.is_running
-        if len(app.screen_stack) == 1:                # the module isn't built yet
-            assert "session picker is not available" in _plain_transcript(app)
-        else:                                         # …or it is, and it opened
-            assert type(app.screen).__name__ == "SessionPickerModal"
+        assert len(app.screen_stack) == 1
+        assert "memory is disabled" in _plain_transcript(app)
 
 
 async def test_load_session_rebuilds_the_transcript_from_messages(tmp_path):
