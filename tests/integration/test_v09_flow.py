@@ -140,11 +140,10 @@ def test_mention_edit_approve_and_resume(tmp_path, monkeypatch, capsys):
     # 4. and the turn closed with its cost line
     assert "2 steps" in out and "1 tool" in out
 
-    # 5. the session is in the log, titled after the prompt that started it. The title is
-    #    derived from the first user message, which is the EXPANDED one — so it leads with
-    #    what was typed and then trails off into the attached block.
+    # 5. the session is in the log, titled after the prompt that started it — the line the
+    #    user TYPED, exactly, with none of the attached file block bleeding into it.
     title = memory.store.session_title(session_id)
-    assert title and title.startswith("fix the typo in @notes.md")
+    assert title == "fix the typo in @notes.md"
 
     # 6. a FRESH repl (new session, same log) lists it and resumes it by short id
     later, _ = _repl(tmp_path, memory, provider=_EditThenExplain())

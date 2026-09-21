@@ -15,6 +15,7 @@ Every arrow crosses the deterministic harness; the model only ever occupies the 
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -98,9 +99,31 @@ def continuation_notice(index: int, total: int = MAX_CONTINUATIONS) -> str:
 #: Longest a derived session title may be, including the ellipsis.
 SESSION_TITLE_MAX = 60
 
+#: The header line an ``@file`` mention block opens with, exactly as ``tui.mentions`` writes
+#: it: ``--- @notes.md (3 lines) ---`` / ``--- @missing (not attached) ---``.
+_MENTION_BLOCK_RE = re.compile(r"^--- @.*---[ \t]*$", re.MULTILINE)
+
+
+def typed_prefix(text: str) -> str:
+    """What the user actually *typed*, with any ``@file`` attachment blocks stripped off.
+
+    ``expand_mentions`` sends ``typed text + "\\n\\n" + blocks``, so a prompt that opened with
+    a mention used to name its session after the attached file's first 60 bytes. Cutting at
+    the first block header (and then at the blank line that separates it from the typed text)
+    gives back the sentence the user wrote. Text with no mention block is returned unchanged.
+    """
+    match = _MENTION_BLOCK_RE.search(text)
+    if match is None:
+        return text
+    head = text[: match.start()]
+    return head.split("\n\n", 1)[0]
+
 
 def session_title(state: AgentState) -> str | None:
     """A display name for this session: its first user message, collapsed and truncated.
+
+    Derived from the *typed* text only: a session opened with ``fix @notes.md`` is named
+    after the ask, not after the file that got inlined behind it.
 
     None until there is one — a session that has been opened but never spoken to has nothing
     to be named after, and must NOT be given a placeholder name that would then stick (the
@@ -109,7 +132,10 @@ def session_title(state: AgentState) -> str | None:
     for message in state.messages:
         if message.role is not Role.USER:
             continue
-        text = " ".join((message.content or "").split())
+        content = message.content or ""
+        # Fallback to the whole message when the typed part is empty — a pasted block with
+        # nothing in front of it still deserves a name over being skipped entirely.
+        text = " ".join(typed_prefix(content).split()) or " ".join(content.split())
         if not text:
             continue
         if len(text) <= SESSION_TITLE_MAX:
@@ -514,8 +540,16 @@ class Harness:
 
     # ---- the loop ------------------------------------------------------ #
 
-    def run_turn(self, user_text: str, state: AgentState) -> Iterator[CompletionDelta]:
+    def run_turn(
+        self, user_text: str, state: AgentState, *, display_text: str | None = None
+    ) -> Iterator[CompletionDelta]:
         """Run one user turn to completion, streaming text and tool activity.
+
+        ``user_text`` is what the model sees — for a prompt with ``@file`` mentions that is
+        the expanded text, file blocks and all. ``display_text`` is what the user *typed*,
+        and is what the trace records as the turn's task: a 200KB inlined file in the
+        recorder's ``task`` field is noise, and it is not what the user asked. Defaults to
+        ``user_text`` for every caller that has no separate typed line.
 
         A skill activated with ``use_skill`` is **turn-scoped**: its ``allowed-tools`` list
         restricts what the model may call for the rest of *this* turn only. The restriction
@@ -527,16 +561,18 @@ class Harness:
         """
         self.context.clear_skill()
         try:
-            yield from self._run_turn(user_text, state)
+            yield from self._run_turn(user_text, state, display_text=display_text)
         finally:
             self.context.clear_skill()
 
-    def _run_turn(self, user_text: str, state: AgentState) -> Iterator[CompletionDelta]:
+    def _run_turn(
+        self, user_text: str, state: AgentState, *, display_text: str | None = None
+    ) -> Iterator[CompletionDelta]:
         sid = state.session_id
         # A cancel requested while no turn was running must not kill the next one.
         self._cancel.clear()
         summary = self._begin_turn_summary(state)
-        self.recorder.event(sid, "turn_start", task=user_text)
+        self.recorder.event(sid, "turn_start", task=display_text or user_text)
 
         # Ingress guardrail on the user's input.
         in_report = self.ingress.inspect(user_text)
@@ -1118,4 +1154,5 @@ __all__ = [
     "compaction_failed_notice",
     "continuation_notice",
     "session_title",
+    "typed_prefix",
 ]

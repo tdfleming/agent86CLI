@@ -382,7 +382,11 @@ class _Repl:
             # The `agent86` label above was printed with end="": the cursor is mid-line.
             at_line_start = False
             try:
-                for delta in self.harness.run_turn(mentions.prompt, self.state):
+                # `display_text=line`: the model gets the expanded prompt, the trace gets the
+                # sentence the user actually typed rather than the files behind it.
+                for delta in self.harness.run_turn(
+                    mentions.prompt, self.state, display_text=line
+                ):
                     if delta.text:
                         notice = notice_text(delta.text)
                         if notice is not None:

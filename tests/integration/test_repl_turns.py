@@ -88,7 +88,7 @@ def test_plain_loop_end_to_end_with_blank_line_spacing(tmp_path, capsys, monkeyp
 def test_plain_loop_reports_provider_error_without_exiting(tmp_path, capsys, monkeypatch):
     repl, harness = _repl(tmp_path)
 
-    def _boom(line, state):  # noqa: ANN001
+    def _boom(line, state, **_kw):  # noqa: ANN001
         raise ProviderError("upstream exploded")
         yield  # pragma: no cover - makes this a generator function
 
@@ -125,7 +125,7 @@ def test_dispatch_slash_commands_do_not_run_turns(tmp_path, capsys):
 def test_plain_loop_sets_harness_notices_apart_from_the_answer(tmp_path, capsys, monkeypatch):
     repl, harness = _repl(tmp_path)
 
-    def _run(line, state):  # noqa: ANN001
+    def _run(line, state, **_kw):  # noqa: ANN001
         yield CompletionDelta(text="\n[compacted 12 messages]\n")
         yield CompletionDelta(text="partial answer")
         yield CompletionDelta(text="\n[continuing after 40 steps]\n")
@@ -212,7 +212,7 @@ def test_plain_loop_prints_the_per_turn_cost_line(tmp_path, capsys, monkeypatch)
     repl, harness = _repl(tmp_path, reply="done")
     real = harness.run_turn
 
-    def _run(line, state):  # noqa: ANN001
+    def _run(line, state, **_kw):  # noqa: ANN001
         yield from real(line, state)
         _set_last_turn(state, _summary())
 
@@ -232,7 +232,7 @@ def test_plain_loop_prints_nothing_when_there_is_no_summary(tmp_path, capsys, mo
     repl, harness = _repl(tmp_path, reply="done")
     real = harness.run_turn
 
-    def _run(line, state):  # noqa: ANN001
+    def _run(line, state, **_kw):  # noqa: ANN001
         yield from real(line, state)
         object.__setattr__(state, "last_turn", None)
 
@@ -249,7 +249,7 @@ def test_plain_loop_prints_the_summary_of_a_failed_turn(tmp_path, capsys, monkey
     """A turn that died halfway still spent tokens; the loop closes the summary either way."""
     repl, harness = _repl(tmp_path)
 
-    def _boom(line, state):  # noqa: ANN001
+    def _boom(line, state, **_kw):  # noqa: ANN001
         _set_last_turn(state, _summary(steps=1, tool_calls=0))
         raise ProviderError("upstream exploded")
         yield  # pragma: no cover - makes this a generator function

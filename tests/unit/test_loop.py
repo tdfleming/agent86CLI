@@ -907,3 +907,73 @@ def test_a_truncated_step_that_then_calls_a_tool_keeps_its_real_history():
     tool_idx = roles.index(Role.TOOL)
     assert roles[tool_idx - 1] is Role.ASSISTANT
     assert state.messages[tool_idx - 1].tool_calls[0].id == "t1"
+
+
+# ---- session titles and the typed line --------------------------------- #
+
+MENTION_PROMPT = (
+    "fix the typo in @notes.md\n\n"
+    "--- @notes.md (3 lines) ---\n"
+    "```\n# Notes\n\nthe sandbox jial is fine\n```"
+)
+
+
+def test_typed_prefix_strips_mention_blocks():
+    from agent86.orchestration.loop import typed_prefix
+
+    assert typed_prefix(MENTION_PROMPT) == "fix the typo in @notes.md"
+    # No mention block: returned verbatim, blank lines and all.
+    assert typed_prefix("just a question\n\nwith a paragraph") == (
+        "just a question\n\nwith a paragraph"
+    )
+    # A refused mention renders a "(not attached)" block; it is stripped the same way.
+    assert typed_prefix("read @gone\n\n--- @gone (not attached) ---\nno such file") == "read @gone"
+
+
+def test_session_title_ignores_the_attached_mention_block():
+    from agent86.orchestration.loop import session_title
+    from agent86.types import Message
+
+    harness = Harness(_config(), provider=FakeProvider(), memory=None)
+    state = harness.new_session()
+    state.add_message(Message(role=Role.USER, content=MENTION_PROMPT))
+
+    assert session_title(state) == "fix the typo in @notes.md"
+
+
+def test_session_title_still_truncates_a_long_typed_line():
+    from agent86.orchestration.loop import SESSION_TITLE_MAX, session_title
+    from agent86.types import Message
+
+    harness = Harness(_config(), provider=FakeProvider(), memory=None)
+    state = harness.new_session()
+    state.add_message(Message(role=Role.USER, content="word " * 40))
+
+    title = session_title(state)
+    assert title is not None
+    assert len(title) == SESSION_TITLE_MAX and title.endswith("...")
+
+
+def test_turn_start_records_the_typed_line_not_the_expanded_prompt():
+    harness = Harness(_config(), provider=FakeProvider(), memory=None)
+    recorder = _CapturingRecorder()
+    harness.recorder = recorder
+    state = harness.new_session()
+
+    list(harness.run_turn(MENTION_PROMPT, state, display_text="fix the typo in @notes.md"))
+
+    starts = [d for _s, kind, d in recorder.events if kind == "turn_start"]
+    assert starts == [{"task": "fix the typo in @notes.md"}]
+    # The model still saw the whole expanded prompt.
+    assert state.messages[0].content == MENTION_PROMPT
+
+
+def test_turn_start_falls_back_to_the_prompt_without_a_display_line():
+    harness = Harness(_config(), provider=FakeProvider(), memory=None)
+    recorder = _CapturingRecorder()
+    harness.recorder = recorder
+
+    list(harness.run_turn("plain ask", harness.new_session()))
+
+    starts = [d for _s, kind, d in recorder.events if kind == "turn_start"]
+    assert starts == [{"task": "plain ask"}]
