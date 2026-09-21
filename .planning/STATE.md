@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.8
-milestone_name: Context & cost
+milestone: v0.9
+milestone_name: Coding-agent UX
 status: complete
-last_updated: "2026-09-19"
+last_updated: "2026-09-21"
 progress:
   total_phases: 1
   completed_phases: 1
@@ -15,35 +15,78 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-19)
+See: .planning/PROJECT.md (updated 2026-09-21)
 
-**Core value:** The context window and the token budget are spent well, not merely measured
-accurately — on top of v0.7's "what the harness reports is true" and v0.6's "run, configure and
-steer the agent entirely from the terminal app".
-**Current focus:** v0.8 milestone complete (1/1 phase) — released as v0.8.0.
-**Next:** v0.9 — coding-agent UX (Markdown transcript rendering, diff preview in the approval
-modal, prompt history and multi-line input, `@file` mentions, a session picker, tool-call
-collapsing, and the Agent Skills convention with `allowed-tools` enforced as a gate).
+**Core value:** The transcript and the prompt do for a coding session what the TUI already did for
+a chat session — on top of v0.8's "the context window and the token budget are spent well", v0.7's
+"what the harness reports is true", and v0.6's "run, configure and steer the agent entirely from
+the terminal app".
+**Current focus:** v0.9 milestone complete (1/1 phase) — released as v0.9.0.
+**Next:** v1.0 — the release milestone: a PyPI publish workflow (tagged release → trusted
+publishing), an OTel exporter actually wired up, and flight-recorder redaction and rotation.
 
 ## Milestone
 
-**v0.8 — Context & cost** (agent86 now at v0.8.0)
-1 phase | 7 requirements (CTX-01…CTX-04, COST-01…COST-03) | 1 phase complete
+**v0.9 — Coding-agent UX** (agent86 now at v0.9.0)
+1 phase | 8 requirements (UX-01…UX-06, TOOL-01, SKILL-01) | 1 phase complete
 
-Previous: **v0.7 — Trustworthy harness** — 1 phase, 8 requirements, complete, released as v0.7.0.
-Before that: **v0.6 — Interactive** — 5 phases, 10 requirements, complete, released as v0.6.0.
+Previous: **v0.8 — Context & cost** — 1 phase, 7 requirements, complete, released as v0.8.0.
+Before that: **v0.7 — Trustworthy harness** — 1 phase, 8 requirements, released as v0.7.0, and
+**v0.6 — Interactive** — 5 phases, 10 requirements, released as v0.6.0.
 
 ## Progress
 
 | Phase | Status | Plans | Progress |
 |-------|--------|-------|----------|
-| 7 — Context & Cost | ● | n/a | 100% |
+| 8 — Coding-Agent UX | ● | n/a | 100% |
 
+v0.8 (closed): 7 — Context & Cost ● n/a.
 v0.7 (closed): 6 — Trustworthy Harness ● n/a.
 v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette + Menus ● 4/4 ·
 3 — Secrets + Model Config ● 13/13 · 4 — MCP Config UI ● 8/8 · 5 — Packaging & Hardening ● n/a.
 
 ## Recent Activity
+
+- 2026-09-21 — **Phase 8 (Coding-Agent UX) complete; v0.9 milestone complete at 1/1 phase and
+  released as v0.9.0.** Executed as a review-driven pass rather than a numbered plan set (see
+  `phases/08-coding-agent-ux/SUMMARY.md` for the commit-by-commit breakdown grouped by
+  workstream). **UX-01/UX-02 the transcript:** the widget stays a `RichLog` — append-only, cheap
+  to stream into, and what every other surface queries as `#transcript` — but the app now keeps an
+  ordered list of *entries* beside it, any of which may change how it renders after it was first
+  written, replayed into the log on a re-render. A reply streams as plain escaped text and is
+  re-rendered once, as a single `rich.markdown.Markdown` document, when it completes; fenced code
+  goes through `Syntax(word_wrap=True)`; Markdown never parses console markup, so `[/weird]` can
+  neither raise `MarkupError` on the main thread nor vanish into a style tag; a reply with no
+  Markdown structure is not re-rendered at all. A tool call became one block — `▸ name(args) →
+  summary`, expandable with `Ctrl+O`/`Ctrl+Shift+O` to pretty-JSON arguments and the full result
+  capped at 200 lines — fed from the session state through `turn_bridge` rather than from the
+  delta lines, which also stopped tool results falling through to `TurnDelta` and reading as model
+  speech. Not a Textual `Collapsible`: a `RichLog` renders to strips and cannot host interactive
+  children. A failed turn now leads with the exception **type** and a dim
+  `see agent86 trace show -s <session>`. **UX-03/UX-04/UX-05 the prompt and sessions:**
+  `PromptInput` is a `TextArea` that keeps the `Input` interface, so it swapped in without
+  reopening turn handling (Enter submits, Shift+Enter/Ctrl+J newline, Up/Down history from the
+  first/last line, Escape clears, 8 rows before scrolling); `PromptHistory` is stdlib-only, follows
+  bash's rules, degrades to "this session only" on a bad file, and is shared with the plain loop
+  through `[ui] history_file`. `@path` mentions inline a file into the prompt, every path resolved
+  through `SandboxPolicy.resolve_within` *before* it is opened and bounded by
+  `[tools] mention_max_bytes`, with refusals carried in the prompt as well as shown. Sessions are
+  titled from the first user message (once, on the first persist that can name them, asking the
+  store first so compaction can't rename a conversation) and reachable via `/sessions`,
+  `/resume [id]` on an 8-character prefix, and `SessionPickerModal`. **UX-06/TOOL-01 edits and
+  approvals:** `edit_file` became exact-match with `old_string`/`new_string`/`replace_all`,
+  refusals that name the match count, BOM and CRLF preserved by decoding and re-encoding in the
+  tool, and a unified diff in the result; `Tool.preview` puts that diff (or the whole command,
+  capped at 60 lines) in front of the approval on both interactive surfaces, with `ApprovalPreview`
+  as a `str` subclass so the `(tool_name, preview) -> bool` contract stayed untouched.
+  **SKILL-01 skills:** frontmatter now parses to the Agent Skills convention (a `---` on its own
+  line, block scalars, space-delimited `allowed-tools`, PyYAML optional), discovery searches five
+  roots first-root-wins with project roots resolved against an explicit workspace, `skill_roots()`
+  feeds `default_policy` so bundled resources are readable, and `ToolRegistry.dispatch` **refuses**
+  anything outside a non-empty allowlist, with `clear_skill()` lifting the restriction at the end
+  of every turn. The scripting contract is untouched: `run`, `run --json` and `--plain` are
+  unchanged, and `tui/mentions.py` imports no Textual so the plain loop shares it for free.
+  1079 tests collected.
 
 - 2026-09-19 — **Phase 7 (Context & Cost) complete; v0.8 milestone complete at 1/1 phase and
   released as v0.8.0.** Executed as a review-driven pass rather than a numbered plan set (see
@@ -677,20 +720,24 @@ v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette
 
 ## Next Step
 
-The v0.7 "Trustworthy harness" milestone is complete and shipped as **v0.7.0** — 1/1 phase,
-8/8 requirements (REL-01…REL-05, SEC-02…SEC-04) Complete. Every v0.7 candidate recorded at the
-close of v0.6 shipped. The orchestrator tags the release after the final full-suite run.
+The v0.9 "Coding-agent UX" milestone is complete and shipped as **v0.9.0** — 1/1 phase,
+8/8 requirements (UX-01…UX-06, TOOL-01, SKILL-01) Complete. Every v0.9 candidate recorded at the
+close of v0.8 shipped. The orchestrator tags the release after the final full-suite run.
 
-**Next milestone: v0.8 — context & cost.** v0.6 made the harness usable and v0.7 made it honest;
-v0.8 is about spending the context window and the token budget *well* rather than merely
-reporting them accurately: context compaction/summarization of the trimmed span, Anthropic
-prompt-cache breakpoints, parallel execution of a turn's independent tool calls, `max_tokens`
-continuation, and a per-turn cost line in the footer and `/cost`. Candidates are recorded in
+**Next milestone: v1.0 — the release milestone.** v0.6 made the harness usable, v0.7 honest, v0.8
+frugal and v0.9 a coding agent; v1.0 is about shipping it: a **PyPI release workflow** (a tagged
+release builds and publishes via trusted publishing, rather than install-from-source only), an
+**OTel exporter** actually wired up (spans are emitted today but nothing leaves the process), and
+**flight-recorder redaction and rotation** (the recorder is append-only, unbounded and unredacted;
+it should scrub secrets on write and roll over by size/age). Candidates are recorded in
 `PROJECT.md` under **Next milestone candidates**.
 
-Outstanding (non-blocking): the v0.7 review leftovers in `docs/BACKLOG.md` § "v0.7 review
-leftovers" (status-footer wrapping below ~127 columns, `web_fetch` approval gating, the
-per-turn cost line, `test_mcp_live`), plus the older deferred list in the same file. Still
+Outstanding (non-blocking): what v0.9 opened, now in `docs/BACKLOG.md` § TUI / § "Skills & tools" —
+click-to-toggle tool blocks (needs a widget-based transcript, since a `RichLog` can't host
+children), history *navigation* in the plain loop (needs `readline`), and the sandbox jail's
+missing read/write split, which makes a skill root granted for *reading* writable too. Plus the
+v0.7 review leftovers in `docs/BACKLOG.md` § "v0.7 review leftovers" (`web_fetch` approval gating,
+a `/cost` breakdown by turn, `test_mcp_live`) and the older deferred list in the same file. Still
 carried from v0.6: manual Windows Terminal verification per `03-VALIDATION.md` §Manual-Only
 (real keyring round-trip, real `config.toml` comment preservation, live OpenRouter/Groq catalog
 schema check, a real turn against a cloud model) and of the full `/config mcp` flow against a

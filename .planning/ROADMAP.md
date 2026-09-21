@@ -261,6 +261,69 @@ workstream.
 | `41cbbfb` feat(tools): run a step's read-only tool calls in parallel | Loop & context |
 
 ---
+
+# Roadmap: agent86 Coding-Agent UX Milestone (v0.9)
+
+**Created:** 2026-09-21
+**Phases:** 1 | **Requirements mapped:** 8/8 ✓
+
+| # | Phase | Goal | Requirements | Success Criteria |
+|---|-------|------|--------------|------------------|
+| 8 | Coding-Agent UX | 8/8 | Complete | 2026-09-21 |
+
+### Phase 8: Coding-Agent UX
+**Goal:** make the transcript and the prompt do for a *coding* session what the TUI already did
+for a chat session. v0.8 made the harness frugal; this phase makes it usable for code. Every item
+was a v0.8 review finding recorded in `PROJECT.md` § "Next milestone candidates" and
+`docs/BACKLOG.md` §§ "TUI" and "Skills & tools", not new surface area.
+
+**Requirements:** UX-01, UX-02, UX-03, UX-04, UX-05, UX-06, TOOL-01, SKILL-01
+
+**Success criteria:**
+1. A finished reply shows headings, lists, tables and syntax-highlighted fenced code rather than
+   their source, without slowing streaming down and without a reply that contains console markup
+   being able to raise or disappear.
+2. A turn with ten tool calls reads as ten one-line blocks that expand, on a keypress, to the full
+   arguments and the full result — neither of which is truncated on the way in.
+3. The prompt accepts a multi-line paste, submits on Enter, recalls what was typed in an earlier
+   *run* of the app, and inlines a file with `@path` without a tool round trip — refusing anything
+   outside the workspace jail before it opens it.
+4. A past conversation can be found by what it was about, listed, and resumed from the app, and a
+   resumed session's transcript looks like the one that was left.
+5. An `edit_file` approval shows the diff the model is asking for, on both interactive surfaces;
+   `run` without `--yes` still declines.
+6. An exact-match edit against a CRLF file with a BOM leaves both intact, and an ambiguous
+   `old_string` is refused with a count rather than applied to the first hit.
+7. A skill's `allowed-tools` refuses a call outside the list, names the list, and stops applying at
+   the end of the turn; a skill with a horizontal rule in its body still loads, with or without
+   PyYAML installed.
+8. The scripting contract is unchanged: `run`, `run --json` and `--plain` keep working, and the
+   TUI's new modules are never imported on their path.
+
+**Status:** Complete (2026-09-21). Executed as a review-driven pass rather than a numbered plan
+set — see `phases/08-coding-agent-ux/SUMMARY.md` for the commit-by-commit breakdown grouped by
+workstream.
+
+**Commits** (oldest-first, `43cc803..`):
+
+| Commit | Workstream |
+|---|---|
+| `efdd306` feat(config): add prompt-history, markdown and mention-cap settings | Input |
+| `5341ae5` feat(tools): exact-match edit_file with unified diffs | Tools & skills |
+| `81f3753` feat(ui): multi-line prompt with shared, persistent history | Input |
+| `b9b6b68` feat(tui): expand @file mentions into the prompt | Input |
+| `c77ede8` feat(guardrails): show what a side effect does before approving it | Tools & skills |
+| `c4c1bd9` feat(memory): name sessions and add /sessions, /resume and a picker | Input |
+| `8b7e2fc` feat(skills): Agent Skills convention, with allowed-tools enforced | Tools & skills |
+| `d7a1d95` fix(tui): default SessionPickerModal to an empty session list | Input |
+| `0cc8605` feat(tui): render finished assistant replies as Markdown | Transcript |
+| `f524880` feat(tui): collapsible tool-call blocks in the transcript | Transcript |
+| `daca8ec` feat(tui): name the exception and point at the trace on a failed turn | Transcript |
+| `166906f` feat(tui): hook points for the v0.9 input/session wiring pass | Wiring |
+| *(the wiring pass)* PromptInput swapped in, mentions on submit, `/resume` → picker, `discover_skills(config, workspace)`, the gate given the tool context, `clear_skill()` per turn, and the plain loop's y/N approval | Wiring |
+
+---
 *v0.6 roadmap created: 2026-07-19 · v0.6 complete: 2026-09-19 (5/5 phases)*
 *v0.7 roadmap created: 2026-09-19 · v0.7 complete: 2026-09-19 (1/1 phase, 8/8 requirements)*
 *v0.8 roadmap created: 2026-09-19 · v0.8 complete: 2026-09-19 (1/1 phase, 7/7 requirements)*
+*v0.9 roadmap created: 2026-09-21 · v0.9 complete: 2026-09-21 (1/1 phase, 8/8 requirements)*

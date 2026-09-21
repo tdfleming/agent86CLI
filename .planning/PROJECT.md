@@ -1,4 +1,4 @@
-# agent86 — Context & Cost Milestone (v0.8)
+# agent86 — Coding-Agent UX Milestone (v0.9)
 
 ## What This Is
 
@@ -13,14 +13,22 @@ cloud metadata. v0.8 makes it **deliberate about what it spends**: v0.7 taught t
 report its context and cost accurately, and the numbers it then reported were bad — a flat 8000-token
 conversation budget on a 200k window, the oldest turns silently forgotten, a stable prompt prefix
 re-billed every turn, a long answer cut off mid-sentence, and five file reads taken one at a time.
+v0.9 makes it usable **for code**: the harness was a good chat client with tools attached — replies
+arrived as raw Markdown source, ten tool calls buried the answer, the prompt was a single line with
+no memory, a file had to be read through a tool round trip, sessions were opaque 12-character ids,
+`edit_file` rewrote a file's line endings and answered "Edited a.py.", an approval showed 300
+characters of JSON, and a skill's `allowed-tools` was a comment.
 
 ## Core Value
 
-The context window and the token budget are spent well, not merely measured accurately. The
-conversation is budgeted against the model's real window, what no longer fits is summarized rather
-than forgotten, a truncated answer continues, independent reads run together, the stable prompt
-prefix is cached and priced as cached, and every turn ends with one line saying what it cost.
+The transcript and the prompt do for a coding session what the TUI already did for a chat session.
+A reply renders as Markdown with highlighted code, a tool call is one expandable line, the prompt
+is a multi-line composer with history and `@file` mentions, sessions have names and a picker, an
+edit is exact-match and shows its diff — at the approval prompt, before it happens — and a skill's
+declared tool allowlist is enforced.
 
+Carried from v0.8: the context window and the token budget are spent well, not merely measured
+accurately.
 Carried from v0.7: what the harness reports is true and what it claims to defend, it defends.
 Carried from v0.6: the user can run, configure, and steer the agent entirely from within an
 interactive terminal app — switching models, wiring up MCP servers, and watching live progress —
@@ -134,12 +142,67 @@ without hand-editing TOML or restarting.
   TUI, the plain loop and `agent86 run`'s stderr, with an additive `turn` key in `run --json` —
   Phase 7
 
+<!-- v0.9 "Coding-agent UX" — Phase 8. Shipped as v0.9.0 on 2026-09-21. -->
+
+- ✓ **UX-01**: A finished assistant reply renders as **Markdown** — headings, lists, tables, inline
+  code and fenced blocks through `Syntax(word_wrap=True)` — re-rendered once on completion rather
+  than re-parsed per delta, skipped entirely for a reply with no Markdown structure, never
+  markup-parsed (so `[/weird]` can neither raise `MarkupError` nor vanish into a style tag), with
+  the prompt echo and harness notices kept plain; `[ui] markdown` is the switch, and the transcript
+  becomes an ordered entry list replayed into the `RichLog` rather than an append-only log —
+  Phase 8
+- ✓ **UX-02**: A tool call is **one collapsible block** — `▸ name(args) → summary` cropped to the
+  terminal width, expanded with `Ctrl+O` (last) / `Ctrl+Shift+O` (all) to the full arguments as
+  pretty JSON and the full result capped at 200 lines; the data read from the session state through
+  `turn_bridge` rather than from the delta lines, which also stopped tool results reading as model
+  speech; the block rendered when its result lands, its slot reserved at announce time, an
+  unobserved call flushed at turn end — Phase 8
+- ✓ **UX-03**: A **multi-line prompt with persistent history** — `PromptInput` keeps the `Input`
+  interface while Enter submits, Shift+Enter/Ctrl+J insert newlines, Up/Down walk history from the
+  first/last line, Escape clears, and the box grows to 8 rows; `PromptHistory` is stdlib-only and
+  follows bash's rules (no blanks, no leading-space lines, no consecutive duplicates, capped at
+  `[ui] history_size`, atomic append), degrades to "this session only" on a bad file, and is shared
+  with the plain loop through `[ui] history_file` — Phase 8
+- ✓ **UX-04**: **`@path` mentions** inline a file into the prompt — `@"path with spaces"` accepted,
+  every path resolved through `SandboxPolicy.resolve_within` *before* it is opened, directories
+  listed (≤200 names) instead of read, binaries and files over `[tools] mention_max_bytes` refused,
+  refusals surfaced to the user *and* carried in the prompt, up to 20 palette completions, and no
+  Textual import so `--plain` expands them through the same module — Phase 8
+- ✓ **UX-05**: **Sessions have names, a listing and a picker** — titled from the first user message
+  (60 chars) once, on the first persist that can name them, asking the store first so compaction
+  can't rename a conversation; `SessionInfo`/`recent_sessions()`/`session_title()` keep sqlite
+  `Row`s out of the UI; `/sessions` lists with the active one highlighted and `/resume [id]` takes
+  the 8-character prefix the listing shows, refusing an ambiguous one; `/resume` with no argument
+  raises `SessionPickerModal` and a resumed session rebuilds the transcript — Phase 8
+- ✓ **UX-06**: **The approval prompt shows the change** — `Tool.preview(arguments, ctx)` on the
+  ABC, called with raw unvalidated arguments and never raising, returning a unified diff for
+  `write_file`/`edit_file` (naming the count when `old_string` is missing or ambiguous) and the
+  whole command or snippet capped at 60 lines for `run_command`/`python_exec`; `ApprovalPreview` is
+  a `str` subclass so the `(tool_name, preview) -> bool` contract is untouched; the TUI renders it
+  as scrollable `Syntax` (never markup) with `y`/`n`, and the plain loop asks `y/N` with the same
+  detail on a TTY while `run` without `--yes` still declines — Phase 8
+- ✓ **TOOL-01**: **`edit_file` is exact-match and answers with a diff** —
+  `old_string`/`new_string`/`replace_all` (with the `old`/`new` aliases kept), refusals that name
+  the match count and the way out, BOM and CRLF preserved by decoding and re-encoding in the tool
+  rather than round-tripping `read_text`/`write_text`, a mixed file left verbatim, a non-UTF-8 file
+  refused rather than mangled, a unified diff in the result and in `metadata["diff"]`, and
+  `write_file` saying "new file, N lines" when there was nothing to diff — Phase 8
+- ✓ **SKILL-01**: **The Agent Skills convention, with `allowed-tools` enforced** — frontmatter
+  closed by a `---` on its own line, block scalars/quoted values/inline and block lists, PyYAML
+  used when present and a built-in mini parser when not (a skill must never need a dependency),
+  space-delimited `allowed-tools`; a five-root search order (project `.agent86/skills` →
+  `.claude/skills` → `~/.agent86/skills` → `~/.claude/skills` → `[skills] paths`) with first root
+  winning and project roots resolved against an explicit workspace; `skill_roots()` feeding
+  `default_policy` so bundled resources are readable; and `ToolRegistry.dispatch` refusing anything
+  outside a non-empty allowlist, naming the skill and the list, with `use_skill` always callable
+  and `clear_skill()` lifting the restriction at the end of every turn — Phase 8
+
 ### Active
 
 <!-- This milestone. Hypotheses until shipped. -->
 
-_None — all 10 v0.6, all 8 v0.7 and all 7 v0.8 requirements validated; v0.8 shipped as v0.8.0
-on 2026-09-19._
+_None — all 10 v0.6, all 8 v0.7, all 7 v0.8 and all 8 v0.9 requirements validated; v0.9 shipped
+as v0.9.0 on 2026-09-21._
 
 ### Out of Scope
 
@@ -216,29 +279,41 @@ on 2026-09-19._
 | `TurnSummary` lives in `orchestration/state.py`, not `types.py` | It is an orchestration record, not part of the provider-agnostic lingua franca | ✓ Good (Phase 7) |
 | `TurnSummary` published at turn **start**, duration stamped at every exit | A UI can watch it fill, and a turn that failed halfway still spent tokens | ✓ Good (Phase 7) |
 | The footer sheds whole segments by priority; model/cost/mode/phase are never shed | They say what is running, what it costs, and whether it can act without asking — the quiet omission v0.7 exists to remove | ✓ Good (Phase 7) |
+| The transcript keeps an **entry model** beside the `RichLog` rather than migrating to a `VerticalScroll` of widgets | Every surface queries `#transcript` as a `RichLog`; an entry that can change how it renders buys Markdown and collapsing without touching any of them | ✓ Good (Phase 8) |
+| Markdown re-rendered **on completion**, never per delta | A half-written fence or table renders as garbage, and re-parsing the document on every delta is the cost the streaming path exists to avoid | ✓ Good (Phase 8) |
+| Tool blocks toggle by **keyboard**, not by click | A `RichLog` renders to strips and cannot host interactive children; a click-to-toggle block needs a widget-based transcript (BACKLOG) | ✓ Good (Phase 8) |
+| Block contents come from the **session state**, not the delta lines | The loop already appends the assistant message and the tool message; reconstructing them from display text would be lossy by construction | ✓ Good (Phase 8) |
+| `PromptInput` keeps the `Input` interface (`.value`, `.clear()`, `Submitted`) | The app swaps a `TextArea` in without reopening turn handling, and one `submit_prompt` path serves any input widget | ✓ Good (Phase 8) |
+| One history **file** shared by both surfaces, appended by the plain loop | The prompts you type are one history; the plain loop just can't navigate it, because stdlib `input()` has no line editor | ✓ Good (Phase 8) |
+| A mention resolves through the jail **before** the file is opened | A refused path must not be stat'ed or sniffed either — otherwise the refusal still leaks whether it exists | ✓ Good (Phase 8) |
+| A mention refusal is carried **in the prompt** as well as shown to the user | Otherwise the model reasons as though the file arrived; a visible refusal the model can't see is worse than no mention | ✓ Good (Phase 8) |
+| `ApprovalPreview` is a `str` subclass carrying `detail`/`lexer` | Every caller implements `(tool_name, preview) -> bool`; a richer type would have broken the TUI bridge, the plain loop and every test double at once | ✓ Good (Phase 8) |
+| `Tool.preview` takes **raw, unvalidated** arguments and must never raise | The gate runs before validation, and a preview that raises would turn a question into a crash; `build_preview` swallows and logs | ✓ Good (Phase 8) |
+| `edit_file` keeps `old`/`new` as aliases for `old_string`/`new_string` | An older transcript replayed against the new tool should degrade to working, not hard-fail | ✓ Good (Phase 8) |
+| The edit tool owns decoding and re-encoding, rather than `read_text`/`write_text` | Only the tool knows it must preserve a BOM and CRLF; the convenience API silently rewrites both | ✓ Good (Phase 8) |
+| Skill frontmatter parses with PyYAML **when present**, a mini parser when not | A skill must never need a dependency to be discovered; both paths are tested against the same cases | ✓ Good (Phase 8) |
+| First skill root wins, project roots before user roots | A project skill shadows a user skill and nothing shadows the project — the only shadowing order that can't surprise | ✓ Good (Phase 8) |
+| `allowed-tools` is a property of the **turn**: activating another skill replaces it, `clear_skill()` lifts it | Intersecting allowlists across a turn makes a skill's boundary depend on history; `use_skill` stays callable so a forgetful skill isn't a one-way door | ✓ Good (Phase 8) |
 
 ## Next milestone candidates
 
-Every v0.8 candidate shipped. v0.6 made the harness usable, v0.7 made it honest, v0.8 made it
-frugal; the natural **v0.9** theme is **coding-agent UX** — the transcript and the prompt doing
-for a coding session what the TUI already does for a chat session:
+Every v0.9 candidate shipped. v0.6 made the harness usable, v0.7 made it honest, v0.8 made it
+frugal, v0.9 made it a coding agent; **v1.0** is the release milestone:
 
-- **Markdown rendering in the transcript** — model output is written as escaped plain text; code
-  fences, lists, and tables deserve real rendering
-- **Diff preview in the approval modal** — approving a `write_file`/`edit_file` should show the
-  diff being approved, not just the tool name and arguments
-- **Prompt history and multi-line input** — up-arrow recall and a soft-wrap composer
-- **`@file` mentions** — path autocomplete in the prompt that inlines a file's content
-- **Session picker** — sessions persist and resume, but only by id on the command line
-- **Tool-call collapsing** — long tool observations folded to an expandable one-line summary
-- **Agent Skills convention + `allowed-tools` enforcement** — a skill's declared tool allowlist is
-  documentation today, not a gate
+- **PyPI release workflow** — a tagged release should build and publish via trusted publishing,
+  rather than the project being install-from-source only
+- **OTel exporter wiring** — spans are emitted but no exporter is configured, so nothing leaves
+  the process
+- **Trace redaction and rotation** — the flight recorder is append-only, unbounded and unredacted;
+  it should scrub secrets on write and roll over by size/age
 
-Then **v1.0** as the release milestone: an OTel exporter actually wired up, flight-recorder
-redaction and rotation, and a PyPI publish workflow.
+Smaller things v0.9 opened, all recorded in `docs/BACKLOG.md`: click-to-toggle tool blocks (needs a
+widget-based transcript — a `RichLog` can't host children), history *navigation* in the plain loop
+(needs `readline`), and a read/write split in the sandbox jail, since a skill root granted for
+reading is also writable today.
 
-Deferred further: see `docs/BACKLOG.md` § "Review findings 2026-09-19" (TUI, skills,
-observability, release) and § "v0.7 review leftovers".
+Deferred further: see `docs/BACKLOG.md` § "Review findings 2026-09-19" (observability, release)
+and § "v0.7 review leftovers".
 
 ## Evolution
 
@@ -258,7 +333,8 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-19 after Phase 7 (Context & Cost) — CTX-01…CTX-04 and COST-01…COST-03
-validated; the v0.8 Context & Cost milestone is complete (1/1 phase, 7/7 requirements) and
-released as v0.8.0. The v0.7 Trustworthy milestone closed at 1/1 phase and 8/8 requirements; the
-v0.6 Interactive milestone at 5/5 phases and 10/10 requirements.*
+*Last updated: 2026-09-21 after Phase 8 (Coding-Agent UX) — UX-01…UX-06, TOOL-01 and SKILL-01
+validated; the v0.9 Coding-Agent UX milestone is complete (1/1 phase, 8/8 requirements) and
+released as v0.9.0. The v0.8 Context & Cost milestone closed at 1/1 phase and 7/7 requirements;
+the v0.7 Trustworthy milestone at 1/1 phase and 8/8; the v0.6 Interactive milestone at 5/5 phases
+and 10/10.*
