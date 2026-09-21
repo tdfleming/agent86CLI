@@ -5,7 +5,7 @@
 > implementation of the five-tier architecture and four pillars described in
 > *The Agentic Harness* (Tony Fleming, 2026).
 
-**Status:** Implemented (Phases 1–9 complete), then extended through v0.9.0. This document is
+**Status:** Implemented (Phases 1–9 complete), then extended through v1.0.0. This document is
 the contract the code was built against; the build followed §14 phase-by-phase, each phase
 verified with tests and a live run against a local model. Post-v0.1 releases added an
 interactive REPL with a persistent status line and live approval-mode and model switching
@@ -24,8 +24,12 @@ per-turn cost read-out on every surface (v0.8); and the "coding-agent UX" pass �
 transcript with collapsible tool-call blocks, a multi-line prompt with persistent history and
 `@file` mentions, named sessions with a listing and a picker, exact-match `edit_file` with unified
 diffs, `Tool.preview` behind every approval, and the Agent Skills convention with `allowed-tools`
-enforced as a gate (v0.9).
-**Version:** 0.9.0
+enforced as a gate (v0.9); and the "release" pass — a redacted and rotated flight recorder, a real
+OpenTelemetry exporter behind a provider of the harness's own, `trace export` (including a
+reconstructed OTLP span tree), PyPI packaging with a tag-driven publish workflow, and the
+scripting contract pinned by tests (v1.0).
+**Version:** 1.0.0 — **the contract below is fully implemented.** §15's "described above,
+deliberately not built" table no longer holds anything this document specifies as built.
 
 ---
 
@@ -684,9 +688,83 @@ the sliding window exactly.
   default workspace. The TUI renders the detail in a scrollable `rich.syntax.Syntax` panel, never
   as console markup (a diff is full of `[`), and takes `y`/`n` alongside `escape`; the plain loop
   asks `y/N` with the same detail when stdin is a TTY, and `run` without `--yes` still declines.
-- **Observability** — OpenTelemetry spans wrap each step, model call, and tool execution;
-  a parallel append-only **JSONL flight recorder** gives a local, greppable audit trail even
-  with no OTel collector configured.
+- **Observability** — two recorders, one always on. The **JSONL flight recorder**
+  (`observability/recorder.py`) gives a local, greppable audit trail with no collector
+  configured; **OpenTelemetry spans** (`observability/tracing.py`) wrap each turn, model call and
+  tool execution when a collector is wanted. Neither is ever allowed to be the reason a turn
+  fails: an event that cannot be serialised or a file that cannot be written is dropped silently
+  rather than raised into the ReAct loop, and every tracing failure path degrades to "no traces",
+  never to "no agent".
+
+**The flight recorder** (v1.0) is append-only JSONL under `[observability] path`, one file per
+machine, every event tagged with the session id. Two properties make it safe to leave on forever:
+
+- **Redacted** (`observability/redact.py`). Everything the harness sees flows through it — the
+  user's task text, the model's tool arguments, whatever a tool read off disk — into a file that
+  outlives the session and gets attached to bug reports. `redact_event` is the one gate between an
+  event and the file. Every string, at any depth, is rewritten with the **same regexes the
+  guardrail tier already uses** — `guardrails/scanners.py` for provider key shapes and credential
+  assignments, `secrets.py` for the key-shaped-token catch-all, *imported rather than re-spelled*,
+  so there is one place to fix when a provider invents a new prefix — and a match becomes
+  `***REDACTED***`, deliberately loud when grepping. Size is bounded separately: the big free-text
+  fields (`arguments`, `task`, `content`, `error`, `outcome`) are clipped to
+  `[observability] max_field_chars` with a visible `…[truncated N chars]`, and truncation is
+  *inherited* — once inside `arguments`, every nested string is a candidate, because the model
+  chooses those key names and the harness cannot enumerate them. It never raises: a value that
+  cannot be walked or serialised falls back to `str()`, and a redaction failure degrades to the
+  untouched event, because a trace that drops events is worse than a trace with a long line in it.
+  `redact = "none"` is the explicit, local opt-out.
+- **Rotated.** The live file is capped at `max_trace_bytes`; crossing it shifts `trace.jsonl` →
+  `trace.1.jsonl` … `trace.N.jsonl` and drops the oldest generation past `keep_traces`. Rotation
+  happens **between** events — flush, then rename — so no event is ever half-written, and the
+  rename retries briefly, because on Windows another process holding the file open (a tail, an
+  editor, a scanner) fails it with `PermissionError`; giving up is safe, since the writer keeps
+  appending and tries again at the next crossing. `max_trace_bytes = 0` disables rotation.
+
+Reading back streams rather than slurps: `read_events` holds at most `limit` records in memory,
+and `trace_generations` walks the rotated files newest-first when the tail of the live file does
+not hold enough *matching* events — which is what makes `trace show --kind tool_call -n 50` show
+fifty tool calls rather than whatever few survive the last fifty events of any kind (§12).
+
+**OpenTelemetry** (v1.0). Before v1.0 the tracer only called `trace.get_tracer`, which returns a
+handle on the **no-op global provider** unless something else in the process has already installed
+one — so with `otel = true` and the extra installed, spans were created and dropped on the floor.
+`Tracer` now builds a provider of its own:
+
+- a `Resource` carrying `service.name = "agent86"` and `service.version`;
+- an exporter selected by `[observability] otel_exporter` — `otlp` (gRPC, falling back to HTTP
+  when only the HTTP exporter is installed), `console` (stderr, for local debugging), or `none`
+  (record, export nothing);
+- a `BatchSpanProcessor`, flushed by `Tracer.close()` from `Harness.close()`.
+
+The standard `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_HEADERS` are honoured — the
+exporters read them themselves, which is how every other instrumented process is configured — and
+`[observability] otel_endpoint` overrides them when config, not environment, is the source of
+truth.
+
+The provider is deliberately **not installed as the global provider**. agent86 is importable
+inside a host that owns its own tracing, and calling `set_tracer_provider` would make stealing it
+a side effect of an import; the tracer keeps its own handle instead and `get_tracer` is only used
+on the fallback path. `Tracer.active` says whether spans are really being recorded and
+`Tracer.note` carries the one-line reason when they are not ("otel enabled but the 'otel' extra is
+not installed"), so a surface can say *why* instead of silently doing nothing. Nothing in the
+module imports `opentelemetry` at module scope — the imports live inside `_build_provider`, which
+only runs when tracing is switched on, so `agent86 run` never pays for them.
+
+**The span tree**, following the GenAI semantic conventions where a name exists and `agent86.*`
+where one does not:
+
+```
+turn                 session.id, gen_ai.request.model
+├── model_call       gen_ai.system, gen_ai.request.model,
+│                    gen_ai.usage.input_tokens / .output_tokens,
+│                    gen_ai.response.finish_reasons
+└── tool_call        tool.name, gen_ai.tool.name
+```
+
+The same four event kinds (`turn_start`, `turn_end`, `model_call`, `tool_call`) are what
+`agent86 trace export -f otlp-json` reconstructs a span tree from, so a trace captured with no
+collector running can still be handed to one afterwards (§12).
 
 ---
 
@@ -782,6 +860,16 @@ input_per_mtok = 3.0  output_per_mtok = 15.0
               ingress = "warn"       # off | warn | block                (enum)
               egress  = "warn"       # off | warn | redact               (enum)
 [memory]      path = "~/.agent86/memory.db"  embeddings = "sentence-transformers:all-MiniLM-L6-v2"
+[observability]
+              trace = true           # the JSONL flight recorder
+              path = "~/.agent86/traces"
+              redact = "secrets"     # secrets | none                      (enum)
+              max_field_chars = 2000 # clip for arguments/task/content/error/outcome
+              max_trace_bytes = 50_000_000  # rotate past this; 0 = never rotate
+              keep_traces = 5        # rotated generations kept
+              otel = false           # emit OpenTelemetry spans (needs the `otel` extra)
+              otel_exporter = "otlp" # otlp | console | none                (enum)
+              otel_endpoint = ""     # overrides OTEL_EXPORTER_OTLP_ENDPOINT when set
 [limits]      max_steps = 40  max_cost_usd = 5.0  max_wall_clock_s = 900  tool_timeout_s = 60
               max_context_tokens = 0        # optional HARD cap on conversation tokens; 0 = none
               max_output_tokens = 8192      # per-call generation cap when no provider names one
@@ -818,6 +906,25 @@ a missing or unwritable one degrades to "this session only" rather than failing 
 `[skills] paths` is unchanged but now *last* in a five-root search order (§7), where it used to be
 one of three.
 
+Fields added in v1.0 — six under `[observability]`, all additive with defaults, so an existing
+config keeps working and starts getting a redacted, bounded trace for free:
+
+| Field | Default | What it does |
+|---|---|---|
+| `redact` | `"secrets"` | `secrets` rewrites secret-shaped values and clips the big free-text fields; `none` writes events exactly as the loop emitted them (`RedactMode` enum) |
+| `max_field_chars` | `2000` | clip applied to `arguments` / `task` / `content` / `error` / `outcome` and anything nested inside them |
+| `max_trace_bytes` | `50_000_000` | cap on the live trace file; crossing it rotates. `0` disables rotation |
+| `keep_traces` | `5` | rotated generations kept (`trace.1.jsonl` … `trace.N.jsonl`); `0` keeps no history |
+| `otel_exporter` | `"otlp"` | where spans go when `otel = true`: `otlp` \| `console` \| `none` (`OtelExporter` enum) |
+| `otel_endpoint` | `None` | overrides `OTEL_EXPORTER_OTLP_ENDPOINT`; unset means "whatever the standard `OTEL_*` env vars say" |
+
+`redact` and `otel_exporter` are `StrEnum`s, for the same reason the v0.7 mode fields are (§11
+above): a typo in a field that governs whether secrets reach disk must fail validation, not
+silently turn the scrubbing off. The defaults are the safe ones — redaction is on and rotation is
+bounded without anyone opting in — because the flight recorder was the one place in the harness
+where a credential could come to rest in plain text on disk without a user choosing to put it
+there.
+
 An MCP server is reached over one of three transports: **stdio** (default — set `command`),
 **streamable HTTP** (default when `url` is set), or **SSE** (`url` + `transport = "sse"`). Exactly
 one of `command`/`url` is required; the transport is inferred but can be set explicitly.
@@ -837,9 +944,41 @@ agent86 --sandbox docker         # override sandbox
 agent86 config [get|set|path]    # inspect/edit config
 agent86 skills [list|show NAME]  # manage skills
 agent86 mcp [list|add|remove]    # manage MCP servers
-agent86 trace [show|tail]        # inspect the flight recorder
+agent86 trace [path|show|export] # inspect and export the flight recorder
 agent86 models                   # list configured/available models across providers
 ```
+
+**The trace sub-app** (v1.0). `trace path` prints the live file and every rotated generation with
+its size. `trace show` and `trace export` share one reader, `_read_trace`, which applies the
+filters **before** the limit and streams generation by generation, so a filtered `-n` returns that
+many *matching* events rather than whatever survives the last N events of any kind:
+
+```
+agent86 trace show   [-s SESSION] [-n LIMIT] [-k KIND]... [--since 30m|2h|7d]
+agent86 trace export [-s SESSION] [-n LIMIT] [--since 2h] [-f jsonl|json|otlp-json] [-o FILE]
+```
+
+`--since` parses `30s` / `15m` / `2h` / `7d` (a bare number is seconds). `show` renders
+`time · session · kind · in · out · cost · detail`, with the token and cost columns filled only on
+a `model_call` — where they are the only place they mean anything — and a totals line beneath the
+table. `export` writes `jsonl` (the filtered events), `json` (one array), or **`otlp-json`**, which
+reconstructs a span tree from the four span-shaped event kinds (§9) with **derived**, not random,
+span ids, so exporting the same trace twice produces identical output and re-exporting is
+idempotent. Everything else the recorder writes — guardrail hits, compactions, routing decisions —
+stays in the JSONL views, where it is greppable.
+
+**`run_turn(user_text, state, *, display_text=None)`** (v1.0). The model gets `user_text`, which
+for an interactive turn is the *expanded* prompt with `@file` blocks inlined; `display_text` is
+what the user actually typed, and it is what titles the session and what `turn_start` records in
+the trace. Without it, a prompt whose body was an inlined file named the session after 60
+characters of that file. The parameter is keyword-only and falls back to `user_text`, so every
+existing caller is unaffected.
+
+**A memory database that will not open degrades, rather than refusing to start** (v1.0). A locked
+file (a second agent86 running) or an unwritable home used to raise a bare `sqlite3` error several
+frames deep. `MemoryStore` raises `MemoryStoreError` naming the file and offering the fixes, the
+CLI turns it into a message, and `Harness` catches it and **runs with memory disabled plus a
+visible note** — the same degradation rule every optional dependency follows (§13).
 
 **Two interactive surfaces, one command registry.** The default is the **TUI** (`tui/app.py`):
 a Markdown transcript, a multi-line prompt, a live status footer (model · ctx% · tokens · cost ·
@@ -981,7 +1120,14 @@ Heavy/optional deps (`sentence-transformers`, `docker`) live behind extras:
 
 ## 15. Non-goals, and design intent not yet built
 
-**Non-goals (still, as of v0.9):**
+> **1.0 status.** Nothing this document specifies as part of the harness remains unbuilt. The
+> three rows that closed in v1.0 — a configured OTel exporter, flight-recorder redaction, and
+> flight-recorder rotation (all §9) — were the last entries here that described the *contract*
+> rather than an alternative to it. What is left below is either an explicit non-goal, an
+> alternative implementation of something that already works, or an evaluation the project has
+> not written yet; each is tracked in `docs/BACKLOG.md`.
+
+**Non-goals (still, as of v1.0):**
 
 - Distributed/networked multi-host agents (in-process MAS only).
 - gVisor / WASM sandboxes (subprocess + Docker only; WASM is a later option).
@@ -992,6 +1138,11 @@ Heavy/optional deps (`sentence-transformers`, `docker`) live behind extras:
 **Described above as design intent, deliberately not implemented yet.** Each is marked *not
 built* at its section; the full list with analysis is in `docs/BACKLOG.md`.
 
+> Three rows left this table in v1.0, all of them §9 observability: a configured OTel exporter
+> (the tracer now owns a `TracerProvider` with a `BatchSpanProcessor`, rather than handing spans
+> to the no-op global provider), flight-recorder **redaction**, and flight-recorder **rotation**.
+> Alongside them, and never a row here because it was distribution rather than described design
+> intent, the project is now published to PyPI from a `v*` tag (`docs/RELEASING.md`).
 > One row left this table in v0.9: `SKILL.md` `allowed-tools` is now enforced as a gate (§7),
 > alongside the rest of the "coding-agent UX" set, none of which were rows here because they were
 > UI surface rather than described design intent — the Markdown transcript, collapsible tool-call
@@ -1010,4 +1161,4 @@ built* at its section; the full list with analysis is in `docs/BACKLOG.md`.
 | Click-to-toggle tool-call blocks — a `RichLog` cannot host interactive children | §12 TUI | BACKLOG § TUI |
 | History *navigation* in the plain loop — stdlib `input()` has no line editor | §12 TUI | BACKLOG § TUI |
 | A read/write split in the sandbox jail, so a skill root granted for reading isn't also writable | §7 tools | BACKLOG § Skills & tools |
-| A configured OTel exporter; flight-recorder redaction and rotation | §9 observability | BACKLOG § Observability |
+| A `trace show` view of *what* a compaction summarized — the originals are archived, but unreadable from the CLI | §9 observability | BACKLOG § Context & cost |
