@@ -883,3 +883,58 @@ async def test_mcp_test_dismissed_with_none_is_a_cancel(tmp_path):
         lines = _transcript_lines(app)
         assert "mcp: cancelled" in lines
         assert "sk-never-stored" not in lines
+
+
+# ---- v0.9: turn errors, and the hook points the wiring pass binds to --------- #
+
+
+class _ExplodingProvider(ModelProvider):
+    """Raises mid-stream, the way a provider/auth failure reaches the loop."""
+
+    name = "exploding"
+
+    def __init__(self, exc: BaseException | None = None) -> None:
+        self.model = "fake:exploding"
+        self._exc = exc or RuntimeError("the endpoint hung up")
+
+    def stream(self, request: CompletionRequest) -> Iterator[CompletionDelta]:
+        yield CompletionDelta(text="thinking about it")
+        raise self._exc
+
+
+def _plain_transcript(app) -> str:
+    return "\n".join(line.text for line in app.query_one("#transcript", RichLog).lines)
+
+
+async def test_turn_error_names_the_exception_and_points_at_the_trace(tmp_path):
+    repl = _make_repl(tmp_path, _ExplodingProvider(ValueError("bad [/x] response")))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        app.query_one("#prompt", Input).value = "go"
+        await pilot.press("enter")
+        await _wait_until(lambda: app._turn_running is False)
+        await pilot.pause()
+
+        lines = _plain_transcript(app)
+        assert re.search(r"error: \w+", lines)        # the exception TYPE leads the line
+        assert f"see agent86 trace show -s {repl.state.session_id}" in lines
+        assert app.is_running                         # no MarkupError took the app down
+        assert app.query_one("#prompt", Input).disabled is False
+
+
+async def test_turn_error_renders_the_exception_type_and_message_escaped(tmp_path):
+    """Driven directly, so the assertion is about rendering and not about what the loop wraps."""
+    from agent86.tui.messages import TurnError
+
+    repl = _make_repl(tmp_path, make_text_provider("hello world"))
+    app = Agent86App(repl)
+    async with app.run_test(size=(140, 24)) as pilot:
+        await pilot.pause()
+        app.on_turn_error(TurnError(ValueError("bad [/x] response")))
+        await pilot.pause()
+
+        lines = _plain_transcript(app)
+        assert "error: ValueError: bad [/x] response" in lines
+        assert f"see agent86 trace show -s {repl.state.session_id}" in lines
+        assert app.is_running

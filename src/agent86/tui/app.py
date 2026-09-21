@@ -68,6 +68,8 @@ from agent86.tui.widgets.tool_block import ToolBlockEntry
 from agent86.tui.widgets.transcript import (
     DARK_CODE_THEME,
     LIGHT_CODE_THEME,
+    ErrorEntry,
+    NoticeEntry,
     RawEntry,
     ReplyEntry,
     TranscriptEntry,
@@ -1077,11 +1079,12 @@ class Agent86App(App):
     def on_turn_notice(self, message: TurnNotice) -> None:
         """A `[compacted …]` / `[continuing …]` notice: the harness, not the model.
 
-        Ends the reply in progress so it lands in the transcript in stream order, and
-        escaped because the notice quotes harness-formatted counts and model names.
+        Ends the reply in progress so it lands in the transcript in stream order, and renders
+        dim through `Text` (never markup-parsed) because the notice quotes harness-formatted
+        counts and model names.
         """
         self._finish_reply()
-        self._write(f"[dim]{escape(message.text)}[/dim]")
+        self._append_entry(NoticeEntry(message.text))
         self.query_one("#transcript", RichLog).scroll_end(animate=False)
 
     def on_approval_request(self, message: ApprovalRequest) -> None:
@@ -1107,9 +1110,15 @@ class Agent86App(App):
         self._end_turn()
 
     def on_turn_error(self, message: TurnError) -> None:
+        """A failed turn: what broke, what it said, and where the full trace is."""
         self._finish_reply()
         self._flush_pending_tools()
-        self._write(f"[red]error:[/red] {escape(str(message.error))}")
+        exc = message.error
+        session = str(getattr(self.repl.state, "session_id", "") or "")
+        hint = f"see agent86 trace show -s {session}" if session else "see agent86 trace show"
+        self._append_entry(
+            ErrorEntry(exc_type=type(exc).__name__, message=str(exc), hint=hint)
+        )
         self._end_turn()
 
     def _end_turn(self) -> None:
