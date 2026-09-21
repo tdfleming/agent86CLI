@@ -8,12 +8,13 @@ import time
 from agent86.tui.messages import (
     ApprovalRequest,
     ToolAnnounce,
+    ToolOutcome,
     TurnDelta,
     TurnDone,
     TurnError,
     TurnNotice,
 )
-from agent86.tui.turn_bridge import run_turn_worker
+from agent86.tui.turn_bridge import announce_preview, run_turn_worker, tool_result_parts
 
 
 def _poll_until(predicate, timeout: float = 5.0, interval: float = 0.01) -> None:
@@ -43,10 +44,15 @@ def test_streams_deltas_in_order(fake_harness, fake_state):
     assert not thread.is_alive()
 
     kinds = [type(m) for m in posts]
-    assert kinds == [TurnDelta, ToolAnnounce, ApprovalRequest, TurnDelta, TurnDone]
-    final_delta = posts[3]
-    assert isinstance(final_delta, TurnDelta)
-    assert "write_file -> ok" in final_delta.text
+    assert kinds == [TurnDelta, ToolAnnounce, ApprovalRequest, ToolOutcome, TurnDone]
+    announce = posts[1]
+    assert isinstance(announce, ToolAnnounce)
+    assert announce.name == "write_file"
+    assert announce.args_preview == '{"path": "x"}'
+    outcome = posts[3]
+    assert isinstance(outcome, ToolOutcome)
+    assert (outcome.name, outcome.summary, outcome.ok) == ("write_file", "ok", True)
+    assert "write_file -> ok" in outcome.text
 
 
 def test_approval_blocks_until_resolved(fake_harness, fake_state):
@@ -219,6 +225,82 @@ def test_tool_lines_are_still_tool_announces_not_notices(fake_harness, fake_stat
     thread.join(timeout=5)
 
     assert not any(isinstance(m, TurnNotice) for m in posts)
+
+
+# ---- v0.9: structured tool start/result for the collapsible transcript block ---- #
+
+
+def test_tool_result_parts_only_matches_harness_result_lines():
+    assert tool_result_parts("[tool] write_file -> wrote 12 bytes\n") == (
+        "write_file",
+        "wrote 12 bytes",
+    )
+    assert tool_result_parts("[tool] read_file -> error: no such file") == (
+        "read_file",
+        "error: no such file",
+    )
+    # the START line is not a result line (it has no arrow)
+    assert tool_result_parts('\n[tool] write_file({"path": "x"})\n') is None
+    # model prose that merely uses an arrow is not harness output
+    assert tool_result_parts("first this -> then that") is None
+    assert tool_result_parts("[tool] two words -> nope") is None
+
+
+def test_announce_preview_extracts_the_argument_json():
+    assert announce_preview('\n[tool] write_file({"path": "x"})\n') == '{"path": "x"}'
+    assert announce_preview("[tool] list_dir()") == ""
+    assert announce_preview("not a tool line") == ""
+
+
+class _StatefulHarness:
+    """A harness whose `state` carries the full arguments and the full tool output.
+
+    Mirrors the real loop: the ASSISTANT message (with `tool_calls`) is appended before the
+    announce delta, and the TOOL message before the `-> summary` delta.
+    """
+
+    def __init__(self) -> None:
+        from agent86.guardrails.policy import ApprovalGate
+        from agent86.types import ApprovalMode
+
+        self.gate = ApprovalGate(ApprovalMode.AUTO)
+
+    def run_turn(self, line, state):  # noqa: ANN001
+        from agent86.types import CompletionDelta, Message, Role, ToolCall
+
+        call = ToolCall(
+            id="c1", name="read_file", arguments={"path": "x.py", "note": "y" * 400}
+        )
+        state.messages.append(Message(role=Role.ASSISTANT, content="", tool_calls=[call]))
+        yield CompletionDelta(text='\n[tool] read_file({"path": "x.py", "note": "yyy ...\n')
+        state.messages.append(
+            Message(
+                role=Role.TOOL,
+                content="line one\nline two\nline three",
+                tool_call_id="c1",
+                name="read_file",
+            )
+        )
+        yield CompletionDelta(text="[tool] read_file -> line one\n")
+
+
+def test_tool_messages_carry_the_full_arguments_and_result():
+    from agent86.orchestration.state import AgentState
+
+    state = AgentState(session_id="s1")
+    posts = []
+    run_turn_worker(_StatefulHarness(), "go", state, posts.append)
+
+    announce = next(m for m in posts if isinstance(m, ToolAnnounce))
+    assert announce.name == "read_file"
+    assert announce.call_id == "c1"
+    # the full dict, not the 160-char preview the delta line carries
+    assert announce.args == {"path": "x.py", "note": "y" * 400}
+
+    outcome = next(m for m in posts if isinstance(m, ToolOutcome))
+    assert outcome.summary == "line one"
+    assert outcome.result == "line one\nline two\nline three"
+    assert outcome.ok is True
 
 
 def test_notice_text_only_matches_harness_notices():

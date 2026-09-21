@@ -21,11 +21,52 @@ class TurnDelta(Message):
 
 
 class ToolAnnounce(Message):
-    """A `[tool] name(...)` delta line, pre-labeled for the status footer."""
+    """A `[tool] name(...)` delta line, pre-labeled for the status footer.
 
-    def __init__(self, label: str, text: str) -> None:
+    `name`/`args`/`args_preview` are the structured half the transcript's collapsible tool
+    block needs: `args` is the FULL argument dict recovered from the session state (the delta
+    line only carries a 160-char preview), `args_preview` the preview text as a fallback. Both
+    default to the zero value so older callers — and tests — can still post `(label, text)`.
+    """
+
+    def __init__(
+        self,
+        label: str,
+        text: str,
+        name: str = "",
+        args: dict | None = None,
+        args_preview: str = "",
+        call_id: str = "",
+    ) -> None:
         self.label = label  # e.g. "running write_file" (from _tool_label)
         self.text = text  # the raw "[tool] ..." line for the transcript
+        self.name = name
+        self.args = args
+        self.args_preview = args_preview
+        self.call_id = call_id
+        super().__init__()
+
+
+class ToolOutcome(Message):
+    """A `[tool] name -> summary` delta line, with the full result text when it can be found.
+
+    Named `ToolOutcome`, not `ToolResult`, so it can never be confused with
+    `agent86.types.ToolResult` — this is a UI message, not the harness's own result type.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        summary: str,
+        result: str = "",
+        ok: bool = True,
+        text: str = "",
+    ) -> None:
+        self.name = name
+        self.summary = summary  # the one-line summary the loop already computed
+        self.result = result  # full observed content, when the state had it
+        self.ok = ok
+        self.text = text  # the raw delta line
         super().__init__()
 
 
@@ -87,6 +128,7 @@ __all__ = [
     "TurnDelta",
     "TurnNotice",
     "ToolAnnounce",
+    "ToolOutcome",
     "ApprovalRequest",
     "TurnDone",
     "TurnError",

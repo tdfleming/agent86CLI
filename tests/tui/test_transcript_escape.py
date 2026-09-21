@@ -144,7 +144,8 @@ async def test_unknown_command_with_markup_does_not_crash(tmp_path):
         assert "/nope [/oops]" in _transcript(app)
 
 
-async def test_tool_announce_line_keeps_its_label_and_brackets(tmp_path):
+async def test_tool_block_keeps_its_name_and_brackets(tmp_path):
+    """v0.9: the two flat `[tool] …` lines became one collapsible block — still literal text."""
     call = ToolCall(id="c1", name="write_file", arguments={"path": "out[1].txt", "content": "hi"})
     repl = _make_repl(tmp_path, ToolThenTextProvider(call, reply="done"))
     app = Agent86App(repl)
@@ -157,8 +158,9 @@ async def test_tool_announce_line_keeps_its_label_and_brackets(tmp_path):
         await pilot.pause()
 
         lines = _transcript(app)
-        assert "[tool] write_file" in lines      # the label survived markup rendering
-        assert "out[1].txt" in lines             # so did the bracketed argument
+        assert "write_file" in lines              # the name survived markup rendering
+        assert "out[1].txt" in lines              # so did the bracketed argument
+        assert app.is_running
 
 
 async def test_approval_preview_with_brackets_renders(tmp_path):

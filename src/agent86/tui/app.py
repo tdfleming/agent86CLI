@@ -32,6 +32,7 @@ from agent86.tui.messages import (
     ApprovalRequest,
     CatalogReady,
     ToolAnnounce,
+    ToolOutcome,
     TurnDelta,
     TurnDone,
     TurnError,
@@ -63,6 +64,7 @@ from agent86.tui.screens.provider_manager import (
 from agent86.tui.screens.save_diff import SaveDiffModal
 from agent86.tui.turn_bridge import run_turn_worker
 from agent86.tui.widgets.status_footer import StatusFooter
+from agent86.tui.widgets.tool_block import ToolBlockEntry
 from agent86.tui.widgets.transcript import (
     DARK_CODE_THEME,
     LIGHT_CODE_THEME,
@@ -104,6 +106,10 @@ class Agent86App(App):
         # Overrides Textual's own `ctrl+c -> help_quit` (and `Input`'s ctrl+c copy binding,
         # which priority=True beats): first press cancels a running turn, second press quits.
         Binding("ctrl+c", "interrupt", show=False, priority=True),
+        # Tool blocks are collapsed by default; these expand them. priority=True for the same
+        # reason as the palette keys — the prompt `Input` would otherwise eat them.
+        Binding("ctrl+o", "toggle_tool", "expand last tool call", priority=True),
+        Binding("ctrl+shift+o", "toggle_all_tools", "expand all tool calls", priority=True),
     ]
 
     CSS = """
@@ -160,6 +166,8 @@ class Agent86App(App):
         # expanding); when one does, `_rerender` replays the whole list into the log.
         self._entries: list[TranscriptEntry] = []
         self._reply: ReplyEntry | None = None
+        #: Tool calls announced but not yet observed, oldest first.
+        self._pending_tools: list[ToolBlockEntry] = []
         self._stream_buf = ""
         # Has this turn's response already been labelled `agent86` in the transcript? The
         # label leads the FIRST chunk only, since a long response is flushed in pieces.
@@ -257,6 +265,10 @@ class Agent86App(App):
         log = self.query_one("#transcript", RichLog)
         log.clear()
         for entry in self._entries:
+            # Identity, never equality: two calls of the same tool with the same arguments
+            # are equal dataclasses but different blocks.
+            if any(block is entry for block in self._pending_tools):
+                continue  # not observed yet; it has nothing to show
             self._render_entry(entry)
         log.scroll_end(animate=False)
 
@@ -892,6 +904,7 @@ class Agent86App(App):
         self._stream_buf = ""
         self._stream_labelled = False
         self._reply = None
+        self._pending_tools = []
         self._turn_running = True
         self._cancel_requested = False
         self._run_turn(line)
@@ -1026,19 +1039,45 @@ class Agent86App(App):
         self.query_one("#transcript", RichLog).scroll_end(animate=False)
 
     def on_tool_announce(self, message: ToolAnnounce) -> None:
-        """A tool call started: the reply so far is final, so flush it before the line lands."""
+        """A tool call started: the reply so far is final, and a block takes its place.
+
+        The block is only RENDERED when its result arrives (`on_tool_outcome`) — its place in
+        the transcript is reserved here so ordering can't drift. Progress while the call runs
+        is the status footer's job.
+        """
         self._finish_reply()
-        # `[tool] name({...})` is literal text, not markup — and the argument preview is
-        # model-authored. Rendering it as markup swallowed the `[tool]` label outright.
-        self._write_text(message.text.strip())
+        block = ToolBlockEntry(
+            name=message.name or message.label.replace("running ", "").strip(),
+            args=message.args,
+            args_preview=message.args_preview or message.text.strip(),
+            call_id=message.call_id,
+        )
+        self._pending_tools.append(block)
+        self._append_entry(block, write=False)
         self.repl.status.working = True
         self.repl.status.phase = message.label
+        self.query_one("#status", StatusFooter).status = self.repl.status
+
+    def on_tool_outcome(self, message: ToolOutcome) -> None:
+        """A tool call finished: complete its block and render the one collapsed line."""
+        block: ToolBlockEntry | None
+        block = next((b for b in self._pending_tools if b.name == message.name), None)
+        if block is None:
+            # A result with no announce (a harness that yields only the summary line): make a
+            # block for it on the spot rather than dropping the outcome on the floor.
+            block = ToolBlockEntry(name=message.name)
+            self._append_entry(block, write=False)
+        else:
+            self._pending_tools = [b for b in self._pending_tools if b is not block]
+        block.complete(message.summary, message.result, message.ok)
+        self._render_entry(block)
+        self.repl.status.working = True
         self.query_one("#status", StatusFooter).status = self.repl.status
 
     def on_turn_notice(self, message: TurnNotice) -> None:
         """A `[compacted …]` / `[continuing …]` notice: the harness, not the model.
 
-        Ends the reply in progress so it lands in the transcript in stream order, and renders
+        Ends the reply in progress so it lands in the transcript in stream order, and
         escaped because the notice quotes harness-formatted counts and model names.
         """
         self._finish_reply()
@@ -1064,10 +1103,12 @@ class Agent86App(App):
 
     def on_turn_done(self, message: TurnDone) -> None:
         self._finish_reply()
+        self._flush_pending_tools()
         self._end_turn()
 
     def on_turn_error(self, message: TurnError) -> None:
         self._finish_reply()
+        self._flush_pending_tools()
         self._write(f"[red]error:[/red] {escape(str(message.error))}")
         self._end_turn()
 
@@ -1154,12 +1195,43 @@ class Agent86App(App):
         if entry.markdown and looks_like_markdown(entry.text):
             self._rerender()
 
+    def _flush_pending_tools(self) -> None:
+        """Render any announced-but-never-observed tool block (a cancel mid-batch)."""
+        pending, self._pending_tools = self._pending_tools, []
+        for block in pending:
+            self._render_entry(block)
+
     def _reenable_input(self) -> None:
         prompt = self.query_one("#prompt", Input)
         prompt.disabled = False
         prompt.focus()
 
     # ---- bindings ----------------------------------------------------------- #
+
+    def _tool_blocks(self) -> list[ToolBlockEntry]:
+        return [e for e in self._entries if isinstance(e, ToolBlockEntry)]
+
+    def action_toggle_tool(self) -> None:
+        """Ctrl+O: expand/collapse the most recent tool block."""
+        if len(self.screen_stack) > 1:
+            raise SkipAction()
+        blocks = self._tool_blocks()
+        if not blocks:
+            raise SkipAction()
+        blocks[-1].toggle()
+        self._rerender()
+
+    def action_toggle_all_tools(self) -> None:
+        """Ctrl+Shift+O: expand every tool block, or collapse them all if all are open."""
+        if len(self.screen_stack) > 1:
+            raise SkipAction()
+        blocks = self._tool_blocks()
+        if not blocks:
+            raise SkipAction()
+        expand = not all(block.expanded for block in blocks)
+        for block in blocks:
+            block.expanded = expand
+        self._rerender()
 
     def action_cycle_mode(self) -> None:
         # `shift+tab` is a priority binding (App-level, checked before focus-traversal and the
