@@ -117,6 +117,13 @@ select = ["E", "F", "I", "UP", "B", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# The packaging tests build real artifacts and install them into a throwaway venv — far too slow
+# for the default run, so they are opt-in. A command-line `-m` is appended after addopts and
+# therefore wins, which is how CI's `package` job selects them: `pytest -m packaging`.
+addopts = "-m 'not packaging'"
+markers = [
+    "packaging: builds and installs a distribution artifact (slow; excluded from the default run)",
+]
 
 [tool.coverage.run]
 source = ["agent86"]
