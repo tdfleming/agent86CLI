@@ -681,7 +681,7 @@ def trace_path_cmd() -> None:
     """Show the trace file location."""
     from agent86.observability.recorder import trace_generations
 
-    cfg = load_config()
+    cfg = _load()
     path = _trace_path(cfg)
     exists = "exists" if path.exists() else "not found"
     console.print(f"{path} ({exists})")
@@ -705,7 +705,7 @@ def trace_show_cmd(
     """Show recent events from the flight recorder."""
     import time as _time
 
-    cfg = load_config()
+    cfg = _load()
     after_ts = _time.time() - _parse_since(since) if since else None
     events = _read_trace(
         _trace_path(cfg),
@@ -785,7 +785,7 @@ def trace_export_cmd(
     if choice not in ("jsonl", "json", "otlp-json"):
         raise typer.BadParameter(f"unknown format {fmt!r} (jsonl | json | otlp-json)")
 
-    cfg = load_config()
+    cfg = _load()
     events = _read_trace(
         _trace_path(cfg),
         session=session,
