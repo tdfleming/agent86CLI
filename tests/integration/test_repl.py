@@ -372,3 +372,52 @@ def test_mcp_and_collision_notes_are_markup_escaped(tmp_path):
     notes = startup_notes(repl)
     assert any(r"\[boom]" in n for n in notes)
     assert any(r"mcp__a__\[x]" in n for n in notes)
+
+
+# ---- prompt history (plain loop) ----------------------------------------- #
+
+
+def _history_repl(tmp_path):
+    """A _Repl whose history file lives in tmp_path rather than the real home."""
+    repl, harness = _repl(tmp_path)
+    repl.cfg.ui.history_file = str(tmp_path / "history")
+    return repl, harness
+
+
+def _drive(repl, monkeypatch, lines):
+    """Run plain_loop over ``lines``, then EOF out of it."""
+    pending = list(lines)
+
+    def _fake_input(_prompt=""):
+        if not pending:
+            raise EOFError
+        return pending.pop(0)
+
+    monkeypatch.setattr("builtins.input", _fake_input)
+    repl.plain_loop()
+
+
+def test_plain_loop_records_submitted_prompts(tmp_path, monkeypatch, capsys):
+    from agent86.ui.history import PromptHistory
+
+    repl, _ = _history_repl(tmp_path)
+    _drive(repl, monkeypatch, ["hello there", "/cost"])
+    capsys.readouterr()
+
+    assert repl.history.entries == ["hello there", "/cost"]
+    # The shared file, not just this session's memory.
+    assert PromptHistory(tmp_path / "history").entries == ["hello there", "/cost"]
+
+
+def test_plain_loop_honours_the_leading_space_escape_hatch(tmp_path, monkeypatch, capsys):
+    repl, _ = _history_repl(tmp_path)
+    _drive(repl, monkeypatch, [" /cost", "/cost"])
+    capsys.readouterr()
+
+    assert repl.history.entries == ["/cost"]
+
+
+def test_history_is_not_built_until_it_is_used(tmp_path):
+    """Constructing a _Repl must not touch the user's real history file."""
+    repl, _ = _repl(tmp_path)
+    assert repl._history is None

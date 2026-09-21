@@ -26,6 +26,7 @@ from rich.panel import Panel
 from agent86 import __version__
 from agent86.config import Config
 from agent86.guardrails.policy import cycle_mode
+from agent86.ui.history import PromptHistory, build_history
 from agent86.ui.status import (
     StatusState,
     context_window_for,
@@ -128,12 +129,30 @@ class _Repl:
             approval=self.harness.gate.mode.value,
         )
 
+        # Built on first use, not here: constructing a _Repl (which every test does) must not
+        # read the user's real history file, and a `run` one-shot never needs it at all.
+        self._history: PromptHistory | None = None
+
         from agent86.tui.commands import startup_notes  # textual-free; see module docstring
 
         #: Launch notes — resume, memory/mcp/sandbox/skills, session id — already
         #: markup-escaped. The plain path prints these (``print_notes``); the TUI renders
         #: them into its transcript on mount.
         self.startup_notes: list[str] = startup_notes(self)
+
+    # ---- shared prompt history ---------------------------------------- #
+
+    @property
+    def history(self) -> PromptHistory:
+        """The prompt history both surfaces record into (``[ui] history_file``).
+
+        The plain loop can only *append* — stdlib ``input()`` has no line editor to navigate
+        with — but appending is what keeps one shared file honest: a prompt typed under
+        ``--plain`` is waiting on Up the next time the TUI starts.
+        """
+        if self._history is None:
+            self._history = build_history(self.cfg)
+        return self._history
 
     # ---- status ------------------------------------------------------- #
 
@@ -226,7 +245,7 @@ class _Repl:
 
         while True:
             try:
-                line = input("agent86> ").strip()
+                raw = input("agent86> ")
             except EOFError:
                 console.print("\n[dim]bye[/dim]")
                 return
@@ -234,6 +253,10 @@ class _Repl:
                 console.print("")
                 continue
 
+            line = raw.strip()
+            # The UNSTRIPPED line, so the bash escape hatch survives: a prompt typed with a
+            # leading space is refused by PromptHistory and never hits the file.
+            self.history.append(raw.rstrip())
             action = self.dispatch(line)
             if action == "exit":
                 return
