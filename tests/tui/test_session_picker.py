@@ -156,6 +156,17 @@ async def test_empty_session_list_is_survivable():
         assert host.result is None
 
 
+async def test_picker_with_no_sessions_argument_is_empty_not_broken():
+    """A caller that hasn't wired the listing yet gets an empty picker, not a TypeError."""
+    host = _PickerHost(SessionPickerModal())
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert host.screen.query_one("#session-list").option_count == 0
+        await pilot.press("escape")
+        await pilot.pause()
+        assert host.result is None
+
+
 async def test_a_title_containing_markup_is_not_interpreted():
     """Titles are the user's own prompt text; they must never style the list."""
     sessions = [SessionInfo("dddddddd4444", "check [bold]this[/bold] out", NOW)]

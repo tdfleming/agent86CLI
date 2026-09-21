@@ -48,7 +48,10 @@ class SessionPickerModal(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, sessions: Sequence[SessionInfo]) -> None:
+    def __init__(self, sessions: Sequence[SessionInfo] = ()) -> None:
+        # Defaulted so a caller that hasn't wired the listing yet gets an honest empty
+        # picker rather than a TypeError. Real callers pass
+        # `agent86.tui.commands.recent_sessions(repl)`.
         super().__init__()
         self._sessions = list(sessions)
         self._focus_retried = False
