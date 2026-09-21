@@ -25,6 +25,7 @@ from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
 from agent86.tui.screens.key_entry import KeyEntryModal
 from agent86.tui.screens.provider_manager import CatalogPickerModal
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.types import ApprovalMode
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
@@ -63,7 +64,7 @@ async def test_key_entry_submit_does_not_start_a_turn(tmp_path, monkeypatch):
     repl = _make_repl(tmp_path, make_text_provider("hello world"))
     app = Agent86App(repl)
     calls: list[str] = []
-    monkeypatch.setattr(Agent86App, "_dispatch_line", lambda self, line: calls.append(line))
+    monkeypatch.setattr(Agent86App, "_dispatch_line", lambda self, line, **kw: calls.append(line))
     async with app.run_test() as pilot:
         await pilot.pause()
         app.push_screen(KeyEntryModal("anthropic", True))
@@ -79,7 +80,7 @@ async def test_catalog_filter_submit_does_not_dispatch(tmp_path, monkeypatch):
     repl = _make_repl(tmp_path, make_text_provider("hello world"))
     app = Agent86App(repl)
     calls: list[str] = []
-    monkeypatch.setattr(Agent86App, "_dispatch_line", lambda self, line: calls.append(line))
+    monkeypatch.setattr(Agent86App, "_dispatch_line", lambda self, line, **kw: calls.append(line))
     async with app.run_test() as pilot:
         await pilot.pause()
         app.push_screen(CatalogPickerModal("anthropic", []))
@@ -98,10 +99,10 @@ async def test_prompt_submit_still_dispatches(tmp_path, monkeypatch):
     repl = _make_repl(tmp_path, make_text_provider("hello world"))
     app = Agent86App(repl)
     calls: list[str] = []
-    monkeypatch.setattr(Agent86App, "_dispatch_line", lambda self, line: calls.append(line))
+    monkeypatch.setattr(Agent86App, "_dispatch_line", lambda self, line, **kw: calls.append(line))
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.focus()
         await pilot.pause()
         for ch in "hello":

@@ -12,13 +12,14 @@ import threading
 import time
 from collections.abc import Iterator
 
-from textual.widgets import Input, RichLog
+from textual.widgets import RichLog
 
 from agent86.cognitive.base import ModelProvider
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
 from agent86.tui.screens.approval import ApprovalModal
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.types import (
     ApprovalMode,
     Completion,
@@ -76,7 +77,7 @@ def _transcript(app) -> str:
 
 
 async def _start_endless_turn(app, pilot, repl):
-    app.query_one("#prompt", Input).value = "run forever"
+    app.query_one("#prompt", PromptInput).value = "run forever"
     await pilot.press("enter")
     await _wait_until(lambda: repl.harness.provider.emitted > 2)
     assert app._turn_running is True
@@ -98,7 +99,7 @@ async def test_escape_cancels_a_running_turn(tmp_path):
         # The turn actually ends, the input comes back, and the app is still alive.
         await _wait_until(lambda: app._turn_running is False)
         await pilot.pause()
-        assert app.query_one("#prompt", Input).disabled is False
+        assert app.query_one("#prompt", PromptInput).disabled is False
         assert "[cancelled]" in _transcript(app)
         assert app.is_running
 
@@ -154,7 +155,7 @@ async def test_quitting_with_an_approval_open_releases_the_worker(tmp_path):
     before = set(threading.enumerate())
     async with app.run_test(size=(100, 50)) as pilot:
         await pilot.pause()
-        app.query_one("#prompt", Input).value = "write it"
+        app.query_one("#prompt", PromptInput).value = "write it"
         await pilot.press("enter")
         await _wait_until(lambda: isinstance(app.screen, ApprovalModal))
         assert app._pending_approvals            # the worker is parked on this
@@ -194,7 +195,7 @@ async def test_cancel_state_resets_for_the_next_turn(tmp_path):
         # A fresh turn with a normal provider runs to completion.
         repl.harness.provider = make_text_provider("all good")
         repl.harness.router.set_forced(repl.harness.provider)
-        app.query_one("#prompt", Input).value = "again"
+        app.query_one("#prompt", PromptInput).value = "again"
         await pilot.press("enter")
         await _wait_until(lambda: repl.status.working is False)
         await pilot.pause()

@@ -14,7 +14,7 @@ import threading
 import time
 from collections.abc import Iterator
 
-from textual.widgets import Input, RichLog
+from textual.widgets import RichLog
 
 from agent86.cognitive.base import ModelProvider
 from agent86.config import load_config
@@ -22,6 +22,7 @@ from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
 from agent86.tui.screens.approval import ApprovalModal
 from agent86.tui.screens.model_picker import ModelPickerModal
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.tui.widgets.status_footer import StatusFooter
 from agent86.types import (
     ApprovalMode,
@@ -113,7 +114,7 @@ async def test_shell_has_transcript_input_footer(tmp_path):
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app.query_one("#transcript", RichLog) is not None
-        assert app.query_one("#prompt", Input) is not None
+        assert app.query_one("#prompt", PromptInput) is not None
         footer = app.query_one("#status", StatusFooter)
         assert footer is not None
         assert repl.harness.provider.model in str(footer.render())
@@ -126,7 +127,7 @@ async def test_turn_streams_and_footer_goes_live_then_idle(tmp_path):
     # stays about the live/idle transition (tests/tui/test_status_footer.py owns the policy).
     async with app.run_test(size=(140, 24)) as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "hi there"
         await pilot.press("enter")
 
@@ -153,7 +154,7 @@ async def test_turn_writes_the_per_turn_cost_line(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(140, 24)) as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "hi there"
         await pilot.press("enter")
         await _wait_until(lambda: repl.status.working is False)
@@ -175,7 +176,7 @@ async def test_per_turn_cost_line_is_skipped_without_a_summary(tmp_path):
     async with app.run_test(size=(140, 24)) as pilot:
         await pilot.pause()
         repl.turn_summary_line = lambda: None  # type: ignore[method-assign]
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "hi there"
         await pilot.press("enter")
         await _wait_until(lambda: repl.status.working is False)
@@ -192,7 +193,7 @@ async def test_compaction_notice_renders_dim_and_not_as_model_speech(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(140, 24)) as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "hi there"
         await pilot.press("enter")
         await _wait_until(lambda: repl.status.working is False)
@@ -214,7 +215,7 @@ async def test_continuation_notice_renders_dim(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(140, 24)) as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "keep going"
         await pilot.press("enter")
         await _wait_until(lambda: repl.status.working is False)
@@ -233,7 +234,7 @@ async def test_model_text_that_merely_starts_with_a_bracket_is_not_dimmed(tmp_pa
     app = Agent86App(repl)
     async with app.run_test(size=(140, 24)) as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "where?"
         await pilot.press("enter")
         await _wait_until(lambda: repl.status.working is False)
@@ -253,7 +254,7 @@ async def _run_approval_case(tmp_path, approve: bool):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "write a file"
         await pilot.press("enter")
         await pilot.pause()
@@ -471,7 +472,7 @@ async def test_shift_tab_cycles_approval_mode(tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert app.query_one("#prompt", Input).has_focus
+        assert app.query_one("#prompt", PromptInput).has_focus
         assert repl.harness.gate.mode.value == "ask"
 
         await pilot.press("shift+tab")
@@ -487,7 +488,7 @@ async def test_shift_tab_cycles_approval_mode(tmp_path):
 
 
 async def _dispatch_typed(pilot, app, line: str) -> None:
-    prompt = app.query_one("#prompt", Input)
+    prompt = app.query_one("#prompt", PromptInput)
     prompt.value = line
     await pilot.press("enter")
     await pilot.pause()
@@ -911,7 +912,7 @@ async def test_turn_error_names_the_exception_and_points_at_the_trace(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(140, 24)) as pilot:
         await pilot.pause()
-        app.query_one("#prompt", Input).value = "go"
+        app.query_one("#prompt", PromptInput).value = "go"
         await pilot.press("enter")
         await _wait_until(lambda: app._turn_running is False)
         await pilot.pause()
@@ -920,7 +921,7 @@ async def test_turn_error_names_the_exception_and_points_at_the_trace(tmp_path):
         assert re.search(r"error: \w+", lines)        # the exception TYPE leads the line
         assert f"see agent86 trace show -s {repl.state.session_id}" in lines
         assert app.is_running                         # no MarkupError took the app down
-        assert app.query_one("#prompt", Input).disabled is False
+        assert app.query_one("#prompt", PromptInput).disabled is False
 
 
 async def test_turn_error_renders_the_exception_type_and_message_escaped(tmp_path):

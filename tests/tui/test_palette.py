@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import asyncio
 
-from textual.widgets import Input, OptionList
+from textual.widgets import OptionList
 
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
 from agent86.tui.screens.mode_picker import ModePickerModal
 from agent86.tui.screens.model_picker import ModelPickerModal
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.types import ApprovalMode
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
@@ -44,7 +45,7 @@ async def test_palette_filters_and_selects(tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/mo"
         prompt.focus()
         await pilot.pause()
@@ -60,7 +61,7 @@ async def test_model_command_chains_to_picker(tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/model"
         prompt.focus()
         await pilot.pause()
@@ -82,7 +83,7 @@ async def test_mode_command_chains_to_picker(tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/mode"
         prompt.focus()
         await pilot.pause()
@@ -108,7 +109,7 @@ async def test_typed_command_still_works_with_palette(tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/mode auto"
         prompt.focus()
         await pilot.pause()
@@ -126,7 +127,7 @@ async def test_plain_turn_still_submits_with_palette(tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "hello there"
         prompt.focus()
         await pilot.pause()
@@ -148,7 +149,7 @@ async def test_escape_dismisses_palette(tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/"
         prompt.focus()
         await pilot.pause()

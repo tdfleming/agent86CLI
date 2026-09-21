@@ -22,6 +22,7 @@ from textual.widgets import Button, Input, OptionList, RichLog, Static, TextArea
 from agent86.config import Config, MCPServerConfig, load_config
 from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.types import ApprovalMode
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
@@ -321,7 +322,7 @@ async def test_config_mcp_opens_manager_modal_in_full_app(tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/config mcp"
         await pilot.press("enter")
         await _wait_until(lambda: isinstance(app.screen_stack[-1], MCPManagerModal))
@@ -397,7 +398,7 @@ async def _wait_for_mcp_test_ready(app, pilot, tries: int = 50) -> None:
 async def _open_mcp_manager(app, pilot) -> None:
     from agent86.tui.screens.mcp_manager import MCPManagerModal
 
-    prompt = app.query_one("#prompt", Input)
+    prompt = app.query_one("#prompt", PromptInput)
     prompt.value = "/config mcp"
     await pilot.press("enter")
     await _wait_until(lambda: isinstance(app.screen, MCPManagerModal))

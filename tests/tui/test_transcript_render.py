@@ -11,12 +11,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 
-from textual.widgets import Input, RichLog
+from textual.widgets import RichLog
 
 from agent86.cognitive.base import ModelProvider
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.tui.widgets.transcript import (
     ReplyEntry,
     cap_lines,
@@ -119,7 +120,7 @@ def _transcript(app) -> str:
 
 
 async def _run_turn(app, pilot, repl, line: str = "go") -> None:
-    app.query_one("#prompt", Input).value = line
+    app.query_one("#prompt", PromptInput).value = line
     await pilot.press("enter")
     await _wait_until(lambda: repl.status.working is False)
     await pilot.pause()
@@ -216,7 +217,7 @@ async def test_wide_code_block_wraps_instead_of_blowing_the_layout(tmp_path):
         widest = max(strip.cell_length for strip in log.lines)
         assert widest <= max(log.size.width, log.min_width), widest
         # …and the prompt and footer are still on screen.
-        assert app.query_one("#prompt", Input).region.height > 0
+        assert app.query_one("#prompt", PromptInput).region.height > 0
         assert app.query_one("#status").region.height > 0
         assert "item-79" in _transcript(app)
 

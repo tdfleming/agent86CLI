@@ -18,6 +18,7 @@ from textual.widgets import Input, OptionList
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.types import ApprovalMode
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
@@ -264,7 +265,7 @@ async def test_no_key_provider_chains_to_key_entry(monkeypatch, tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/config model"
         await pilot.press("enter")
         await pilot.pause()
@@ -299,7 +300,7 @@ async def test_save_anyway_override(monkeypatch, tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/config model"
         await pilot.press("enter")
         await pilot.pause()
@@ -355,7 +356,7 @@ async def test_switch_is_immediate_persist_is_separate(monkeypatch, tmp_path):
     app = Agent86App(repl)
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/config model"
         await pilot.press("enter")
         await pilot.pause()

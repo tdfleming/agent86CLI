@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import asyncio
 
-from textual.widgets import Input, RichLog
+from textual.widgets import RichLog
 
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
 from agent86.tui.messages import ToolAnnounce, ToolOutcome
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.tui.widgets.tool_block import (
     COLLAPSED_MARKER,
     EXPANDED_MARKER,
@@ -129,7 +130,7 @@ def test_collapsed_header_is_dim():
 
 
 async def _run_tool_turn(app, pilot, repl, line: str = "write it") -> None:
-    app.query_one("#prompt", Input).value = line
+    app.query_one("#prompt", PromptInput).value = line
     await pilot.press("enter")
     await _wait_until(lambda: repl.status.working is False)
     await pilot.pause()

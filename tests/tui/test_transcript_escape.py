@@ -12,13 +12,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import RichLog, Static
 
 from agent86.cognitive.base import ModelProvider
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
 from agent86.tui.app import Agent86App
 from agent86.tui.screens.approval import ApprovalModal
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.types import (
     ApprovalMode,
     Completion,
@@ -84,7 +85,7 @@ async def test_markup_hostile_model_text_neither_crashes_nor_vanishes(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(100, 50)) as pilot:
         await pilot.pause()
-        app.query_one("#prompt", Input).value = "go"
+        app.query_one("#prompt", PromptInput).value = "go"
         await pilot.press("enter")
 
         await _wait_until(lambda: repl.status.working is False)
@@ -122,7 +123,7 @@ async def test_echoed_user_line_is_escaped(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(100, 50)) as pilot:
         await pilot.pause()
-        app.query_one("#prompt", Input).value = "check [/etc/hosts] now"
+        app.query_one("#prompt", PromptInput).value = "check [/etc/hosts] now"
         await pilot.press("enter")
         await pilot.pause()
 
@@ -136,7 +137,7 @@ async def test_unknown_command_with_markup_does_not_crash(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(100, 50)) as pilot:
         await pilot.pause()
-        app.query_one("#prompt", Input).value = "/nope [/oops]"
+        app.query_one("#prompt", PromptInput).value = "/nope [/oops]"
         await pilot.press("enter")
         await pilot.pause()
 
@@ -151,7 +152,7 @@ async def test_tool_block_keeps_its_name_and_brackets(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(100, 50)) as pilot:
         await pilot.pause()
-        app.query_one("#prompt", Input).value = "write it"
+        app.query_one("#prompt", PromptInput).value = "write it"
         await pilot.press("enter")
 
         await _wait_until(lambda: repl.status.working is False)
@@ -169,7 +170,7 @@ async def test_approval_preview_with_brackets_renders(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(100, 50)) as pilot:
         await pilot.pause()
-        app.query_one("#prompt", Input).value = "write it"
+        app.query_one("#prompt", PromptInput).value = "write it"
         await pilot.press("enter")
 
         await _wait_until(lambda: isinstance(app.screen, ApprovalModal))
@@ -203,7 +204,7 @@ async def test_long_response_does_not_grow_the_stream_widget(tmp_path):
         assert "paragraph 0 body text" in lines             # everything reached the scrollback
         assert "paragraph 39 body text" in lines
         # The prompt and the footer are still on screen and usable.
-        assert app.query_one("#prompt", Input).region.height > 0
+        assert app.query_one("#prompt", PromptInput).region.height > 0
         assert app.query_one("#status").region.height > 0
 
 
@@ -226,7 +227,7 @@ async def test_response_is_labelled_once_per_turn(tmp_path):
     app = Agent86App(repl)
     async with app.run_test(size=(100, 50)) as pilot:
         await pilot.pause()
-        app.query_one("#prompt", Input).value = "go"
+        app.query_one("#prompt", PromptInput).value = "go"
         await pilot.press("enter")
         await _wait_until(lambda: repl.status.working is False)
         await pilot.pause()

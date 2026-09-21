@@ -18,7 +18,7 @@ from textual import work
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Input, OptionList, RichLog, Static
+from textual.widgets import OptionList, RichLog, Static, TextArea
 from textual.widgets.option_list import Option
 
 from agent86.tui.commands import (
@@ -63,6 +63,7 @@ from agent86.tui.screens.provider_manager import (
 )
 from agent86.tui.screens.save_diff import SaveDiffModal
 from agent86.tui.turn_bridge import run_turn_worker
+from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.tui.widgets.status_footer import StatusFooter
 from agent86.tui.widgets.tool_block import ToolBlockEntry
 from agent86.tui.widgets.transcript import (
@@ -208,6 +209,10 @@ class Agent86App(App):
         self._mcp_started: str | None = None       # server left running by a passing test
         self._mcp_action: str | None = None        # "add" | "edit" | "remove" | "toggle"
         self._mcp_unmount: str | None = None       # name pending remove/disable confirmation
+        # `@file` completion state. When the palette is listing paths rather than commands,
+        # this holds the span of the prompt the chosen completion replaces — a Location pair
+        # into the `PromptInput`'s document. None means the palette is showing commands.
+        self._mention_span: tuple[tuple[int, int], tuple[int, int]] | None = None
 
     # ---- composition ---------------------------------------------------- #
 
@@ -215,7 +220,11 @@ class Agent86App(App):
         yield RichLog(id="transcript", markup=True, wrap=True, highlight=False)
         yield Static(id="stream")
         yield OptionList(id="palette")
-        yield Input(id="prompt", placeholder="agent86> ")
+        # The prompt is a `PromptInput` (a TextArea), not an `Input`: Enter submits,
+        # Shift+Enter/Ctrl+J insert a newline, and Up/Down walk the history the plain loop
+        # shares. It keeps the `Input` surface (`.value`, `.clear()`, `Submitted.value`), so
+        # everything downstream of submission is unchanged.
+        yield PromptInput(history=self.repl.history, id="prompt", placeholder="agent86> ")
         yield StatusFooter(id="status")
 
     def on_mount(self) -> None:
@@ -225,7 +234,7 @@ class Agent86App(App):
             # re-render (a Markdown reply, an expanded tool block) would drop it.
             self._write(f"[dim]{escape(note)}[/dim]")
         self.query_one("#palette", OptionList).display = False
-        self.query_one("#prompt", Input).focus()
+        self.query_one("#prompt", PromptInput).focus()
 
     # ---- transcript writing ------------------------------------------------ #
 
@@ -282,13 +291,20 @@ class Agent86App(App):
 
     # ---- palette ----------------------------------------------------------- #
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id != "prompt":
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Palette sync for the prompt. `PromptInput` is a `TextArea`, not an `Input`, so it
+        posts `TextArea.Changed` — `Input.Changed` never fires for it again."""
+        if event.text_area.id != "prompt":
             return
-        self._sync_palette(event.value)
+        self._sync_palette(event.text_area.text)
 
     def _sync_palette(self, text: str) -> None:
         palette = self.query_one("#palette", OptionList)
+        # `@path` completion wins when the cursor is inside a mention: a line can hold both a
+        # mention and prose, and only a line that IS a command can be one.
+        if self._sync_mention_palette(palette):
+            return
+        self._mention_span = None
         if not text.startswith("/") or " " in text:
             palette.display = False
             return
@@ -301,36 +317,106 @@ class Agent86App(App):
             )
             palette.highlighted = 0
 
+    # ---- `@file` completion ------------------------------------------------ #
+
+    def _mention_token(self) -> tuple[str, tuple[int, int], tuple[int, int]] | None:
+        """The ``@…`` token the cursor sits in: (prefix after the @, start, end).
+
+        Bounded by whitespace on the left and by the cursor on the right, so completing
+        mid-line never eats the text that follows it.
+        """
+        prompt = self.query_one("#prompt", PromptInput)
+        row, col = prompt.cursor_location
+        lines = prompt.text.split("\n")
+        if row >= len(lines):
+            return None
+        line = lines[row]
+        start = min(col, len(line))
+        while start > 0 and not line[start - 1].isspace():
+            start -= 1
+        token = line[start:col]
+        if not token.startswith("@"):
+            return None
+        return token[1:], (row, start), (row, col)
+
+    def _sync_mention_palette(self, palette: OptionList) -> bool:
+        """Offer workspace paths for the ``@…`` under the cursor. True if it took over."""
+        found = self._mention_token()
+        if found is None:
+            return False
+        prefix, start, end = found
+        from agent86.tui.mentions import complete_mentions
+
+        matches = complete_mentions(prefix, self.repl.harness.policy.workspace)
+        if not matches:
+            self._mention_span = None
+            palette.display = False
+            return True
+        self._mention_span = (start, end)
+        palette.clear_options()
+        # Text(), never markup: these are filenames off the user's disk.
+        palette.add_options(Option(Text(f"@{m}"), id=m) for m in matches)
+        palette.highlighted = 0
+        palette.display = True
+        return True
+
+    def _complete_mention(self, choice: str) -> None:
+        """Replace the ``@…`` under the cursor with the chosen path."""
+        span, self._mention_span = self._mention_span, None
+        if span is None:
+            return
+        prompt = self.query_one("#prompt", PromptInput)
+        start, end = span
+        # A path with a space in it only survives the mention regex quoted.
+        text = f'@"{choice}"' if " " in choice else f"@{choice}"
+        prompt.replace(text, start, end, maintain_selection_offset=False)
+        prompt.move_cursor((start[0], start[1] + len(text)))
+        prompt.focus()
+
     # ---- input submission ------------------------------------------------ #
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        # Only the prompt Input dispatches lines. A modal's Input (key entry, catalog filter)
-        # must never reach _dispatch_line — see UAT gap 1; mirrors the on_input_changed guard.
-        if event.input.id != "prompt":
+    def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
+        """Enter in the prompt. Only the prompt dispatches lines — a modal's own `Input`
+        (key entry, catalog/session filter) posts `Input.Submitted`, a different message
+        this App deliberately does not handle."""
+        if event.prompt_input.id != "prompt":
             return
         # Approach B (02-02-SUMMARY.md): no permanent priority `enter` Binding is registered at
-        # the App level, so Input.Submitted still fires normally when the palette is closed. An
-        # open palette consumes this Enter itself, before the typed-line dispatch below.
+        # the App level, so Submitted still fires normally when the palette is closed. An open
+        # palette consumes this Enter itself, before the typed-line dispatch below.
         palette = self.query_one("#palette", OptionList)
         if palette.display:
             self._select_palette()
             return
         value = event.value
-        event.input.value = ""
+        event.prompt_input.clear()
         self.submit_prompt(value)
 
-    # ---- hook points for the v0.9 wiring pass -------------------------------- #
+    # ---- prompt submission --------------------------------------------------- #
 
     def submit_prompt(self, text: str) -> None:
-        """Submit one line exactly as the prompt `Input` would.
+        """Submit one line exactly as the prompt would.
 
-        The seam a replacement input widget calls: everything `Input.Submitted` does after
-        clearing the box lives here, so the two paths cannot drift.
+        The seam every input path funnels through: `@file` mentions are expanded here, so
+        what the transcript echoes is what the user TYPED and what the model receives is the
+        line with the mentioned files inlined under it.
         """
         line = text.strip()
         if not line:
             return
-        self._dispatch_line(line)
+        self._dispatch_line(line, expand=True)
+
+    def _expand_mentions(self, line: str) -> str:
+        """The text the model should see, reporting every refused `@path` in the transcript.
+
+        Refusals are shown here AND carried in the prompt (mirrors the plain loop), so
+        neither the user nor the model is left assuming a file arrived when it didn't.
+        """
+        mentions = self.repl.expand_mentions(line)
+        for problem in mentions.errors:
+            # Text(), never markup: the message quotes the path the user typed.
+            self._append_entry(RawEntry(Text(problem, style="dim yellow")))
+        return mentions.prompt
 
     def open_session_picker(self) -> None:
         """Push the session picker, once someone builds it.
@@ -422,11 +508,13 @@ class Agent86App(App):
 
     # ---- line dispatch ------------------------------------------------------- #
 
-    def _dispatch_line(self, line: str) -> None:
+    def _dispatch_line(self, line: str, *, expand: bool = False) -> None:
         """Run one command/turn line through the existing execution path.
 
-        Shared by typed Input submission and picker-chained selections (palette / /model /
-        /mode) so both paths behave identically.
+        Shared by typed prompt submission and picker-chained selections (palette / /model /
+        /mode) so both paths behave identically. ``expand`` is set only for a line the user
+        actually typed: a picker-built command line has no `@file` mentions to expand, and
+        running the expansion over it would read the disk for nothing.
         """
         # The echoed line is USER text and stays plain: `UserEntry` renders through `Text`,
         # which is never markup-parsed, so `"see [/path]"` can neither raise MarkupError on
@@ -450,7 +538,7 @@ class Agent86App(App):
             self.exit()
             return
         if result.action == "turn":
-            self._start_turn(line)
+            self._start_turn(self._expand_mentions(line) if expand else line)
             return
         # "handled" / "noop"
         if result.render is not None:
@@ -588,7 +676,13 @@ class Agent86App(App):
         option = palette.get_option_at_index(highlighted)
         name = option.id
         palette.display = False
-        prompt = self.query_one("#prompt", Input)
+        if self._mention_span is not None:
+            # A path completion edits the draft in place; it is not a command, and the rest
+            # of the typed line must survive it.
+            if name is not None:
+                self._complete_mention(name)
+            return
+        prompt = self.query_one("#prompt", PromptInput)
         prompt.value = ""
         if name is None:  # an Option built without an id is not a command row
             return
@@ -642,7 +736,7 @@ class Agent86App(App):
         provider = self.repl.harness.provider.config_name
         choices = model_choices(self.repl.cfg, extra=prefix_catalog_refs(provider, extra))
         if not choices:
-            prompt = self.query_one("#prompt", Input)
+            prompt = self.query_one("#prompt", PromptInput)
             prompt.value = "/model "
             prompt.focus()
             return
@@ -1002,7 +1096,7 @@ class Agent86App(App):
         self.repl.status.working = True
         self.repl.status.phase = "thinking"
         self.query_one("#status", StatusFooter).status = self.repl.status
-        self.query_one("#prompt", Input).disabled = True
+        self.query_one("#prompt", PromptInput).disabled = True
         self._stream_buf = ""
         self._stream_labelled = False
         self._reply = None
@@ -1311,7 +1405,7 @@ class Agent86App(App):
             self._render_entry(block)
 
     def _reenable_input(self) -> None:
-        prompt = self.query_one("#prompt", Input)
+        prompt = self.query_one("#prompt", PromptInput)
         prompt.disabled = False
         prompt.focus()
 
