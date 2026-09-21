@@ -39,6 +39,7 @@ import argparse
 import importlib.util
 import os
 import re
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,20 @@ class Report:
             print(f"  FAIL  {label}{': ' + detail if detail else ''}")
             self.failures.append(f"{label}{': ' + detail if detail else ''}")
         return ok
+
+
+def force_utf8_stdio() -> None:
+    """Windows consoles default to cp1252; the changelog is full of em dashes and arrows.
+
+    Mirrors the reconfigure `agent86/cli.py` does on startup, for the same reason.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):  # pragma: no cover - detached/odd stream
+                pass
 
 
 def pyproject_version() -> str:
@@ -186,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    force_utf8_stdio()
     report = run_checks(_resolve_tag(args.tag))
     print()
     if report.failures:

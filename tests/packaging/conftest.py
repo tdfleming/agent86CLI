@@ -50,21 +50,27 @@ def run_captured(
     args: list[str | Path],
     *,
     cwd: Path | None = None,
+    home: Path | None = None,
     timeout: float = 300.0,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a subprocess with a sandboxed HOME and decoded, colour-free output."""
+    """Run a subprocess with decoded, colour-free output.
+
+    `home` redirects HOME/USERPROFILE so an `agent86` invocation can't write the flight recorder
+    into the developer's real `~/.agent86`. The build and install steps deliberately *don't* set
+    it — they need the real pip/uv caches, or every run re-downloads the dependency tree.
+    """
     env = dict(os.environ)
-    sandbox_home = cwd if cwd is not None else REPO_ROOT
     env.update(
         {
-            "HOME": str(sandbox_home),
-            "USERPROFILE": str(sandbox_home),
             "NO_COLOR": "1",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         }
     )
+    if home is not None:
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
     env.pop("PYTHONPATH", None)  # never let the source tree shadow the installed wheel
     return subprocess.run(
         [str(a) for a in args],
