@@ -63,7 +63,7 @@ def run_captured(
     env = dict(os.environ)
     # Rich gives FORCE_COLOR precedence over NO_COLOR and still emits bold/dim attributes under
     # NO_COLOR alone; the release workflow sets FORCE_COLOR=1 for readable logs, which turned
-    # `agent86 1.0.0` into `agent86 [1m1.0[0m...` and broke the plain-text asserts.
+    # `agent86 1.0.0` into `agent86 \x1b[1m1.0\x1b[0m...` and broke the plain-text asserts.
     env.pop("FORCE_COLOR", None)
     env.update(
         {
@@ -95,7 +95,7 @@ def run_captured(
     )
 
 
-_ANSI = re.compile(r"\[[0-?]*[ -/]*[@-~]")
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _strip_ansi(text: str) -> str:
