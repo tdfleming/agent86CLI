@@ -13,6 +13,7 @@ Everything in this package is marked `packaging` and excluded from the default `
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -60,9 +61,15 @@ def run_captured(
     it — they need the real pip/uv caches, or every run re-downloads the dependency tree.
     """
     env = dict(os.environ)
+    # Rich gives FORCE_COLOR precedence over NO_COLOR and still emits bold/dim attributes under
+    # NO_COLOR alone; the release workflow sets FORCE_COLOR=1 for readable logs, which turned
+    # `agent86 1.0.0` into `agent86 [1m1.0[0m...` and broke the plain-text asserts.
+    env.pop("FORCE_COLOR", None)
     env.update(
         {
             "NO_COLOR": "1",
+            "TERM": "dumb",
+            "COLUMNS": "200",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
@@ -72,7 +79,7 @@ def run_captured(
         env["HOME"] = str(home)
         env["USERPROFILE"] = str(home)
     env.pop("PYTHONPATH", None)  # never let the source tree shadow the installed wheel
-    return subprocess.run(
+    result = subprocess.run(
         [str(a) for a in args],
         cwd=str(cwd) if cwd is not None else None,
         env=env,
@@ -82,6 +89,17 @@ def run_captured(
         errors="replace",
         timeout=timeout,
     )
+    # Belt and braces: whatever the environment did, the asserts see plain text.
+    return subprocess.CompletedProcess(
+        result.args, result.returncode, _strip_ansi(result.stdout), _strip_ansi(result.stderr)
+    )
+
+
+_ANSI = re.compile(r"\[[0-?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI.sub("", text)
 
 
 @pytest.fixture(scope="session")
