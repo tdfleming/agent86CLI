@@ -35,8 +35,25 @@ class UseSkillTool(Tool["UseSkillTool.Args"]):
         body = skill.instructions()
         resources = skill.resources()
         if resources:
-            body += "\n\nBundled resources in the skill directory: " + ", ".join(resources)
-        return ToolResult(call_id="", name=self.name, content=body)
+            body += (
+                f"\n\nBundled resources in the skill directory ({skill.directory}), readable "
+                "with read_file: " + ", ".join(resources)
+            )
+        # Activating a skill *replaces* any previously active one, so its allowed-tools list
+        # is the restriction in force from here until the end of the turn.
+        ctx.activate_skill(skill)
+        if skill.allowed_tools:
+            body += (
+                "\n\nWhile this skill is active you may only call these tools: "
+                + ", ".join(skill.allowed_tools)
+                + " (plus use_skill). Other tools will be refused."
+            )
+        return ToolResult(
+            call_id="",
+            name=self.name,
+            content=body,
+            metadata={"skill": skill.name, "allowed_tools": list(skill.allowed_tools)},
+        )
 
 
 __all__ = ["UseSkillTool"]

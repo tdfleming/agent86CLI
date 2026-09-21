@@ -94,7 +94,35 @@ class ToolRegistry:
                 ok=False,
                 error=f"Unknown tool '{call.name}'. Available: {', '.join(self.names())}.",
             )
+        refusal = self._skill_refusal(call, ctx)
+        if refusal is not None:
+            return refusal
         return tool.run(call, ctx)
+
+    @staticmethod
+    def _skill_refusal(call: ToolCall, ctx: ToolContext) -> ToolResult | None:
+        """Enforce the active skill's ``allowed-tools``, or None when the call is permitted.
+
+        The frontmatter's ``allowed-tools`` is a promise to the user about what a skill may
+        do; advertising it in the prompt and hoping the model complies is not enforcement.
+        The error names the skill and the full allowed list so the model can re-plan inside
+        the restriction rather than retrying the same refused call.
+        """
+        allowed = getattr(ctx, "allowed_tool", None)
+        if allowed is None or allowed(call.name):
+            return None
+        skill = ctx.active_skill
+        assert skill is not None  # allowed_tool() only refuses while a skill is active
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            ok=False,
+            error=(
+                f"Tool '{call.name}' is not permitted while the skill '{skill.name}' is "
+                f"active. That skill's allowed-tools are: {', '.join(skill.allowed_tools)}. "
+                "Use one of those, or finish with the skill first."
+            ),
+        )
 
 
 _BUILTINS: tuple[type[Tool], ...] = (

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -152,17 +153,41 @@ class SandboxPolicy:
         return text[:limit] + f"\n... [truncated {len(text) - limit} bytes]"
 
 
-def default_policy(config, workspace: Path | None = None) -> SandboxPolicy:
+def default_policy(
+    config, workspace: Path | None = None, extra_allow_paths: Iterable[Path] | None = None
+) -> SandboxPolicy:
     """Build the default policy from config and the current workspace.
 
     ``timeout_s`` is a *per-tool* budget and comes from ``limits.tool_timeout_s``; it used to
     be derived from the whole-run wall clock (``max_wall_clock_s`` when under 120s, else 60),
     which silently shortened tool timeouts for anyone who lowered the run budget and was
     impossible to configure directly.
+
+    Skill roots join ``allow_paths`` automatically. A skill's instructions routinely say "see
+    ``reference.md``", and for a user-level skill that file sits under ``~/.claude/skills``,
+    outside the workspace — so without this every such reference is a jail error. The jail has
+    no read/write split, so this does also make those directories *writable*; a write there is
+    still a side-effecting tool call and still passes the approval gate, and the alternative —
+    skills whose own bundle is unreachable — is worse. ``extra_allow_paths`` adds roots that
+    discovery cannot see.
     """
     ws = (workspace or Path.cwd()).resolve()
+    allow: list[Path] = []
+    try:
+        from agent86.skills.loader import skill_roots
+
+        allow.extend(skill_roots(config, ws))
+    except Exception:  # discovery must never be the reason a policy cannot be built
+        logger.debug("skill root discovery failed; continuing without them", exc_info=True)
+    allow.extend(Path(p).resolve() for p in (extra_allow_paths or ()))
+    # Roots already inside the workspace add nothing but noise to every jail check.
+    deduped: list[Path] = []
+    for path in allow:
+        if path != ws and ws not in path.parents and path not in deduped:
+            deduped.append(path)
     return SandboxPolicy(
         workspace=ws,
+        allow_paths=deduped,
         network=True,
         timeout_s=int(config.limits.tool_timeout_s),
         env_passthrough=list(getattr(config.sandbox, "env_passthrough", []) or []),

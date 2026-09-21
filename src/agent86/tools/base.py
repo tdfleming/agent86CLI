@@ -44,12 +44,33 @@ class ToolContext:
     spawn: Callable[[str, str], str] | None = None
     # Execution backend (subprocess or docker); tools fall back to the default if unset.
     executor: Executor | None = None
+    #: The skill the model loaded with ``use_skill``, if any. While it is set and declares
+    #: ``allowed-tools``, the registry refuses every other tool (see ``ToolRegistry.dispatch``).
+    #: Turn-scoped: the orchestrator clears it at the end of a turn.
+    active_skill: Skill | None = None
     extra: dict[str, object] = field(default_factory=dict)
 
     def get_executor(self) -> Executor:
         from agent86.tools.sandbox.executor import get_default_executor
 
         return self.executor or get_default_executor()
+
+    def activate_skill(self, skill: Skill) -> None:
+        """Make ``skill`` the active one, replacing (never stacking on) any previous skill."""
+        self.active_skill = skill
+
+    def clear_skill(self) -> None:
+        """Lift the active skill's tool restriction — called at the end of a turn."""
+        self.active_skill = None
+
+    def allowed_tool(self, name: str) -> bool:
+        """Is ``name`` callable right now, given the active skill's ``allowed-tools``?"""
+        skill = self.active_skill
+        if skill is None or not skill.allowed_tools:
+            return True
+        # `use_skill` is always callable: it is how the model activates a *different* skill,
+        # and a skill that forgot to list it would otherwise be a one-way door.
+        return name == "use_skill" or name in skill.allowed_tools
 
 
 class EmptyArgs(BaseModel):

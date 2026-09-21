@@ -43,6 +43,11 @@ Debugging:
 """
 
 
+def _one_line(text: str) -> str:
+    """Flatten a description onto one line — a block-scalar description spans several."""
+    return " ".join(text.split())
+
+
 def build_system_prompt(
     config: Config, skills: dict[str, Skill] | None = None
 ) -> Message:
@@ -57,7 +62,12 @@ def build_system_prompt(
         # instructions load when the model calls use_skill(name).
         lines = ["\nAvailable skills (call use_skill with the name to load full instructions):"]
         for skill in skills.values():
-            lines.append(f"- {skill.name}: {skill.description}")
+            line = f"- {skill.name}: {_one_line(skill.description)}"
+            # `allowed-tools` is enforced once the skill is active, so the model is told up
+            # front — discovering the restriction through a refused call wastes a whole step.
+            if skill.allowed_tools:
+                line += f" [tools while active: {', '.join(skill.allowed_tools)}]"
+            lines.append(line)
         parts.append("\n".join(lines))
     return Message(role=Role.SYSTEM, content="\n".join(parts))
 

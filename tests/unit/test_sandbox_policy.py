@@ -130,3 +130,54 @@ def test_tool_timeout_s_flows_from_config_into_the_policy(tmp_path):
 
     cfg.limits.tool_timeout_s = 5
     assert default_policy(cfg, tmp_path).timeout_s == 5
+
+
+# ---- skill roots in the jail (v0.9) ------------------------------------ #
+
+
+def test_default_policy_allows_reading_discovered_skill_roots(tmp_path, monkeypatch):
+    """A user-level skill's bundled resources sit outside the workspace and must be readable."""
+    from pathlib import Path
+
+    home = tmp_path / "home"
+    (home / ".claude" / "skills" / "demo").mkdir(parents=True)
+    (home / ".claude" / "skills" / "demo" / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    policy = default_policy(load_config(), workspace)
+
+    assert (home / ".claude" / "skills").resolve() in policy.allow_paths
+    inside = policy.resolve_within(str(home / ".claude" / "skills" / "demo" / "SKILL.md"))
+    assert inside.is_file()
+
+
+def test_default_policy_accepts_extra_allow_paths(tmp_path):
+    extra = tmp_path / "shared"
+    extra.mkdir()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    policy = default_policy(load_config(), workspace, extra_allow_paths=[extra])
+
+    assert extra.resolve() in policy.allow_paths
+    assert policy.resolve_within(str(extra / "x.txt")) == (extra / "x.txt").resolve()
+
+
+def test_skill_roots_inside_the_workspace_are_not_duplicated(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "empty-home"))
+    workspace = tmp_path / "ws"
+    (workspace / ".agent86" / "skills" / "demo").mkdir(parents=True)
+    (workspace / ".agent86" / "skills" / "demo" / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+
+    policy = default_policy(load_config(), workspace)
+
+    # Already inside the jail: allow_paths stays empty rather than restating the workspace.
+    assert policy.allow_paths == []
