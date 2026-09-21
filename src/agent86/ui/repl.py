@@ -430,11 +430,13 @@ def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> Non
 
     try:
         repl = _Repl(cfg, resume)
-    except ProviderError as exc:
-        console.print(f"[red]Cannot start:[/red] {exc}")
+    except (ProviderError, ValueError) as exc:
+        # ValueError too: a malformed `--model` ref fails in `ModelRef.parse`, before any
+        # provider exists to raise a ProviderError — and used to print a traceback.
+        console.print(f"[red]Cannot start:[/red] {escape(str(exc))}")
         console.print(
-            "[dim]Fix the key/config or choose another model with "
-            "`agent86 --model provider:model`, then retry.[/dim]"
+            "[dim]`agent86 models` lists the configured providers and which of them has a "
+            "key; `agent86 --model provider:model` picks another. Then retry.[/dim]"
         )
         return
 

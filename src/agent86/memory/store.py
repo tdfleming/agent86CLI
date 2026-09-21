@@ -70,21 +70,38 @@ class SessionInfo:
         return self.title or "(untitled)"
 
 
+class MemoryStoreError(RuntimeError):
+    """The memory database could not be opened. Carries what to do about it.
+
+    A locked db (a second agent86 running), a read-only home directory, or a corrupt file
+    used to surface as a bare ``sqlite3.OperationalError`` several frames deep — a traceback
+    that names the symptom and not one of the three things that would fix it.
+    """
+
+
 class MemoryStore:
     def __init__(self, path: str | Path, embedder: Embedder):
         self.embedder = embedder
         self.dim = embedder.dim
         self.path = str(path)
-        if self.path != ":memory:":
-            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False: the rich REPL runs a turn (which touches the store) in a
-        # worker thread while the main thread renders. Access is serialized — the store is only
-        # ever used from one thread at a time (main at construction, then one worker per turn) —
-        # so cross-thread use is safe.
-        self.conn = sqlite3.connect(self.path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self.has_vec = self._try_load_vec()
-        self._migrate()
+        try:
+            if self.path != ":memory:":
+                Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+            # check_same_thread=False: the rich REPL runs a turn (which touches the store) in
+            # a worker thread while the main thread renders. Access is serialized — the store
+            # is only ever used from one thread at a time (main at construction, then one
+            # worker per turn) — so cross-thread use is safe.
+            self.conn = sqlite3.connect(self.path, check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
+            self.has_vec = self._try_load_vec()
+            self._migrate()
+        except (sqlite3.Error, OSError) as exc:
+            raise MemoryStoreError(
+                f"Could not open the memory database at {self.path} - {exc}. "
+                "Another agent86 may be using it (close it and retry), or point "
+                "`[memory] path` at another file - `agent86 config path` shows which file "
+                "to edit. `[memory] enabled = false` turns memory off entirely."
+            ) from None
 
     # ---- setup --------------------------------------------------------- #
 
@@ -411,4 +428,4 @@ class MemoryStore:
         self.conn.close()
 
 
-__all__ = ["MemoryStore", "Hit", "SessionInfo"]
+__all__ = ["MemoryStore", "MemoryStoreError", "Hit", "SessionInfo"]

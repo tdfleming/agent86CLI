@@ -27,6 +27,7 @@ from agent86.config import CompactionMode, Config, MCPServerConfig
 from agent86.guardrails.egress import EgressGuardrail
 from agent86.guardrails.ingress import IngressGuardrail, wrap_untrusted
 from agent86.guardrails.policy import ApprovalGate, ApprovalPrompt
+from agent86.memory.store import MemoryStoreError
 from agent86.memory.system import MemorySystem, build_memory
 from agent86.memory.working import (
     MIN_CONVERSATION_TOKENS,
@@ -163,9 +164,11 @@ class Harness:
         self.config = config
         self.router = ModelRouter(config, forced_provider=provider)
         self.provider = self.router.default_provider()
-        self.memory: MemorySystem | None = (
-            build_memory(config) if memory is _AUTO else memory  # type: ignore[assignment]
-        )
+        self._memory_error: str | None = None
+        if memory is _AUTO:
+            self.memory, self._memory_error = self._auto_memory(config)
+        else:
+            self.memory = memory  # type: ignore[assignment]
         # Seeded with the flat cap; `_context_budget` recomputes it from the model's real
         # window (and the live tool catalogue) before every request.
         self.working = WorkingMemory(config.limits.max_context_tokens or MIN_CONVERSATION_TOKENS)
@@ -258,8 +261,26 @@ class Harness:
         if removed:
             self.recorder.event("memory", "retention_prune", **removed)
 
+    @staticmethod
+    def _auto_memory(config: Config) -> tuple[MemorySystem | None, str | None]:
+        """Build memory, degrading to none (with a reason) rather than failing the session.
+
+        A locked or unwritable database is a reason to run without recall, not a reason the
+        user cannot talk to a model at all — and the note says what would fix it, so the
+        degradation is visible rather than silent.
+        """
+        try:
+            return build_memory(config), None
+        except Exception as exc:  # noqa: BLE001 - any store failure degrades, none crashes
+            detail = (
+                str(exc) if isinstance(exc, MemoryStoreError) else f"{type(exc).__name__}: {exc}"
+            )
+            return None, f"unavailable, running without recall or session history. {detail}"
+
     @property
     def memory_note(self) -> str | None:
+        if self._memory_error:
+            return self._memory_error
         return self.memory.note if self.memory else None
 
     def set_model(self, model_str: str) -> ModelProvider:
