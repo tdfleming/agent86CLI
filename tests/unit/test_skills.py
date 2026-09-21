@@ -406,3 +406,110 @@ def test_system_prompt_flattens_a_multiline_description(tmp_path, isolated_home)
     skills = discover_skills(_cfg(tmp_path))
     prompt = build_system_prompt(load_config(), skills)
     assert "- folded: line one line two" in prompt.content
+
+
+# ---- turn scoping (the harness) ----------------------------------------- #
+
+
+def _turn_script(*completions):
+    from tests.support import ScriptedProvider
+
+    return ScriptedProvider(list(completions))
+
+
+def _tool_step(call_id: str, name: str, arguments: dict):
+    from agent86.types import Completion, Usage
+
+    return Completion(
+        text="",
+        tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)],
+        usage=Usage(input_tokens=5, output_tokens=2),
+        stop_reason="tool_use",
+    )
+
+
+def _text_only():
+    """A provider that just answers — for tests about construction, not about turns."""
+    from tests.support import make_text_provider
+
+    return make_text_provider("ok")
+
+
+def _text_step(text: str):
+    from agent86.types import Completion, Usage
+
+    return Completion(text=text, usage=Usage(input_tokens=3, output_tokens=1))
+
+
+def test_allowed_tools_restriction_is_turn_scoped(tmp_path, isolated_home):
+    """A skill activated in turn 1 must not still be refusing tools in turn 2.
+
+    `use_skill` sets `ToolContext.active_skill`, and the context outlives the turn — so
+    without the harness clearing it, one `use_skill` call silently narrowed the toolset for
+    the rest of the session, with nothing in the conversation to explain the refusals.
+    """
+    from agent86.orchestration.loop import Harness
+
+    _make_skill(tmp_path / "skills", "reader", "Reads things.", "read stuff",
+                tools=["read_file"])
+    cfg = _cfg(tmp_path)
+    provider = _turn_script(
+        _tool_step("c1", "use_skill", {"name": "reader"}),   # turn 1, step 1
+        _tool_step("c2", "list_dir", {"path": "."}),         # turn 1, step 2 — refused
+        _text_step("turn one done"),                         # turn 1, step 3
+        _tool_step("c3", "list_dir", {"path": "."}),         # turn 2, step 1 — permitted
+        _text_step("turn two done"),                         # turn 2, step 2
+    )
+    harness = Harness(cfg, provider=provider, memory=None, workspace=tmp_path)
+    assert "reader" in harness.skills
+
+    state = harness.new_session()
+    list(harness.run_turn("use the reader skill", state))
+    # In force for the rest of that turn...
+    refused = state.steps[1].results[0]
+    assert not refused.ok and "not permitted while the skill 'reader'" in refused.error
+    # ...and lifted the moment the turn ended.
+    assert harness.context.active_skill is None
+
+    list(harness.run_turn("now list the directory", state))
+    assert state.steps[-2].results[0].ok
+
+
+def test_abandoning_a_turn_mid_stream_still_lifts_the_restriction(tmp_path, isolated_home):
+    """The clear is in a `finally`, so closing the generator early runs it too."""
+    from agent86.orchestration.loop import Harness
+
+    _make_skill(tmp_path / "skills", "reader", "Reads things.", "read stuff",
+                tools=["read_file"])
+    cfg = _cfg(tmp_path)
+    provider = _turn_script(
+        _tool_step("c1", "use_skill", {"name": "reader"}),
+        _text_step("done"),
+    )
+    harness = Harness(cfg, provider=provider, memory=None, workspace=tmp_path)
+    turn = harness.run_turn("use the reader skill", state=harness.new_session())
+    next(turn)                       # start it, then walk away mid-turn
+    turn.close()
+    assert harness.context.active_skill is None
+
+
+def test_the_harness_discovers_skills_from_the_workspace_not_the_cwd(tmp_path, isolated_home):
+    """Project skill roots hang off the RESOLVED workspace (`--workspace`), not `Path.cwd()`."""
+    from agent86.orchestration.loop import Harness
+
+    workspace = tmp_path / "project"
+    _make_skill(workspace / ".agent86" / "skills", "local", "A project skill.", "body")
+    harness = Harness(
+        load_config(), provider=_text_only(), memory=None, workspace=workspace
+    )
+    assert "local" in harness.skills
+
+
+def test_the_gate_gets_the_tool_context_for_previews(tmp_path, isolated_home):
+    """`ApprovalGate.preview` resolves paths through the sandbox policy — it needs a context."""
+    from agent86.orchestration.loop import Harness
+
+    harness = Harness(
+        load_config(), provider=_text_only(), memory=None, workspace=tmp_path
+    )
+    assert harness.gate.context is harness.context

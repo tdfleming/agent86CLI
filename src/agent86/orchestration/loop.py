@@ -145,8 +145,14 @@ class Harness:
         self.working = WorkingMemory(config.limits.max_context_tokens or MIN_CONVERSATION_TOKENS)
         semantic = self.memory.semantic if self.memory else None
 
+        # Built first because skill discovery needs the RESOLVED workspace: the project skill
+        # roots (`<workspace>/.agent86/skills`, `<workspace>/.claude/skills`) hang off it, and
+        # discovering them against the process CWD instead meant `--workspace` (and every test
+        # using `tmp_path`) silently loaded the wrong project's skills — or none.
+        self.policy = default_policy(config, workspace)
+
         # Skills (progressive disclosure) and MCP tools join the registry.
-        self.skills = discover_skills(config)
+        self.skills = discover_skills(config, self.policy.workspace)
         self.system_prompt: Message = build_system_prompt(config, self.skills)
         self.mcp = build_mcp(config)
         mcp_tools = self.mcp.tools() if self.mcp else []
@@ -158,7 +164,6 @@ class Harness:
             mcp_tools=mcp_tools,
             enable_delegate=config.agents.enabled,
         )
-        self.policy = default_policy(config, workspace)
         self.executor, self.sandbox_note = build_executor(config)
         self.context = ToolContext(
             workspace=self.policy.workspace,
@@ -169,7 +174,10 @@ class Harness:
             spawn=(self.spawn_subagent if config.agents.enabled else None),
             executor=self.executor,
         )
-        self.gate = ApprovalGate(config.guardrails.approval, approval_prompt)
+        # `context=`: `Tool.preview` resolves paths through the sandbox policy when it has a
+        # context, so the diff an approval prompt shows is the diff of the file that would
+        # actually be written — not of a same-named file under the process CWD.
+        self.gate = ApprovalGate(config.guardrails.approval, approval_prompt, self.context)
         self.ingress = IngressGuardrail(config.guardrails.ingress)
         self.egress = EgressGuardrail(config.guardrails.egress)
         self.recorder: Recorder = build_recorder(config)
@@ -507,7 +515,23 @@ class Harness:
     # ---- the loop ------------------------------------------------------ #
 
     def run_turn(self, user_text: str, state: AgentState) -> Iterator[CompletionDelta]:
-        """Run one user turn to completion, streaming text and tool activity."""
+        """Run one user turn to completion, streaming text and tool activity.
+
+        A skill activated with ``use_skill`` is **turn-scoped**: its ``allowed-tools`` list
+        restricts what the model may call for the rest of *this* turn only. The restriction
+        is lifted on entry and again on every exit — done, cancelled, circuit-tripped,
+        provider failure, or a consumer that simply abandons the generator (the `finally`
+        runs on ``close()`` too). Without the exit clear, a skill activated once would keep
+        refusing tools for the whole session, with nothing in the conversation explaining
+        why.
+        """
+        self.context.clear_skill()
+        try:
+            yield from self._run_turn(user_text, state)
+        finally:
+            self.context.clear_skill()
+
+    def _run_turn(self, user_text: str, state: AgentState) -> Iterator[CompletionDelta]:
         sid = state.session_id
         # A cancel requested while no turn was running must not kill the next one.
         self._cancel.clear()
