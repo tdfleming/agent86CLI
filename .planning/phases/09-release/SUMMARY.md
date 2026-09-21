@@ -198,6 +198,12 @@ no-MCP-servers / unknown-skill each name the config key or command that changes 
 Missing-key messages continue to name the environment **variable** and never its value, with a
 test holding `agent86 models` to that.
 
+**`327a936` — and the `trace` sub-app with them.** The audit gave every command the `_load()`
+wrapper, but `trace path`, `trace show` and `trace export` still called `load_config()` directly,
+so a malformed config reached the user as a traceback from exactly the commands they would reach
+for while diagnosing one. Three lines; the point is that "every command" has to be checked
+command by command, because the wrapper is opt-in by call site.
+
 **`816737e` — title the session after what you typed.** `@file` mentions are expanded before the
 turn runs, so a prompt whose body was an inlined file named the session after 60 characters of
 that file's contents. `run_turn` gained a keyword-only `display_text`: the model still gets the

@@ -165,6 +165,10 @@ The scripting contract is unchanged — and is now pinned by tests that say exac
   (a second agent86 running) or an unwritable home raised a bare `sqlite3` error several frames
   deep. `MemoryStoreError` now names the file and offers all three fixes, and the harness
   **degrades to no memory with a visible note** rather than declining to run.
+- **The `trace` commands name a malformed config too.** The error-message audit gave every
+  command a wrapper that turns an unparseable `config.toml` into a sentence naming the file, but
+  `trace path`, `trace show` and `trace export` still called `load_config()` directly and raised a
+  Rich traceback. They now share the wrapper.
 - **The recorder's file handle is annotated**, so `mypy` no longer infers it from the first
   assignment and rejects the rotation path.
 

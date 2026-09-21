@@ -383,6 +383,7 @@ set — see `phases/09-release/SUMMARY.md` for the commit-by-commit breakdown gr
 | `f91077e` fix(cli): make the first-run failures say what to do next | Hardening |
 | `1e5f972` fix(observability): annotate the recorder's file handle for mypy | Observability |
 | `12fe2bd` test(integration): a degradation matrix for every optional dependency | Hardening |
+| `327a936` fix(cli): route the trace sub-app through _load so a malformed config is a message | Hardening |
 
 ---
 *v0.6 roadmap created: 2026-07-19 · v0.6 complete: 2026-09-19 (5/5 phases)*
