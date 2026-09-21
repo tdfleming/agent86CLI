@@ -120,9 +120,9 @@ def run(
 ) -> None:
     """Run a single goal non-interactively (scriptable).
 
-    Piped or in CI, side-effecting tools are declined without --yes (there is no terminal to
-    approve them at); read-only tools always run. Pass --yes to let the agent act
-    autonomously. Typed at a terminal, each side-effecting call asks y/N instead.
+    Piped or in CI, side-effecting tools are declined without --yes;
+    read-only tools always run. Pass --yes to act autonomously.
+    Typed at a terminal, each side-effecting call asks y/N instead.
     """
     import json as _json
 
