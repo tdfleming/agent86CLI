@@ -2,11 +2,27 @@
 name = "agent86"
 version = "0.9.0"
 description = "An agentic harness on the command line — connects to remote or local models and lets them use tools and skills."
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Tony Fleming" }]
 keywords = ["agent", "agentic", "harness", "llm", "cli", "mcp", "tools"]
+classifiers = [
+    # Bumped to "5 - Production/Stable" once 1.0 has actually shipped to PyPI.
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+]
 
 # Core dependencies — kept light so `agent86` starts fast.
 # Provider SDKs, embeddings, MCP, tracing, and Docker live behind extras.
@@ -45,6 +61,8 @@ dev = [
     "sqlite-vec>=0.1.1",  # exercise the native vec_distance_cosine search path in CI
     "beautifulsoup4>=4.12",  # exercise the readability extraction path in CI
     "mcp>=1.0",  # exercise the live MCP transport test (stdio/SSE/HTTP) in CI
+    "build>=1.2",  # `python -m build` for the packaging tests and the release workflow
+    "twine>=5.1",  # `twine check dist/*` — metadata/README render gate before publish
 ]
 
 [project.scripts]
@@ -52,10 +70,38 @@ agent86 = "agent86.cli:app"
 
 [project.urls]
 Homepage = "https://github.com/tdfleming/agent86CLI"
+Repository = "https://github.com/tdfleming/agent86CLI"
+Documentation = "https://github.com/tdfleming/agent86CLI/blob/master/docs/ARCHITECTURE.md"
+Changelog = "https://github.com/tdfleming/agent86CLI/blob/master/CHANGELOG.md"
+Issues = "https://github.com/tdfleming/agent86CLI/issues"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Shared exclusions — development scaffolding never belongs in a published artifact.
+[tool.hatch.build]
+exclude = [
+    "/.github",
+    "/.planning",
+    "/.claude",
+    "/.vscode",
+    "/tests",
+    "/docs/*.pdf",
+    "**/__pycache__",
+    "**/*.py[cod]",
+]
+
+# The sdist is an allowlist: source, the docs a packager needs, and nothing else.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/agent86",
+    "/pyproject.toml",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/docs/ARCHITECTURE.md",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent86"]
