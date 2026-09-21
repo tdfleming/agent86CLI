@@ -156,6 +156,10 @@ class ToolsConfig(BaseModel):
     # Off by default: a model that can fetch http://169.254.169.254/ or an intranet host is a
     # server-side-request-forgery pivot. Turn it on only for local development targets.
     web_allow_private: bool = False
+    # Largest file an `@path` mention may inline into a prompt. A mention is a convenience,
+    # not a bulk loader: anything over this is refused with a note telling the model to read
+    # the file with a tool instead, so one `@` can't blow the context window (or the bill).
+    mention_max_bytes: int = 200_000
 
 
 class SandboxConfig(BaseModel):
@@ -241,6 +245,15 @@ class UIConfig(BaseModel):
     # Reserved: animate the TUI's working indicator. Currently always on -- the status
     # footer renders the working state regardless.
     spinner: bool = True
+    #: Where submitted prompts are recorded so they survive a restart. One shared file for
+    #: both surfaces (the TUI navigates it with Up/Down; the plain loop can only append to
+    #: it, since stdlib ``input()`` has no line editor). ``~`` is expanded at use time.
+    history_file: str = "~/.agent86/history"
+    #: How many entries ``history_file`` keeps. The oldest are dropped once it overflows.
+    history_size: int = 1000
+    #: Render the assistant's answer as Markdown in the TUI transcript rather than as plain
+    #: text. Off means the raw text is shown exactly as the model emitted it.
+    markdown: bool = True
 
     @model_validator(mode="before")
     @classmethod
