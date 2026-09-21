@@ -16,7 +16,7 @@ The design contract lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 providers, remote MCP, a cost meter and security posture you can trust, and a context window spent
 deliberately.** A five-tier agentic harness that runs on remote or local models and uses tools,
 skills, MCP servers, and sub-agents. Every pillar and tier from *The Agentic Harness* is
-implemented, tested (1079 tests), and verified live against a local model.
+implemented, tested (1100 tests), and verified live against a local model.
 
 | Tier / Pillar | What's there |
 |---|---|

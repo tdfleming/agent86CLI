@@ -86,7 +86,7 @@ v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette
   anything outside a non-empty allowlist, with `clear_skill()` lifting the restriction at the end
   of every turn. The scripting contract is untouched: `run`, `run --json` and `--plain` are
   unchanged, and `tui/mentions.py` imports no Textual so the plain loop shares it for free.
-  1079 tests collected.
+  1100 tests collected.
 
 - 2026-09-19 — **Phase 7 (Context & Cost) complete; v0.8 milestone complete at 1/1 phase and
   released as v0.8.0.** Executed as a review-driven pass rather than a numbered plan set (see
