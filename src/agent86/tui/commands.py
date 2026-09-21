@@ -29,10 +29,13 @@ __all__ = [
     "find_command",
     "find_command_for_line",
     "handle_command",
+    "recent_sessions",
+    "relative_time",
+    "session_label",
     "startup_notes",
 ]
 
-ChoiceKind = Literal[None, "model", "mode", "config_model", "config_mcp"]
+ChoiceKind = Literal[None, "model", "mode", "config_model", "config_mcp", "resume"]
 
 
 @dataclass
@@ -270,6 +273,127 @@ def _clear_session(repl) -> CommandResult:
     return CommandResult("handled", "conversation cleared")
 
 
+# ---- sessions (/sessions, /resume) ------------------------------------- #
+
+#: What both surfaces show when the session log isn't being kept.
+NO_MEMORY_NOTE = "memory is disabled - sessions are not saved, so there is nothing to resume"
+
+
+def relative_time(when: float, now: float | None = None) -> str:
+    """``when`` (a UNIX timestamp) as a short "how long ago" — "3h ago", "2d ago".
+
+    Deliberately coarse. The question a session list answers is "which one was I in", and a
+    full timestamp costs more width than it earns; anything older than a month rounds to
+    months, because by then the exact day has stopped being the thing you remember.
+    """
+    import time
+
+    if not when:
+        return "unknown"
+    delta = (time.time() if now is None else now) - when
+    if delta < 60:  # covers a clock that skewed backwards, too
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h ago"
+    if delta < 86400 * 30:
+        return f"{int(delta // 86400)}d ago"
+    return f"{int(delta // (86400 * 30))}mo ago"
+
+
+def session_label(info, now: float | None = None) -> str:  # noqa: ANN001 - SessionInfo
+    """One session as a single line: ``title · id[:8] · relative time``.
+
+    Shared by the ``/sessions`` table and the session picker's options so the two lists read
+    identically. NOT markup-escaped — the caller decides, because one renders into a Rich
+    console and the other into a Textual ``Text``.
+    """
+    return f"{info.label} · {info.session_id[:8]} · {relative_time(info.updated_at, now)}"
+
+
+def recent_sessions(repl, limit: int = 20):  # noqa: ANN201 - list[SessionInfo] | None
+    """Recent sessions for this repl, or None when memory (and so the log) is off."""
+    memory = getattr(repl.harness, "memory", None)
+    if memory is None:
+        return None
+    try:
+        return memory.store.recent_sessions(limit)
+    except Exception:  # noqa: BLE001 - a broken log must not take a command down
+        return []
+
+
+def _sessions_render(repl):
+    from rich.markup import escape
+    from rich.table import Table
+
+    sessions = recent_sessions(repl)
+    if sessions is None:
+        return NO_MEMORY_NOTE
+    if not sessions:
+        return "no saved sessions yet"
+    table = Table(show_header=True, header_style="bold", title="Recent sessions")
+    table.add_column("Session")
+    table.add_column("Title")
+    table.add_column("Updated")
+    for info in sessions:
+        active = info.session_id == repl.state.session_id
+        # Titles are the user's own first prompt: escaped, never live markup.
+        table.add_row(
+            f"[green]{escape(info.session_id[:8])}[/green]"
+            if active
+            else escape(info.session_id[:8]),
+            escape(info.label),
+            relative_time(info.updated_at),
+        )
+    return table
+
+
+def _resolve_session_id(repl, arg: str) -> str | None:
+    """Turn what the user typed into a full session id.
+
+    The lists show ``id[:8]``, so that prefix has to be resumable — otherwise every resume
+    means copying an id out of a column that never showed it in full. An exact id always
+    wins; an ambiguous prefix resolves to nothing rather than to a guess.
+    """
+    sessions = recent_sessions(repl, limit=200) or []
+    ids = [s.session_id for s in sessions]
+    if arg in ids:
+        return arg
+    matches = [sid for sid in ids if sid.startswith(arg)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _resume(repl, arg: str) -> CommandResult:
+    """Load a saved session and make it the live one."""
+    from rich.markup import escape
+
+    if getattr(repl.harness, "memory", None) is None:
+        return CommandResult("handled", NO_MEMORY_NOTE)
+    if not arg:
+        # Bare /resume is the picker's job in the TUI; the plain loop shows the list so the
+        # user can copy an id out of it.
+        return CommandResult(
+            "handled",
+            _sessions_render(repl)
+            if recent_sessions(repl)
+            else "no saved sessions yet",
+        )
+    session_id = _resolve_session_id(repl, arg)
+    state = repl.harness.resume(session_id) if session_id else None
+    if state is None:
+        return CommandResult("handled", f"no session '{escape(arg)}' found")
+    repl.state = state
+    repl._refresh_status()
+    title = repl.harness.memory.store.session_title(state.session_id)
+    suffix = f" - {escape(title)}" if title else ""
+    return CommandResult(
+        "handled",
+        f"resumed session {escape(state.session_id)} "
+        f"({len(state.messages)} messages){suffix}",
+    )
+
+
 COMMANDS: list[CommandEntry] = [
     CommandEntry(
         name="/help",
@@ -348,6 +472,19 @@ COMMANDS: list[CommandEntry] = [
         usage="/cost",
         description="Show token usage and cost this session",
         handler=lambda repl, arg: CommandResult("handled", _show_cost(repl)),
+    ),
+    CommandEntry(
+        name="/sessions",
+        usage="/sessions",
+        description="List recent sessions",
+        handler=lambda repl, arg: CommandResult("handled", _sessions_render(repl)),
+    ),
+    CommandEntry(
+        name="/resume",
+        usage="/resume [session-id]",
+        description="Resume a saved session",
+        handler=lambda repl, arg: _resume(repl, arg),
+        needs_choice="resume",
     ),
     CommandEntry(
         name="/clear",

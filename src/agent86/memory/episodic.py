@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
-from agent86.memory.store import Hit, MemoryStore
+from agent86.memory.store import Hit, MemoryStore, SessionInfo
 from agent86.types import Message
 
 # Only surface recalled episodes above this cosine similarity — avoids noise from
@@ -52,6 +52,21 @@ class EpisodicMemory:
             payload,
             {"kind": COMPACTION_KIND, "dropped": len(dropped), "summary": summary},
         )
+
+    # ---- session listing ---------------------------------------------- #
+
+    def recent_sessions(self, limit: int = 20) -> list[SessionInfo]:
+        """The sessions a user can go back to, newest first.
+
+        The flight recorder's other half: :meth:`recall` answers "what happened in a turn
+        like this one", this answers "what were we working on" — the list behind
+        ``/sessions``, ``/resume`` and the session picker.
+        """
+        return self.store.recent_sessions(limit)
+
+    def session_title(self, session_id: str) -> str | None:
+        """The stored name of one session, or None if it never got one."""
+        return self.store.session_title(session_id)
 
     def recall(self, task: str, k: int = 3, min_score: float = _MIN_SCORE) -> list[Hit]:
         return [

@@ -51,6 +51,25 @@ class Hit:
     metadata: dict
 
 
+@dataclass
+class SessionInfo:
+    """One row of the session list, as the UI wants it.
+
+    A typed record rather than a raw ``sqlite3.Row`` so ``/sessions``, the session picker and
+    ``/resume`` share one shape and none of them has to know the column names. ``title`` is
+    None for a session saved before its first user message (or by an older agent86).
+    """
+
+    session_id: str
+    title: str | None
+    updated_at: float
+
+    @property
+    def label(self) -> str:
+        """The title, or a stand-in for a session that never got one."""
+        return self.title or "(untitled)"
+
+
 class MemoryStore:
     def __init__(self, path: str | Path, embedder: Embedder):
         self.embedder = embedder
@@ -114,6 +133,14 @@ class MemoryStore:
     # ---- sessions ------------------------------------------------------ #
 
     def save_session(self, session_id: str, state_json: str, title: str | None = None) -> None:
+        """Upsert a session's serialized state, optionally naming it.
+
+        ``title=None`` is "don't touch the name" (``COALESCE(excluded.title,
+        sessions.title)``), not "clear it": most saves are mid-session state dumps that have
+        nothing to say about the name. A title that IS given wins, so a rename stays
+        possible — deciding that a session is only ever named once is the harness's job
+        (see ``Harness._persist``), not the store's.
+        """
         now = self._now()
         self.conn.execute(
             """
@@ -135,11 +162,31 @@ class MemoryStore:
         return row["state_json"] if row else None
 
     def list_sessions(self, limit: int = 20) -> list[sqlite3.Row]:
+        """Recent sessions as raw rows (``session_id``, ``created_at``, ``updated_at``,
+        ``title``), newest first. UI callers want :meth:`recent_sessions` instead."""
         return self.conn.execute(
             "SELECT session_id, created_at, updated_at, title FROM sessions "
             "ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
+
+    def recent_sessions(self, limit: int = 20) -> list[SessionInfo]:
+        """:meth:`list_sessions` as :class:`SessionInfo` records, newest first."""
+        return [
+            SessionInfo(
+                session_id=str(row["session_id"]),
+                title=row["title"],
+                updated_at=float(row["updated_at"] or 0.0),
+            )
+            for row in self.list_sessions(limit)
+        ]
+
+    def session_title(self, session_id: str) -> str | None:
+        """The stored title for one session, or None (including for an unknown session)."""
+        row = self.conn.execute(
+            "SELECT title FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return row["title"] if row else None
 
     # ---- episodes ------------------------------------------------------ #
 
@@ -364,4 +411,4 @@ class MemoryStore:
         self.conn.close()
 
 
-__all__ = ["MemoryStore", "Hit"]
+__all__ = ["MemoryStore", "Hit", "SessionInfo"]

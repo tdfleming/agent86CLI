@@ -95,6 +95,29 @@ def continuation_notice(index: int, total: int = MAX_CONTINUATIONS) -> str:
     return f"\n[continuation {index}/{total}]\n"
 
 
+#: Longest a derived session title may be, including the ellipsis.
+SESSION_TITLE_MAX = 60
+
+
+def session_title(state: AgentState) -> str | None:
+    """A display name for this session: its first user message, collapsed and truncated.
+
+    None until there is one — a session that has been opened but never spoken to has nothing
+    to be named after, and must NOT be given a placeholder name that would then stick (the
+    store's title is write-once).
+    """
+    for message in state.messages:
+        if message.role is not Role.USER:
+            continue
+        text = " ".join((message.content or "").split())
+        if not text:
+            continue
+        if len(text) <= SESSION_TITLE_MAX:
+            return text
+        return text[: SESSION_TITLE_MAX - 3] + "..."
+    return None
+
+
 class HarnessError(RuntimeError):
     """A turn could not be completed."""
 
@@ -289,8 +312,16 @@ class Harness:
         return AgentState.model_validate_json(raw) if raw is not None else None
 
     def _persist(self, state: AgentState) -> None:
-        if self.memory:
-            self.memory.store.save_session(state.session_id, state.model_dump_json())
+        if not self.memory:
+            return
+        store = self.memory.store
+        # Named once, on the first persist that HAS a user message to name it after:
+        # `new_session` saves an empty state (title None, so no placeholder name sticks) and
+        # `_finish_turn` supplies the real one. Re-deriving it every save would let a
+        # compaction that drops the opening message silently rename the session, so the
+        # store is asked first — a primary-key lookup, and only until the name exists.
+        title = session_title(state) if store.session_title(state.session_id) is None else None
+        store.save_session(state.session_id, state.model_dump_json(), title=title)
 
     # ---- request construction ----------------------------------------- #
 
@@ -1062,4 +1093,5 @@ __all__ = [
     "compacted_notice",
     "compaction_failed_notice",
     "continuation_notice",
+    "session_title",
 ]

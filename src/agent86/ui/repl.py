@@ -108,9 +108,13 @@ class _Repl:
             if state is None:
                 self.resume_notes.append(f"no session '{resume}' found; starting fresh")
             else:
-                self.resume_notes.append(
-                    f"resumed session {state.session_id} ({len(state.messages)} messages)"
-                )
+                # The stored title (the session's first user message) is what tells the user
+                # WHICH conversation they just walked back into — an id alone doesn't.
+                title = None
+                if self.harness.memory:
+                    title = self.harness.memory.store.session_title(state.session_id)
+                note = f"resumed session {state.session_id} ({len(state.messages)} messages)"
+                self.resume_notes.append(f"{note} - {title}" if title else note)
         # Past this point state is always an AgentState (never None) — annotate it so, which
         # removes the union-attr / arg-type mypy errors on every self.state access below.
         self.state: AgentState = state if state is not None else self.harness.new_session()

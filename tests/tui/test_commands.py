@@ -13,7 +13,7 @@ from agent86.tui.commands import (
     find_command_for_line,
     handle_command,
 )
-from agent86.types import ApprovalMode
+from agent86.types import ApprovalMode, Message, Role
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
 
@@ -358,3 +358,124 @@ def test_cost_command_still_reports_steps_and_tokens(tmp_path):
     repl.state.usage.output_tokens = 34
     text = _render_to_text(handle_command(repl, "/cost").render)
     assert "in 12" in text and "out 34 tok" in text and "steps" in text
+
+
+# ---- /sessions and /resume ----------------------------------------------- #
+
+
+def _memory_repl(tmp_path):
+    """A _Repl backed by a real (hash-embedded, on-disk) memory system."""
+    from agent86.memory.embeddings import HashingEmbedder
+    from agent86.memory.episodic import EpisodicMemory
+    from agent86.memory.semantic import SemanticMemory
+    from agent86.memory.store import MemoryStore
+    from agent86.memory.system import MemorySystem
+
+    store = MemoryStore(tmp_path / "mem.db", HashingEmbedder(64))
+    memory = MemorySystem(
+        store=store, episodic=EpisodicMemory(store), semantic=SemanticMemory(store)
+    )
+    cfg = load_config()
+    harness = Harness(
+        cfg, provider=make_text_provider("hi there"), memory=memory, workspace=tmp_path
+    )
+    return _Repl(cfg, resume=None, harness=harness), harness, store
+
+
+def test_sessions_and_resume_are_registered():
+    assert find_command("/sessions") is not None
+    resume = find_command("/resume")
+    assert resume is not None
+    assert resume.needs_choice == "resume"
+
+
+def test_sessions_lists_recent_sessions(tmp_path):
+    repl, _, store = _memory_repl(tmp_path)
+    store.save_session("deadbeef1234", "{}", title="an older session")
+
+    result = handle_command(repl, "/sessions")
+    assert result.action == "handled"
+    rendered = _render_to_text(result.render)
+    assert "deadbeef" in rendered
+    assert "an older session" in rendered
+
+
+def test_sessions_without_memory_says_so(tmp_path):
+    repl, _ = _repl(tmp_path)  # memory=None
+    result = handle_command(repl, "/sessions")
+    assert "memory is disabled" in result.render
+
+
+def test_resume_loads_a_saved_session(tmp_path):
+    repl, harness, store = _memory_repl(tmp_path)
+    original = repl.state.session_id
+    saved = harness.new_session()
+    saved.add_message(Message(role=Role.USER, content="the saved conversation"))
+    harness._persist(saved)
+
+    result = handle_command(repl, f"/resume {saved.session_id}")
+    assert result.action == "handled"
+    assert repl.state.session_id == saved.session_id
+    assert repl.state.session_id != original
+    assert "the saved conversation" in result.render  # the title is echoed back
+
+
+def test_resume_accepts_the_eight_character_prefix_the_list_shows(tmp_path):
+    repl, harness, store = _memory_repl(tmp_path)
+    saved = harness.new_session()
+    saved.add_message(Message(role=Role.USER, content="prefix resumable"))
+    harness._persist(saved)
+
+    result = handle_command(repl, f"/resume {saved.session_id[:8]}")
+    assert repl.state.session_id == saved.session_id
+    assert "resumed session" in result.render
+
+
+def test_resume_of_an_unknown_id_leaves_the_session_alone(tmp_path):
+    repl, _, _ = _memory_repl(tmp_path)
+    before = repl.state.session_id
+    result = handle_command(repl, "/resume nosuchsession")
+    assert "no session 'nosuchsession' found" in result.render
+    assert repl.state.session_id == before
+
+
+def test_resume_of_an_ambiguous_prefix_is_refused(tmp_path):
+    repl, harness, store = _memory_repl(tmp_path)
+    before = repl.state.session_id
+    store.save_session("abc111", "{}", title="one")
+    store.save_session("abc222", "{}", title="two")
+    result = handle_command(repl, "/resume abc")
+    assert "no session 'abc' found" in result.render
+    assert repl.state.session_id == before
+
+
+def test_bare_resume_lists_the_sessions(tmp_path):
+    repl, _, store = _memory_repl(tmp_path)
+    store.save_session("feedface9999", "{}", title="something to pick")
+    rendered = _render_to_text(handle_command(repl, "/resume").render)
+    assert "feedface" in rendered
+
+
+def test_resume_without_memory_says_so(tmp_path):
+    repl, _ = _repl(tmp_path)
+    assert "memory is disabled" in handle_command(repl, "/resume abc").render
+
+
+def test_session_titles_are_markup_escaped(tmp_path):
+    repl, harness, store = _memory_repl(tmp_path)
+    store.save_session("cafe12345678", "{}", title="check [bold]this[/bold]")
+    rendered = _render_to_text(handle_command(repl, "/sessions").render)
+    assert "[bold]" in rendered or r"\[bold]" in rendered  # rendered literally, not applied
+
+    saved = harness.new_session()
+    saved.add_message(Message(role=Role.USER, content="a [red]title[/red]"))
+    harness._persist(saved)
+    result = handle_command(repl, f"/resume {saved.session_id}")
+    assert r"\[red]" in result.render
+
+
+def test_resume_and_sessions_appear_in_help(tmp_path):
+    repl, _ = _repl(tmp_path)
+    rendered = _render_to_text(handle_command(repl, "/help").render)
+    assert "/sessions" in rendered
+    assert "/resume" in rendered

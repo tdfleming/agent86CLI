@@ -236,6 +236,140 @@ def test_session_persistence(tmp_path):
     assert rows[0]["session_id"] == "s1"
 
 
+# ---- session titles & listing ------------------------------------------ #
+
+
+def test_save_session_keeps_the_title_when_none_is_given(tmp_path):
+    """A mid-session state dump must not wipe the session's name."""
+    store = _store(tmp_path)
+    store.save_session("s1", "{}", title="first name")
+    store.save_session("s1", '{"later": true}')
+    assert store.session_title("s1") == "first name"
+
+
+def test_save_session_renames_when_a_title_is_given(tmp_path):
+    """The store allows a rename; deciding not to is the harness's job."""
+    store = _store(tmp_path)
+    store.save_session("s1", "{}", title="first name")
+    store.save_session("s1", "{}", title="second name")
+    assert store.session_title("s1") == "second name"
+
+
+def test_session_title_can_arrive_after_an_untitled_save(tmp_path):
+    store = _store(tmp_path)
+    store.save_session("s1", "{}")  # new_session(): nothing said yet
+    assert store.session_title("s1") is None
+    store.save_session("s1", "{}", title="named at the first turn")
+    assert store.session_title("s1") == "named at the first turn"
+
+
+def test_session_title_of_an_unknown_session_is_none(tmp_path):
+    assert _store(tmp_path).session_title("nope") is None
+
+
+def test_recent_sessions_are_typed_and_newest_first(tmp_path):
+    store = _store(tmp_path)
+    store.save_session("old", "{}", title="older work")
+    store.save_session("new", "{}", title="newer work")
+    infos = store.recent_sessions()
+    assert [i.session_id for i in infos] == ["new", "old"]
+    assert infos[0].title == "newer work"
+    assert infos[0].updated_at > 0
+    assert infos[0].label == "newer work"
+
+
+def test_recent_sessions_labels_an_untitled_session(tmp_path):
+    store = _store(tmp_path)
+    store.save_session("s1", "{}")
+    assert store.recent_sessions()[0].label == "(untitled)"
+
+
+def test_recent_sessions_respects_the_limit(tmp_path):
+    store = _store(tmp_path)
+    for i in range(5):
+        store.save_session(f"s{i}", "{}", title=f"t{i}")
+    assert len(store.recent_sessions(limit=2)) == 2
+
+
+def test_episodic_exposes_session_listing(tmp_path):
+    store = _store(tmp_path)
+    epi = EpisodicMemory(store)
+    store.save_session("s1", "{}", title="named")
+    assert [i.session_id for i in epi.recent_sessions()] == ["s1"]
+    assert epi.session_title("s1") == "named"
+
+
+def test_derived_session_title_is_the_first_user_message(tmp_path):
+    from agent86.orchestration.loop import SESSION_TITLE_MAX, session_title
+    from agent86.orchestration.state import AgentState
+
+    state = AgentState()
+    assert session_title(state) is None
+
+    state.add_message(Message(role=Role.SYSTEM, content="ignored"))
+    state.add_message(Message(role=Role.USER, content="  refactor   the   loop  "))
+    state.add_message(Message(role=Role.USER, content="and then the tests"))
+    # Whitespace collapsed, and the FIRST user message wins.
+    assert session_title(state) == "refactor the loop"
+
+    long_state = AgentState()
+    long_state.add_message(Message(role=Role.USER, content="x" * 200))
+    title = session_title(long_state)
+    assert title is not None
+    assert len(title) == SESSION_TITLE_MAX
+    assert title.endswith("...")
+
+
+def test_harness_names_the_session_on_its_first_turn(tmp_path):
+    from agent86.config import load_config as _load
+    from agent86.memory.system import MemorySystem
+    from agent86.orchestration.loop import Harness
+    from tests.support import make_text_provider
+
+    store = _store(tmp_path)
+    memory = MemorySystem(
+        store=store,
+        episodic=EpisodicMemory(store),
+        semantic=SemanticMemory(store),
+    )
+    harness = Harness(
+        _load(), provider=make_text_provider("done"), memory=memory, workspace=tmp_path
+    )
+    state = harness.new_session()
+    # Opened but never spoken to: no placeholder name that would then stick.
+    assert store.session_title(state.session_id) is None
+
+    list(harness.run_turn("explain the circuit breaker", state))
+    assert store.session_title(state.session_id) == "explain the circuit breaker"
+
+    list(harness.run_turn("now the router", state))
+    assert store.session_title(state.session_id) == "explain the circuit breaker"
+
+
+def test_a_compacted_opening_message_does_not_rename_the_session(tmp_path):
+    """Naming happens once: losing the opening message to compaction must not rename it."""
+    from agent86.config import load_config as _load
+    from agent86.memory.system import MemorySystem
+    from agent86.orchestration.loop import Harness
+    from tests.support import make_text_provider
+
+    store = _store(tmp_path)
+    memory = MemorySystem(
+        store=store, episodic=EpisodicMemory(store), semantic=SemanticMemory(store)
+    )
+    harness = Harness(
+        _load(), provider=make_text_provider("done"), memory=memory, workspace=tmp_path
+    )
+    state = harness.new_session()
+    list(harness.run_turn("the original question", state))
+    assert store.session_title(state.session_id) == "the original question"
+
+    # Compaction drops the oldest messages; the name must survive it.
+    state.messages = [Message(role=Role.USER, content="a much later question")]
+    harness._persist(state)
+    assert store.session_title(state.session_id) == "the original question"
+
+
 def test_episodic_recall_note(tmp_path):
     store = _store(tmp_path)
     epi = EpisodicMemory(store)

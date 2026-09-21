@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from agent86.config import load_config
 from agent86.orchestration.loop import Harness
-from agent86.types import ApprovalMode
+from agent86.types import ApprovalMode, Message, Role
 from agent86.ui.repl import _Repl
 from tests.support import make_text_provider
 
@@ -468,3 +468,53 @@ def test_expand_mentions_honours_the_configured_cap(tmp_path):
     repl.cfg.tools.mention_max_bytes = 100
     result = repl.expand_mentions("@big.txt")
     assert "over the 100-byte mention cap" in result.errors[0]
+
+
+# ---- /sessions and /resume (plain loop) ---------------------------------- #
+
+
+def _memory_repl(tmp_path):
+    from agent86.memory.embeddings import HashingEmbedder
+    from agent86.memory.episodic import EpisodicMemory
+    from agent86.memory.semantic import SemanticMemory
+    from agent86.memory.store import MemoryStore
+    from agent86.memory.system import MemorySystem
+
+    store = MemoryStore(tmp_path / "mem.db", HashingEmbedder(64))
+    memory = MemorySystem(
+        store=store, episodic=EpisodicMemory(store), semantic=SemanticMemory(store)
+    )
+    cfg = load_config()
+    cfg.ui.history_file = str(tmp_path / "history")
+    harness = Harness(
+        cfg, provider=make_text_provider("hi there"), memory=memory, workspace=tmp_path
+    )
+    return _Repl(cfg, resume=None, harness=harness), harness, store
+
+
+def test_plain_loop_sessions_prints_the_table(tmp_path, monkeypatch, capsys):
+    repl, _, store = _memory_repl(tmp_path)
+    store.save_session("beefcafe1111", "{}", title="a session to find")
+    _drive(repl, monkeypatch, ["/sessions"])
+    out = capsys.readouterr().out
+    assert "beefcafe" in out
+    assert "a session to find" in out
+
+
+def test_plain_loop_resume_replaces_the_state(tmp_path, monkeypatch, capsys):
+    repl, harness, _ = _memory_repl(tmp_path)
+    saved = harness.new_session()
+    _drive(repl, monkeypatch, ["remember this", f"/resume {saved.session_id}"])
+    capsys.readouterr()
+    assert repl.state.session_id == saved.session_id
+
+
+def test_resume_note_names_the_session(tmp_path):
+    """--resume says WHICH conversation you walked back into, not just its id."""
+    repl, harness, store = _memory_repl(tmp_path)
+    saved = harness.new_session()
+    saved.add_message(Message(role=Role.USER, content="the named conversation"))
+    harness._persist(saved)
+
+    resumed = _Repl(repl.cfg, resume=saved.session_id, harness=harness)
+    assert any("the named conversation" in n for n in resumed.resume_notes)
