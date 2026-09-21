@@ -75,6 +75,15 @@ class EgressMode(StrEnum):
     REDACT = "redact"  # additionally rewrite secrets/PII out of the text
 
 
+class RedactMode(StrEnum):
+    """How much of an event the flight recorder is allowed to write (``[observability]
+    redact``). The trace outlives the session and gets pasted into bug reports, so the
+    default scrubs; ``none`` is an explicit, local opt-out."""
+
+    SECRETS = "secrets"  # rewrite secret-shaped values, clip the big free-text fields
+    NONE = "none"  # write events exactly as the loop emitted them
+
+
 class CompactionMode(StrEnum):
     """What happens to the oldest turns when the conversation outgrows its budget
     (``[limits] compaction``)."""
@@ -319,6 +328,10 @@ class ObservabilityConfig(BaseModel):
     trace: bool = True  # write the JSONL flight recorder
     path: str = "~/.agent86/traces"
     otel: bool = False  # emit OpenTelemetry spans (requires the 'otel' extra)
+    # What the recorder is allowed to write. `secrets` rewrites key-shaped values and clips
+    # the big free-text fields (task/arguments/content/error/outcome) to `max_field_chars`.
+    redact: RedactMode = RedactMode.SECRETS
+    max_field_chars: int = 2000
 
     def resolved_path(self) -> Path:
         return Path(os.path.expanduser(self.path))
@@ -523,6 +536,7 @@ __all__ = [
     "ModelRoute",
     "PricingConfig",
     "ProviderConfig",
+    "RedactMode",
     "RouterMode",
     "SandboxMode",
     "IngressMode",

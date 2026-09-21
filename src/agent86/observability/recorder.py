@@ -12,12 +12,31 @@ import time
 from pathlib import Path
 
 from agent86.config import Config
+from agent86.observability.redact import DEFAULT_MAX_FIELD_CHARS, redact_event
 
 
 class Recorder:
-    def __init__(self, path: Path | None):
+    """Append-only JSONL writer for harness events.
+
+    Every event passes through :func:`~agent86.observability.redact.redact_event` before it
+    reaches the file, so a key pasted into a prompt or read out of a file by a tool never
+    lands on disk (``[observability] redact``). Writing is best-effort by design: an event
+    that cannot be serialised or a file that cannot be written is dropped silently rather
+    than raising into the ReAct loop, because observability must never be the reason a turn
+    fails.
+    """
+
+    def __init__(
+        self,
+        path: Path | None,
+        *,
+        redact: str = "secrets",
+        max_field_chars: int = DEFAULT_MAX_FIELD_CHARS,
+    ):
         self.path = path
         self.enabled = path is not None
+        self.redact = str(redact)
+        self.max_field_chars = max_field_chars
         self._fh = None
         if self.enabled and path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -26,9 +45,15 @@ class Recorder:
     def event(self, session_id: str, kind: str, **data: object) -> None:
         if not self._fh:
             return
-        record = {"ts": time.time(), "session": session_id, "kind": kind, **data}
-        self._fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-        self._fh.flush()
+        try:
+            record = {"ts": time.time(), "session": session_id, "kind": kind, **data}
+            record = redact_event(
+                record, mode=self.redact, max_field_chars=self.max_field_chars
+            )
+            self._fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            self._fh.flush()
+        except Exception:  # pragma: no cover - the loop must never die for a trace line
+            return
 
     def close(self) -> None:
         if self._fh:
@@ -37,9 +62,14 @@ class Recorder:
 
 
 def build_recorder(config: Config) -> Recorder:
-    if not config.observability.trace:
+    obs = config.observability
+    if not obs.trace:
         return Recorder(None)
-    return Recorder(config.observability.resolved_path() / "trace.jsonl")
+    return Recorder(
+        obs.resolved_path() / "trace.jsonl",
+        redact=str(obs.redact),
+        max_field_chars=obs.max_field_chars,
+    )
 
 
 def read_events(
