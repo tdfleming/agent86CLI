@@ -63,6 +63,7 @@ dev = [
     "sqlite-vec>=0.1.1",  # exercise the native vec_distance_cosine search path in CI
     "beautifulsoup4>=4.12",  # exercise the readability extraction path in CI
     "mcp>=1.0",  # exercise the live MCP transport test (stdio/SSE/HTTP) in CI
+    "anthropic>=0.40",  # test_anthropic_sdk_guard / test_sampling_params import the real SDK
     "build>=1.2",  # `python -m build` for the packaging tests and the release workflow
     "twine>=5.1",  # `twine check dist/*` — metadata/README render gate before publish
 ]
