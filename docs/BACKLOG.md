@@ -96,12 +96,24 @@ platform-specific:
 
 ---
 
-## Review findings 2026-09-19 (§ Context & cost closed in v0.8; §§ TUI and Skills & tools in v0.9)
+## Review findings 2026-09-19 (all sections closed: § Context & cost in v0.8; §§ TUI and Skills & tools in v0.9; §§ Observability and Release in v1.0)
 
-Raised during the v0.6.0 release review. None of these block a release; all of them are things a
-Claude-Code-like harness eventually wants. The v0.7 "trustworthy harness", v0.8 "context & cost"
-and v0.9 "coding-agent UX" items are done and live in `.planning/PROJECT.md`; what remains below is
-the **v1.0** surface, plus what the shipped work opened behind it.
+Raised during the v0.6.0 release review. None of these blocked a release; all of them were things
+a Claude-Code-like harness eventually wants. **Every original entry in every section below has now
+shipped** — v0.7 "trustworthy harness", v0.8 "context & cost", v0.9 "coding-agent UX" and v1.0
+"release", all recorded in `.planning/PROJECT.md`. What remains below is only what the shipped
+work opened behind it:
+
+| Open | Section | Why it is not done |
+|---|---|---|
+| A compaction-quality eval | Context & cost | The summarizer is tested for shape, never for what it preserves |
+| A `trace show` view of what a compaction summarized | Context & cost | The data is archived; nothing reads it back |
+| Click-to-toggle tool-call blocks | TUI | Needs a widget-based transcript; a `RichLog` can't host interactive children |
+| History *navigation* in the plain loop | TUI | Needs `readline` on exactly the path kept dependency-free |
+| A read/write split in the sandbox jail | Skills & tools | `allow_paths` is one list, so a skill root granted for reading is writable |
+| The `Development Status` classifier flip | Release | The classifier is a claim about a *published* artifact |
+
+Plus § "Auto-size the Ollama context window (`num_ctx`)" above, and the v0.7 leftovers below.
 
 ### Context & cost
 
@@ -197,19 +209,48 @@ What that work *opened*, still not built:
 
 ### Observability
 
-*Candidates for v1.0, the release milestone — the next one, now that v0.9 has closed.*
+**✅ Shipped in v1.0.0 (2026-09-21)** — both original entries in this section are built; see
+`.planning/phases/09-release/SUMMARY.md`:
 
-- **OTel exporter wiring** — spans are emitted but there is no configured exporter, so nothing
-  leaves the process.
-- **Trace redaction and rotation** — the flight recorder is append-only, unbounded, and
-  unredacted; it should scrub secrets on write and roll over by size/age.
+- ~~OTel exporter wiring~~ → the tracer builds its own `TracerProvider` with a `Resource`, an
+  exporter chosen by `[observability] otel_exporter` and a `BatchSpanProcessor`, honours the
+  standard `OTEL_*` env vars, and deliberately does *not* become the global provider (OBS-03)
+- ~~Trace redaction and rotation~~ → `redact_event` gates every event (the guardrail tier's own
+  regexes, `***REDACTED***`, inherited truncation at `max_field_chars`, never raises) (OBS-01),
+  and the live file rotates at `max_trace_bytes` keeping `keep_traces` generations, renaming
+  *between* events so nothing is half-written (OBS-02)
+- Beyond the two: `agent86 trace export` (`jsonl` / `json` / `otlp-json`, the last reconstructing
+  a span tree from the recorder's own events) and `trace show --kind/--since` with token and cost
+  columns (OBS-04)
+
+Still not built — **carried from § "Context & cost" above**: `trace show` has no view of *what* a
+compaction summarized. The `compaction` event and the archived originals exist; reading them back
+from the CLI does not. It is now the only observability row left in `docs/ARCHITECTURE.md` §15.
 
 ### Release
 
-*Also v1.0.*
+**✅ Shipped in v1.0.0 (2026-09-21)** — the original entry in this section is built:
 
-- **PyPI release workflow** — a tagged release should build and publish (trusted publishing),
-  rather than the project being install-from-source only.
+- ~~PyPI release workflow~~ → `.github/workflows/release.yml` on a `v*` tag: pre-flight
+  (`scripts/check_release.py`) → `uv build` → `twine check` → the packaging tests → **trusted
+  publishing** through the `pypi` environment (OIDC, no token in the repo) → a GitHub Release
+  carrying that version's CHANGELOG section, with a `workflow_dispatch` TestPyPI rehearsal
+  (PKG-02). Complete PyPI metadata, the MIT `LICENSE` file, allowlisted artifacts and
+  `tests/packaging/` asserting the built wheel came with it (PKG-01). The procedure is
+  `docs/RELEASING.md`.
+
+What that work *opened*, still not built:
+
+- **The `Development Status` classifier flip.** `pyproject.toml` declares
+  `Development Status :: 4 - Beta`, and 1.0 was tagged that way on purpose: the classifier is a
+  claim about a *published* artifact, and nothing is published at the moment a tag is cut, so
+  shipping `5 - Production/Stable` in the same commit would have been asserting something that
+  was not yet true. The change is one line, and the trigger is unambiguous — the **first release
+  after 1.0.0 is live on PyPI**. Worth doing at the next version bump rather than as its own
+  release: a version whose only content is a metadata classifier is a version number spent for
+  nothing. Noted in `docs/RELEASING.md` § "After a successful first publish" and in the comment
+  above the classifier itself, so neither the workflow nor a reader of `pyproject.toml` has to
+  remember it independently.
 
 ---
 
