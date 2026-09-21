@@ -6,6 +6,11 @@ All notable changes to agent86 are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Development Status classifier is now `5 - Production/Stable`.** 1.0.0 is published on PyPI
+  (2026-09-21), so the package metadata makes the claim the release earned.
+
 ## [1.0.0] - 2026-09-21
 
 The release milestone. v0.6 made the harness usable, v0.7 made what it reports true, v0.8 made

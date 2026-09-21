@@ -8,10 +8,7 @@ license = { text = "MIT" }
 authors = [{ name = "Tony Fleming" }]
 keywords = ["agent", "agentic", "harness", "llm", "cli", "mcp", "tools"]
 classifiers = [
-    # Stays "4 - Beta" through the 1.0.0 tag: the classifier is a claim about a *published*
-    # artifact, and nothing is published at the moment a tag is cut. It flips to
-    # "5 - Production/Stable" in the first release after 1.0 is live on PyPI (docs/RELEASING.md).
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",  # 1.0.0 is live on PyPI (2026-09-21)
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
