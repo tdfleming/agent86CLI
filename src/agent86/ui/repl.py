@@ -214,6 +214,21 @@ class _Repl:
             style = "yellow" if note.startswith("sandbox:") else "dim"
             console.print(f"[{style}]{note}[/{style}]")
 
+    # ---- @file mentions ----------------------------------------------- #
+
+    def expand_mentions(self, line: str):  # noqa: ANN201 - MentionResult, imported lazily
+        """Expand ``@path`` mentions in ``line`` into the text actually sent to the model.
+
+        The seam both surfaces share: call it on a turn line, send ``result.prompt``, and
+        show ``result.errors`` to the user. Every path is jailed by the harness's sandbox
+        policy, so a mention can only ever read what a tool could have read.
+        """
+        from agent86.tui.mentions import expand_mentions  # textual-free; see module docstring
+
+        return expand_mentions(
+            line, self.harness.policy, max_bytes=self.cfg.tools.mention_max_bytes
+        )
+
     # ---- command dispatch --------------------------------------------- #
 
     def dispatch(self, line: str) -> str:
@@ -263,13 +278,20 @@ class _Repl:
             if action == "handled":
                 continue
 
+            # `@path` mentions become inline file blocks before the model ever sees the
+            # line. Refusals are reported to the user here AND carried in the prompt, so
+            # neither side is left assuming a file arrived when it didn't.
+            mentions = self.expand_mentions(line)
+            for problem in mentions.errors:
+                console.print(f"[yellow]{escape(problem)}[/yellow]")
+
             console.print()  # blank line separating the question from the response
             console.print("[bold cyan]agent86[/bold cyan] ", end="")
             printed = False
             # The `agent86` label above was printed with end="": the cursor is mid-line.
             at_line_start = False
             try:
-                for delta in self.harness.run_turn(line, self.state):
+                for delta in self.harness.run_turn(mentions.prompt, self.state):
                     if delta.text:
                         notice = notice_text(delta.text)
                         if notice is not None:

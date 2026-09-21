@@ -421,3 +421,50 @@ def test_history_is_not_built_until_it_is_used(tmp_path):
     """Constructing a _Repl must not touch the user's real history file."""
     repl, _ = _repl(tmp_path)
     assert repl._history is None
+
+
+# ---- @file mentions (plain loop) ----------------------------------------- #
+
+
+def test_plain_loop_expands_mentions_before_sending(tmp_path, monkeypatch, capsys):
+    (tmp_path / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    repl, _ = _history_repl(tmp_path)
+    _drive(repl, monkeypatch, ["explain @app.py"])
+    capsys.readouterr()
+
+    sent = repl.state.messages[0].content
+    assert sent.startswith("explain @app.py")
+    assert "--- @app.py (1 lines) ---" in sent
+    assert "print('hi')" in sent
+    # The history keeps what the user typed, not the expansion.
+    assert repl.history.entries == ["explain @app.py"]
+
+
+def test_plain_loop_reports_a_refused_mention(tmp_path, monkeypatch, capsys):
+    repl, _ = _history_repl(tmp_path)
+    _drive(repl, monkeypatch, ["read @nope.py"])
+    out = capsys.readouterr().out
+
+    assert "no such file or directory" in out
+    assert "no such file or directory" in repl.state.messages[0].content
+
+
+def test_expand_mentions_is_jailed_by_the_harness_policy(tmp_path):
+    repl, harness = _repl(tmp_path)
+    outside = tmp_path.parent / "repl-outside.txt"
+    outside.write_text("SECRET", encoding="utf-8")
+    try:
+        result = repl.expand_mentions(f'@"{outside}"')
+    finally:
+        outside.unlink()
+    assert result.attachments == []
+    assert "outside the workspace" in result.errors[0]
+    assert harness.policy.workspace == tmp_path.resolve()
+
+
+def test_expand_mentions_honours_the_configured_cap(tmp_path):
+    (tmp_path / "big.txt").write_text("z" * 4000, encoding="utf-8")
+    repl, _ = _repl(tmp_path)
+    repl.cfg.tools.mention_max_bytes = 100
+    result = repl.expand_mentions("@big.txt")
+    assert "over the 100-byte mention cap" in result.errors[0]
