@@ -25,6 +25,7 @@ import time
 from collections import deque
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TextIO
 
 from agent86.config import Config
 from agent86.observability.redact import DEFAULT_MAX_FIELD_CHARS, redact_event
@@ -87,7 +88,7 @@ class Recorder:
         self.max_field_chars = max_field_chars
         self.max_bytes = max_bytes
         self.keep = keep
-        self._fh = None
+        self._fh: TextIO | None = None
         self._size = 0
         if self.enabled and path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
