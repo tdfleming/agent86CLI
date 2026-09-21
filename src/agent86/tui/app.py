@@ -63,6 +63,15 @@ from agent86.tui.screens.provider_manager import (
 from agent86.tui.screens.save_diff import SaveDiffModal
 from agent86.tui.turn_bridge import run_turn_worker
 from agent86.tui.widgets.status_footer import StatusFooter
+from agent86.tui.widgets.transcript import (
+    DARK_CODE_THEME,
+    LIGHT_CODE_THEME,
+    RawEntry,
+    ReplyEntry,
+    TranscriptEntry,
+    UserEntry,
+    looks_like_markdown,
+)
 
 if TYPE_CHECKING:  # `ui.repl` must stay importable without textual — type-only.
     from agent86.ui.repl import _Repl
@@ -141,6 +150,16 @@ class Agent86App(App):
     def __init__(self, repl: _Repl) -> None:
         super().__init__()
         self.repl = repl
+        # v0.9: render finished assistant replies as Markdown. A plain attribute, not a
+        # reactive — the wiring pass binds it to config; `config.py` has no `[ui] markdown`
+        # key yet, and this module must not grow one (read-only from here).
+        _ui = getattr(getattr(repl, "cfg", None), "ui", None)
+        self.markdown: bool = bool(getattr(_ui, "markdown", True))
+        # The MODEL of the scrollback, beside the RichLog that renders it. An entry can change
+        # how it renders after it was written (a reply becoming Markdown, a tool block
+        # expanding); when one does, `_rerender` replays the whole list into the log.
+        self._entries: list[TranscriptEntry] = []
+        self._reply: ReplyEntry | None = None
         self._stream_buf = ""
         # Has this turn's response already been labelled `agent86` in the transcript? The
         # label leads the FIRST chunk only, since a long response is flushed in pieces.
@@ -190,9 +209,10 @@ class Agent86App(App):
 
     def on_mount(self) -> None:
         self.query_one("#status", StatusFooter).status = self.repl.status
-        log = self.query_one("#transcript", RichLog)
         for note in startup_notes(self.repl):
-            log.write(f"[dim]{escape(note)}[/dim]")
+            # Through `_write`, not `log.write`: a note has to be an ENTRY, or the first
+            # re-render (a Markdown reply, an expanded tool block) would drop it.
+            self._write(f"[dim]{escape(note)}[/dim]")
         self.query_one("#palette", OptionList).display = False
         self.query_one("#prompt", Input).focus()
 
@@ -207,15 +227,43 @@ class Agent86App(App):
         typed line back, for instance), so a stray ``[`` can never raise on the main thread and
         tear down the app.
         """
-        log = self.query_one("#transcript", RichLog)
-        try:
-            log.write(renderable)
-        except MarkupError:
-            log.write(Text(str(renderable)))
+        self._append_entry(RawEntry(renderable))
 
     def _write_text(self, text: str) -> None:
         """Write untrusted text with markup interpretation fully disabled."""
-        self.query_one("#transcript", RichLog).write(Text(text))
+        self._append_entry(RawEntry(Text(text)))
+
+    def _append_entry(self, entry: TranscriptEntry, *, write: bool = True) -> None:
+        """Add one entry to the scrollback model and (usually) render it straight away.
+
+        ``write=False`` reserves the entry's PLACE without rendering it yet — a tool block is
+        created when its call is announced but only has something worth showing once the
+        result lands, and the alternative (write a stub, then re-render the whole log to
+        replace it) would pay an O(entries) cost per tool call.
+        """
+        self._entries.append(entry)
+        if write:
+            self._render_entry(entry)
+
+    def _render_entry(self, entry: TranscriptEntry) -> None:
+        log = self.query_one("#transcript", RichLog)
+        try:
+            log.write(entry.render())
+        except MarkupError:
+            log.write(Text(str(entry)))
+
+    def _rerender(self) -> None:
+        """Replay every entry into the log — the price of an entry changing its rendering."""
+        log = self.query_one("#transcript", RichLog)
+        log.clear()
+        for entry in self._entries:
+            self._render_entry(entry)
+        log.scroll_end(animate=False)
+
+    def _code_theme(self) -> str:
+        """The Pygments theme for fenced code, following the app's own light/dark theme."""
+        theme = getattr(self, "current_theme", None)
+        return DARK_CODE_THEME if getattr(theme, "dark", True) else LIGHT_CODE_THEME
 
     # ---- palette ----------------------------------------------------------- #
 
@@ -258,15 +306,18 @@ class Agent86App(App):
             return
         self._dispatch_line(line)
 
+    # ---- line dispatch ------------------------------------------------------- #
+
     def _dispatch_line(self, line: str) -> None:
         """Run one command/turn line through the existing execution path.
 
         Shared by typed Input submission and picker-chained selections (palette / /model /
         /mode) so both paths behave identically.
         """
-        # The echoed line is USER text: escape it. `"see [/path]"` would otherwise raise
-        # MarkupError on the main thread and take the whole app down.
-        self._write(f"[bold]> {escape(line)}[/bold]")
+        # The echoed line is USER text and stays plain: `UserEntry` renders through `Text`,
+        # which is never markup-parsed, so `"see [/path]"` can neither raise MarkupError on
+        # the main thread nor vanish into a style tag — and it is never Markdown-rendered.
+        self._append_entry(UserEntry(line))
 
         # A bare needs_choice command (no argument) typed directly — not just palette-selected —
         # opens the same picker/chain as picking it from the palette (mirrors _select_palette).
@@ -840,6 +891,7 @@ class Agent86App(App):
         self.query_one("#prompt", Input).disabled = True
         self._stream_buf = ""
         self._stream_labelled = False
+        self._reply = None
         self._turn_running = True
         self._cancel_requested = False
         self._run_turn(line)
@@ -961,6 +1013,9 @@ class Agent86App(App):
 
     def on_turn_delta(self, message: TurnDelta) -> None:
         self._stream_buf += message.text
+        # The reply entry accumulates the EXACT stream (not the chunking `#stream` happens to
+        # use), so the finished reply can be re-rendered as one Markdown document.
+        self._reply_entry().text += message.text
         self._drain_stream_paragraphs()
         # Model text is untrusted: a `Text` render means `[/path/to/file]` can neither raise
         # MarkupError nor silently vanish into a style tag.
@@ -971,7 +1026,8 @@ class Agent86App(App):
         self.query_one("#transcript", RichLog).scroll_end(animate=False)
 
     def on_tool_announce(self, message: ToolAnnounce) -> None:
-        self._flush_stream()
+        """A tool call started: the reply so far is final, so flush it before the line lands."""
+        self._finish_reply()
         # `[tool] name({...})` is literal text, not markup — and the argument preview is
         # model-authored. Rendering it as markup swallowed the `[tool]` label outright.
         self._write_text(message.text.strip())
@@ -982,10 +1038,10 @@ class Agent86App(App):
     def on_turn_notice(self, message: TurnNotice) -> None:
         """A `[compacted …]` / `[continuing …]` notice: the harness, not the model.
 
-        Flushed like a tool announce so it lands in the transcript in stream order, and
+        Ends the reply in progress so it lands in the transcript in stream order, and renders
         escaped because the notice quotes harness-formatted counts and model names.
         """
-        self._flush_stream()
+        self._finish_reply()
         self._write(f"[dim]{escape(message.text)}[/dim]")
         self.query_one("#transcript", RichLog).scroll_end(animate=False)
 
@@ -1007,11 +1063,11 @@ class Agent86App(App):
         self.push_screen(ApprovalModal(message.tool_name, message.preview), _resolve)
 
     def on_turn_done(self, message: TurnDone) -> None:
-        self._flush_stream()
+        self._finish_reply()
         self._end_turn()
 
     def on_turn_error(self, message: TurnError) -> None:
-        self._flush_stream()
+        self._finish_reply()
         self._write(f"[red]error:[/red] {escape(str(message.error))}")
         self._end_turn()
 
@@ -1049,7 +1105,12 @@ class Agent86App(App):
         self._stream_buf = tail
 
     def _write_stream_chunk(self, text: str) -> None:
-        """Write one chunk of MODEL text to the transcript, labelled once per turn."""
+        """Write one chunk of MODEL text to the transcript, labelled once per reply.
+
+        This is the PROVISIONAL rendering: plain, escaped, append-only, so streaming stays
+        cheap and a half-written fence or table never renders as garbage. `_finish_reply`
+        replaces the lot with the Markdown document when the reply is complete.
+        """
         body = text.rstrip("\n")
         if not body:
             return
@@ -1057,13 +1118,41 @@ class Agent86App(App):
         # chunk of a response; the body is model text and is always escaped.
         prefix = "" if self._stream_labelled else _AGENT_LABEL
         self._stream_labelled = True
-        self._write(f"{prefix}{escape(body)}")
+        self._render_entry(RawEntry(f"{prefix}{escape(body)}"))
 
     def _flush_stream(self) -> None:
         if self._stream_buf:
             self._write_stream_chunk(self._stream_buf)
         self.query_one("#stream", Static).update("")
         self._stream_buf = ""
+
+    def _reply_entry(self) -> ReplyEntry:
+        """The reply being streamed, creating (and placing) it on the first delta."""
+        if self._reply is None:
+            self._reply = ReplyEntry(markdown=self.markdown, code_theme=self._code_theme())
+            self._append_entry(self._reply, write=False)  # the stream chunks do the writing
+        return self._reply
+
+    def _finish_reply(self) -> None:
+        """End the reply in progress: flush its tail, then Markdown-render it if it pays.
+
+        Re-rendering replays every entry into the log, so it is skipped unless the reply
+        actually contains Markdown structure — plain prose already looks the same, and a
+        turn-per-turn full replay would be the one place this design could get slow.
+        """
+        self._flush_stream()
+        entry, self._reply = self._reply, None
+        self._stream_labelled = False
+        if entry is None:
+            return
+        entry.final = True
+        if not entry.text.strip():
+            # Nothing was written for it either; drop it so a re-render can't resurrect a
+            # bare `agent86` label with no answer under it.
+            self._entries = [e for e in self._entries if e is not entry]
+            return
+        if entry.markdown and looks_like_markdown(entry.text):
+            self._rerender()
 
     def _reenable_input(self) -> None:
         prompt = self.query_one("#prompt", Input)
