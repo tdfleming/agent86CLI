@@ -688,6 +688,7 @@ v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette
 | 260813-adr | Make /model catalog picker insert the active provider prefix | 2026-08-13 | 2a63ada | | [260813-adr-make-model-catalog-picker-insert-the-act](./quick/260813-adr-make-model-catalog-picker-insert-the-act/) |
 | 260813-atc | Catalog-validated provider fallback for /model bare-ref typing | 2026-08-13 | 300c215 | Verified | [260813-atc-catalog-validated-provider-fallback-for-](./quick/260813-atc-catalog-validated-provider-fallback-for-/) |
 | 260813-jfk | Configurable HTTP timeouts for streaming — bound the two unbounded httpx.stream reads | 2026-08-13 | c600987 | Verified | [260813-jfk-configurable-http-timeouts-for-streaming](./quick/260813-jfk-configurable-http-timeouts-for-streaming/) |
+| 260922-hwc | Correct the Ollama `num_ctx` hardware facts — reference box is a 24 GB RX 7900 XTX, not an iGPU | 2026-09-22 | (this commit) | Verified | [260922-hwc-correct-ollama-num-ctx-hardware-facts](./quick/260922-hwc-correct-ollama-num-ctx-hardware-facts/) |
 
 - 2026-08-13 — Quick task 260813-adr complete: fixed the TUI `/model` catalog picker dispatching a
   broken ref for every provider (reported via the Ollama entry `nemotron-3.5-lightning:latest`

@@ -43,23 +43,38 @@ automatically.
 
 ### Key findings (from the reference dev machine)
 
-- **Model `qwen3.5:4b`** — trained context **262,144 (256K)**; 32 layers; Q4_K_M (~2.8 GB
-  weights); KV key/value dim 256. The *model* is not the constraint.
-- **Hardware is the constraint** — no discrete GPU (Intel Arc iGPU sharing system RAM, CPU/iGPU
-  inference); 15.5 GB total RAM. On a no-GPU box, **speed** (prompt processing is O(context)) is
-  as limiting as memory.
-- KV-cache cost ≈ **~32 KB/token** (f16) for this model:
+> **Corrected 2026-09-22.** The original findings described the wrong machine — "no discrete GPU
+> (Intel Arc iGPU…); 15.5 GB total RAM" — and every conclusion below followed from that. The
+> reference box has a **24 GB Radeon RX 7900 XTX**. There *is* an Intel Iris Xe iGPU present
+> alongside it, which is the likeliest source of the error. **The conclusion inverts: the full
+> 256K trained context fits in VRAM.** Re-measured on the machine, ollama 0.34.2.
 
-  | num_ctx | KV cache | Feasible here |
-  |---|---|---|
-  | 8,192 | ~256 MB | ✅ |
-  | 16,384 | ~512 MB | ✅ |
-  | 32,768 | ~1 GB | ✅ (free some RAM) |
-  | 65,536 | ~2 GB | ⚠️ tight + slow |
-  | 262,144 | ~8 GB | ❌ |
+- **Model** — the entry named `qwen3.5:4b`, which is not installed; the nearest is
+  `qwen3.5:latest`: 9.7B params, Q4_K_M, **6.6 GB** on disk, trained context **262,144 (256K)**,
+  `block_count` 32. The *model* is not the constraint.
+- **Hardware is not the constraint either** — **AMD Radeon RX 7900 XTX, 24 GB VRAM**, plus
+  31.8 GB system RAM. Weights and a full-length KV cache both fit on the card with room to spare,
+  so inference stays on the GPU and **prompt-processing speed**, not memory, is what bounds a
+  large window.
+- KV-cache cost ≈ **32 KB/token** (f16) — the right number in the original entry, by the wrong
+  route. It was read as `32 layers × kv dim 256 × 2 × 2`. In fact `qwen35.attention.head_count_kv`
+  comes back from `/api/show` as a **32-element array of `0` and `4`**: only **8 of the 32 layers
+  carry a KV cache at all** (every fourth one), and those have 4 KV heads of
+  `key_length` = `value_length` = 256. So `8 × 4 × (256+256) × 2 = 32,768` bytes/token. Caveat 3
+  below was pointing straight at this.
 
-  Practical sweet spot on this machine: **16K–32K**. 256K is off the table (needs ~8 GB KV + a
-  fast GPU).
+  | num_ctx | KV cache | + 6.6 GB weights | Fits in 24 GB |
+  |---|---|---|---|
+  | 8,192 | 0.25 GB | 6.9 GB | ✅ |
+  | 16,384 | 0.5 GB | 7.1 GB | ✅ |
+  | 32,768 | 1 GB | 7.6 GB | ✅ |
+  | 65,536 | 2 GB | 8.6 GB | ✅ |
+  | 131,072 | 4 GB | 10.6 GB | ✅ |
+  | 262,144 | 8 GB | 14.6 GB | ✅ ~9 GB headroom |
+
+  **The model's full trained context fits on this card.** The question is no longer "how much can
+  we afford?" but "how much is worth paying for?" — prompt processing is still O(context), so a
+  256K window costs latency on every turn whether or not it is filled.
 
 ### The calculation
 
@@ -74,36 +89,66 @@ Model-side inputs are free to read from Ollama's `POST /api/show` (`block_count`
 `context_length`, key/value lengths, on-disk size). The hard part is `available_mem`, which is
 platform-specific:
 
+- **AMD** → `rocm-smi` — **the operative row for the reference machine**, and the one with a
+  problem: `rocm-smi` is **not on PATH on Windows**, where ollama drives the card through its own
+  ROCm runner. So the AMD path cannot depend on it, and on the primary dev platform there is no
+  vendor CLI to ask. Ollama's own `/api/ps` (`size_vram` after a load) is the portable answer and
+  is already what caveat 3 recommends verifying against.
 - **NVIDIA** → `nvidia-smi --query-gpu=memory.free` (cleanest; VRAM is the true limit)
 - **Apple Silicon** → unified memory = a fraction of total RAM
-- **AMD** → `rocm-smi`
 - **Intel iGPU / CPU** → shared system RAM via `psutil`, based on **total RAM − OS reserve**
-  (not instantaneous "free", which is too volatile)
+  (not instantaneous "free", which is too volatile). Still the right path for users without a
+  discrete card — it was simply never the reference machine's path.
+- **More than one GPU in the box** — the reference machine has both the 7900 XTX and an Intel
+  Iris Xe iGPU, and enumeration returns both. Detection has to pick the card ollama will actually
+  use, not the first one listed. Reading VRAM needs care too: on Windows,
+  `Win32_VideoController.AdapterRAM` reports the 24 GB card as 4 GB, because the field is 32-bit;
+  the display-class registry value `HardwareInformation.qwMemorySize` gives the true figure.
 
 ### Caveats
 
 1. **Ollama already fits memory itself** — over-asking silently offloads layers to CPU (slower)
    rather than erroring, so the estimate should target "fits *without* offload" and stay
-   conservative.
-2. **Memory ≠ usability on CPU** — a memory-feasible 64K on a no-GPU box makes every turn crawl.
-   "Max we *can*" ≠ "max we *should*"; auto-sizing needs a speed-aware hard cap.
-3. **KV/token has model-config ambiguity** (GQA head count). A robust implementation should
-   verify against Ollama's actual reported memory (`/api/ps` reports `size_vram` after load)
-   rather than trust the formula blindly.
+   conservative. Unchanged by the correction, and still the reason auto-sizing cannot simply
+   try a number and watch for an error.
+2. **Memory ≠ usability** — still true, but for a different reason than this entry first gave.
+   The original claim was that a memory-feasible 64K "on a no-GPU box makes every turn crawl";
+   on a 24 GB discrete card memory stops binding long before speed does. Prompt processing is
+   O(context) regardless of where it runs, so a 256K window that fits is still a 256K window the
+   machine pays for on every turn. "Max we *can*" ≠ "max we *should*" survives the correction
+   intact — the cap it argues for is a **latency** cap, not a memory one.
+3. **KV/token has model-config ambiguity** (GQA head count) — **this caveat was right, and the
+   entry above it was the thing it was warning about.** `qwen3.5` is a hybrid architecture where
+   three of every four layers hold no KV cache at all, so a formula over `block_count` overstates
+   the cost by 4×; it only agreed with reality here because a second error (reading `key_length`
+   as the whole KV width) cancelled it. A robust implementation must verify against Ollama's
+   reported memory (`/api/ps` gives `size_vram` after load) rather than trust the formula — and
+   should treat `head_count_kv` as a per-layer array, not a scalar.
 4. **`limits.max_context_tokens` (=8000) must move with `num_ctx`** — it's the working-memory
    *input* budget. Raising `num_ctx` alone only adds output headroom; input is still trimmed to
    8k. Link them (e.g. `max_context_tokens = num_ctx − generation_reserve`).
 
 ### Options (increasing effort)
 
+Re-ranked 2026-09-22 — the original ranking assumed the reference machine could not afford a
+large window, which was the thing that was wrong.
+
 - **A — Raise the fixed value.** Make `num_ctx` easy to set; bump default to 16384; link
-  `max_context_tokens`. Predictable, no detection risk. *Best value/effort for CPU/low-RAM
-  hardware.*
-- **B — `context = "max"`.** Query `/api/show` and use the model's trained max, capped. Simple,
-  but dangerous on low-RAM/CPU boxes.
+  `max_context_tokens`. Predictable, no detection risk, and since v0.8 a one-line change whose
+  effect propagates to the whole conversation budget. Still the best value/effort *for users on
+  iGPU or low-RAM hardware* — but on the reference machine 16384 leaves ~22 GB of a 24 GB card
+  unused, so as a **default** it now under-serves the box it was tuned on.
+- **B — `context = "max"`.** Query `/api/show` and use the model's trained max, capped. On this
+  machine that is simply the correct answer: 262,144 fits with ~9 GB to spare. The danger it was
+  marked with is real but belongs to *other people's* hardware, which is an argument for making
+  it opt-in, not for leaving it unbuilt. Cheapest path to actually using the card.
 - **C — `context = "auto"`.** The memory-aware formula with platform detection + a speed cap +
-  `/api/ps` validation. Most capable, most moving parts (cross-platform memory detection is the
-  fragile bit). Pays off mainly on machines with real GPUs and large headroom.
+  `/api/ps` validation. Most capable, most moving parts, and the fragile bit — cross-platform
+  memory detection — is now known to be fragile in a specific way: two GPUs in one box, no
+  `rocm-smi` on Windows, and a 32-bit `AdapterRAM` field that reports 24 GB as 4 GB. **This is
+  the option that pays off on the reference machine**, and the correction strengthens rather than
+  weakens the case for it, because the speed cap it carries is now the *only* thing standing
+  between "fits" and "sensible".
 
 ---
 
