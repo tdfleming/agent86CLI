@@ -562,7 +562,14 @@ class Agent86App(App):
             self._start_turn(self._expand_mentions(line) if expand else line)
             return
         # "handled" / "noop"
-        if result.render is not None:
+        if result.clears_transcript:
+            # /clear: the old exchange is gone from `repl.state` too (commands.py reset it),
+            # so leaving it on screen would show history the model no longer has. Wipe the
+            # scrollback down to just the reprinted identity panel, structurally signalled by
+            # the flag rather than matching on "/clear" by name.
+            self._entries = [RawEntry(banner(self.repl.cfg))]
+            self._rerender()
+        elif result.render is not None:
             self._write(result.render)
         self.query_one("#status", StatusFooter).status = self.repl.status
 

@@ -44,10 +44,15 @@ class CommandResult:
 
     ``action`` is one of "handled" | "turn" | "exit" | "noop".
     ``render`` is a str or Rich renderable to write into the transcript (may be None).
+    ``clears_transcript`` signals the wipe **structurally**, not by name — the app must not
+    special-case the string ``/clear``, since matching on a command name is exactly the
+    coupling that drifts. Only the TUI acts on it (wipe + reprint the banner); the plain loop
+    has no transcript to wipe and keeps printing ``render`` regardless.
     """
 
     action: str
     render: Any | None = None
+    clears_transcript: bool = False
 
 
 @dataclass(frozen=True)
@@ -270,7 +275,7 @@ def _config_render(repl) -> str:
 
 def _clear_session(repl) -> CommandResult:
     repl.state = repl.harness.new_session()
-    return CommandResult("handled", "conversation cleared")
+    return CommandResult("handled", "conversation cleared", clears_transcript=True)
 
 
 # ---- sessions (/sessions, /resume) ------------------------------------- #
