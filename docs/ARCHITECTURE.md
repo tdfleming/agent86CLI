@@ -1134,6 +1134,9 @@ Heavy/optional deps (`sentence-transformers`, `docker`) live behind extras:
 - A hosted service / web UI — this is a local-first CLI.
 - A harness-side request-rate limiter. Provider rate limits are *absorbed* (429 → backoff +
   `Retry-After`, §6), not pre-empted.
+- An MCP **server** mode. agent86 mounts other servers' tools over all three transports; it
+  is not itself mountable by another harness. Ruled out when §999.0 was scoped (2026-09-22):
+  the client half is the whole of it. See `docs/BACKLOG.md` § 999.0.
 
 **Described above as design intent, deliberately not implemented yet.** Each is marked *not
 built* at its section; the full list with analysis is in `docs/BACKLOG.md`.

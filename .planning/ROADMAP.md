@@ -59,19 +59,35 @@ Antigravity. Full analysis for every item: [../docs/BACKLOG.md](../docs/BACKLOG.
 **Standing constraint:** none of these outranks MCP integration work, which is now recorded as
 999.0 below. They are ordered *among themselves*; MCP sits above the whole block.
 
-Prioritised order — 999.0 → 999.1 → 999.2 → 999.3 → 999.4, then the rest unordered.
+Prioritised order — 999.0a → 999.1 → 999.2 → 999.3 → 999.4, then the rest unordered.
+999.0b–d are blocked on 999.0a's matrix and are not sequenced yet.
 
-### Phase 999.0: MCP integration work (BACKLOG — scope TBD)
+### Phase 999.0a: MCP conformance audit + ADRs (BACKLOG — ready to promote)
 
-**Goal:** Unwritten. Ranked above every other backlog item by standing instruction (2026-09-22),
-but no scope was given with it, and MCP is already complete against `docs/ARCHITECTURE.md` — so
-the intent is not inferable from the code. **Do not promote this until the scope is written.**
-**Requirements:** TBD — see [../docs/BACKLOG.md](../docs/BACKLOG.md) § 999.0 for what already
-exists, so it is not rebuilt by accident.
+**Goal:** Turn "spec conformance" into a ruled list. Produce the client-side conformance matrix
+(every spec capability × implemented/partial/absent × exercised-by-corpus × in/out with
+reasoning), pin the server corpus, and write the ADRs for the four contract-touching rulings.
+No implementation in this phase.
+**Requirements:** See [../docs/BACKLOG.md](../docs/BACKLOG.md) § 999.0 — scope set 2026-09-22.
+Three workstreams in (A client depth, B remote auth, C context & lifecycle); **MCP server mode is
+a non-goal** (`docs/ARCHITECTURE.md` §15). Corpus: `server-everything`, `server-filesystem`,
+`mcp-server-git`, the local `live_mcp_server.py` extended to echo its environment, and GitHub's
+hosted remote server for B. Nine matrix rows are already grounded in the BACKLOG entry's audit
+head start — start there, not from the spec.
 **Plans:** 0 plans
 
 Plans:
-- [ ] TBD (define the scope first, then promote with /gsd:review-backlog)
+- [ ] Conformance matrix + pinned corpus + four ADRs
+
+### Phases 999.0b–d: MCP client depth / remote auth / context & lifecycle (BACKLOG — blocked)
+
+**Goal:** The three workstreams themselves. Deliberately unwritten: sizing and sequencing come
+from 999.0a's matrix, and the head start suggests C > A > B by volume.
+**Requirements:** Blocked on 999.0a. Do not promote before the matrix is ruled on.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (write after 999.0a)
 
 ### Phase 999.1: Codebase intelligence — `grep` / `glob` built-in tools (BACKLOG)
 

@@ -25,8 +25,9 @@ entirely from the terminal app".
 **Current focus:** v1.0 milestone complete (1/1 phase) — released as v1.0.0. The harness is
 complete against `docs/ARCHITECTURE.md`.
 **Next:** no milestone scoped — a **post-1.0 backlog**, in `docs/BACKLOG.md`. Top of it is
-**MCP integration work** (phase 999.0), which outranks everything else but has no scope written
-down yet. Added 2026-09-22: seven **competitive gaps** (phases 999.1–999.7 in
+**MCP integration work** (§ 999.0), which outranks everything else and was **scoped
+2026-09-22**: three workstreams (client depth, remote auth, context & lifecycle), MCP server mode
+ruled a non-goal, and phase **999.0a** — the conformance audit + ADRs — ready to promote. Added 2026-09-22: seven **competitive gaps** (phases 999.1–999.7 in
 `ROADMAP.md` § Backlog), ordered `grep`/`glob` → tool hooks → declarative sub-agents → plan-mode
 gate, then git awareness / shell network control / injection classifier unordered. None outranks
 MCP integration work.

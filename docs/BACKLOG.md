@@ -3,10 +3,11 @@
 Shelved ideas and design notes that aren't scheduled yet. Each entry is self-contained enough
 to pick up later without re-deriving the analysis.
 
-**Priority order, as of 2026-09-22:** § "999.0 — MCP integration work" first (a placeholder with
-no scope yet — read it before planning it), then § "Competitive gaps 2026-09-22" — seven items
-from a competitive read of Claude Code and Antigravity, parked as phases 999.1–999.7 in
-`.planning/ROADMAP.md` § Backlog. Everything above those two sections is older and unranked.
+**Priority order, as of 2026-09-22:** § "999.0 — MCP integration work" first (**scoped
+2026-09-22** — three workstreams, with phase 999.0a the conformance audit ready to promote), then
+§ "Competitive gaps 2026-09-22" — seven items from a competitive read of Claude Code and
+Antigravity, parked as phases 999.1–999.7 in `.planning/ROADMAP.md` § Backlog. Everything above
+those two sections is older and unranked.
 
 **A note on trusting this file:** on 2026-09-22 two entries were found still listed as open after
 the work had shipped (the `Development Status` classifier flip, `06ca3a4`; the `test_mcp_live`
@@ -412,21 +413,24 @@ by unit test alone.
 
 ---
 
-## 999.0 — MCP integration work (scope not yet written down)
+## 999.0 — MCP integration work (scoped 2026-09-22)
 
-**Status:** Placeholder, opened 2026-09-22. **Ranked above every other open item in this
-document**, including all seven competitive gaps below — that priority is a standing instruction,
-recorded here so it survives the conversation it was given in.
+**Status:** Scoped 2026-09-22; phase **999.0a** (conformance audit + ADRs) is ready to promote,
+999.0b–d unwritten by design. **Ranked above every other open item in this document**, including
+all seven competitive gaps below — that priority is a standing instruction, recorded here so it
+survives the conversation it was given in.
 
-**This entry has no scope yet, deliberately.** It is a slot, not a plan. Nobody should promote it
-with `/gsd:review-backlog` until the paragraph under "What this actually means" is written by
-someone who knows what was intended — inventing requirements for it would be worse than leaving
-it blank.
+**The scope was given, not inferred.** Opened 2026-09-22 as a deliberate blank ("do not prioritise
+[the competitive gaps] over MCP integration", with no scope attached); the four rulings below —
+which workstreams are in, that server mode is out, conformance as the driver, demand as the
+ceiling — were answered by the requester the same day. Read "What this actually means" before
+planning, and do not widen it by inference: the audit's job is to propose, not to assume.
 
 ### What already exists (so this is not rebuilt by accident)
 
-MCP is **built and complete against `docs/ARCHITECTURE.md`**, which is exactly why the intended
-scope is not inferable from the code:
+MCP is **built and complete against `docs/ARCHITECTURE.md`** as a *tool* client — which is why
+the scope below is about depth, auth and lifecycle rather than building a client, and why the
+scope was never inferable from the code alone:
 
 - `tools/mcp_client.py` (463 lines) — an `MCPManager` mounting external server tools into the
   registry, over all three transports: **stdio** (default, via `command`), **SSE**, and
@@ -444,16 +448,96 @@ scope is not inferable from the code:
 
 ### What this actually means
 
-> **TO BE FILLED IN.** The instruction was "do not prioritise [the competitive gaps] over MCP
-> integration" — given 2026-09-22 without a scope. Candidate readings, none of them confirmed:
-> deeper client coverage (resources, prompts, sampling, elicitation — the client mounts *tools*
-> today), an MCP **server** mode so agent86 is itself mountable, OAuth for remote servers,
-> or something outside the repo entirely. Ask before planning.
+**Scope set 2026-09-22.** Three workstreams in, one non-goal, one spike promoted.
+
+| | Workstream | Tier | Covers |
+|---|---|---|---|
+| A | Client depth | 4 (+3 fallout) | Resources and prompts as first-class. Sampling / elicitation / roots **audited and ruled on**, not assumed in — see the ADR rows below. |
+| B | Remote auth | 4 + secrets | OAuth 2.0 for hosted servers: discovery, authorization, refresh, tokens in the existing keyring. |
+| C | Context & lifecycle | 3/4 | Schema deferral, per-server timeouts, result caps, reconnect, `list_changed` handling. |
+
+**Non-goal: MCP server mode.** agent86 stays a client; it does not become mountable by other
+harnesses. Recorded in `docs/ARCHITECTURE.md` §15 so the slot is not reopened by inference.
+
+**Driver is conformance; the ceiling is demand.** The client half of the MCP spec is the
+*measuring stick* — the audit sweeps all of it, so nothing is missed by accident. The corpus is
+the *trigger* — a feature ships when a corpus server exercises it. Anything the spec defines and
+no corpus server uses becomes a written non-goal in §15 **with its reasoning**: a conformance
+statement, not a silent gap.
+
+**Standing constraints (unchanged, and B strains them hardest).** The `mcp` extra stays optional
+with graceful degradation; `run --json` keys are additive-only; no new core dependencies and the
+cold-start budget holds. An OAuth flow that must work both interactively and headless in CI is a
+design decision, not a library choice.
+
+### 999.0a — Conformance audit + ADRs (the only phase to promote)
+
+No implementation. Three deliverables:
+
+1. **The conformance matrix** — every client-side spec capability × {implemented / partial /
+   absent} × {exercised by corpus / not} × {in / out, with reasoning}.
+2. **The pinned corpus**, below.
+3. **An ADR per contract-touching ruling** — at minimum the four named below.
+
+Phases 999.0b–d are written only after the matrix is ruled on.
+
+**The corpus** (pinned by version; DocIngest is explicitly out — common examples only):
+
+| Server | Why it's in |
+|---|---|
+| `@modelcontextprotocol/server-everything` | The conformance instrument: tools + resources + prompts in one place. **First audit task:** determine whether it also drives sampling, elicitation and progress — that answer decides whether those three are demand-triggered or stay non-goals. |
+| `@modelcontextprotocol/server-filesystem` | Realistic stdio tools; the roots question. |
+| `mcp-server-git` | Second realistic stdio server; the natural bridge to 999.5. |
+| `tests/integration/live_mcp_server.py`, extended to echo its own environment | Pins **SEC-04 end-to-end**, closing the first adjacent thread below. Local, no network, already in CI. |
+| GitHub's remote MCP server (`github/github-mcp-server`, hosted) | Workstream B's target. The archived `modelcontextprotocol/servers` reference server is *not* the one — use the externally maintained hosted product, so OAuth, streamable HTTP and refresh are exercised against something real. |
+
+**ADRs the audit must produce:**
+
+- **Sampling is an inversion of control, not a tool.** Implementing it makes agent86 the model
+  provider for a *server's* request: third-party spend inside our turn, against
+  `limits.max_cost_usd`, with the completion visible to the server. If it ships at all it is
+  **opt-in per server**, and it needs an approval gate and an egress pass of its own.
+- **Elicitation is a Tier 1 surface.** A server prompting our user through our gateway is a
+  phishing vector. Who renders it, and what it may not ask for, precede any decision to support it.
+- **Schema deferral changes the prompt contract.** Names + server instructions in the system
+  prompt, full schema on first use, means the prompt no longer lists every callable tool. That
+  interacts with `allowed-tools` gating (the prompt currently names the boundary so a refusal does
+  not cost a step) and with `context_budget`'s fixed-overhead computation (§8).
+- **Result caps have no home yet.** `_content_to_text` joins every content part uncapped, while
+  the flight recorder clips at `max_field_chars`. Decide where the prompt-side cap lives and
+  whether it is per-server.
+
+**Audit head start** — found by reading `tools/mcp_client.py` on 2026-09-22; nine matrix rows
+already grounded:
+
+- `ClientSession(read, write)` is built with **no callbacks** — sampling, elicitation and roots
+  are structurally absent, not merely uncalled. Any one of them is a constructor change.
+- `initialize()` → `list_tools()` and nothing else: no `list_resources`, `read_resource`,
+  `list_prompts`, `get_prompt`.
+- **No `message_handler`, so every server notification is dropped.** A server that changes its
+  tool list mid-session is invisible until restart — and `list_changed` is the mechanism
+  `/config mcp`'s live mount already wants.
+- Timeouts are hardcoded and asymmetric: 30 s connect (`start_server`), **120 s per tool call**
+  (`call_tool`). `MCPConfig` carries only `enabled`, so neither is configurable; a slow legitimate
+  server and a hung one are indistinguishable.
+- `_content_to_text` applies **no size cap** — a large resource dump goes straight into the budget.
+- **Only `.text` content is read.** Image, audio and embedded-resource blocks fall through to
+  `str(chunk)`, so a base64 blob lands in the prompt verbatim.
+- **Likely defect, confirm before fixing:** `_serve`'s `finally` pops `self._sessions[name]` but
+  leaves `self._server_tools[name]` populated, while `call_tool` indexes `self._sessions[server]`.
+  A stdio server that dies mid-session appears to leave registered tools pointing at nothing.
+- **No reconnect path at all** — `_serve` awaits `close_event`; a dropped transport ends the task.
+- Auth is `headers` + `${VAR}` only: no discovery, no refresh, no token storage. The keyring
+  plumbing from `/config model` is reusable as-is.
+
+That distribution suggests **C is larger than A, and materially larger than B** — worth knowing
+before the phases are sized.
 
 ### MCP-adjacent threads that *are* concrete
 
-These exist independently of whatever 999.0 turns out to mean, and should not be folded into it
-silently:
+These exist independently of 999.0's three workstreams and should not be folded into them
+silently — though the first is now *scheduled* by 999.0a, which pins SEC-04 through the corpus
+server it extends:
 
 - **SEC-04 is not asserted end-to-end.** `tests/integration/test_mcp_live.py` exercises the real
   stdio transport but never checks that the scrubbed environment actually reached the server. A
