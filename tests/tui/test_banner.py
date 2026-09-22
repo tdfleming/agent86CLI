@@ -24,8 +24,8 @@ from agent86.tui.app import Agent86App
 from agent86.tui.widgets.prompt_input import PromptInput
 from agent86.tui.widgets.transcript import RawEntry
 from agent86.types import ApprovalMode, ToolCall
-from agent86.ui.repl import banner, console as plain_console
-from agent86.ui.repl import _Repl
+from agent86.ui.repl import _Repl, banner
+from agent86.ui.repl import console as plain_console
 from tests.support import ToolThenTextProvider, make_text_provider
 
 
