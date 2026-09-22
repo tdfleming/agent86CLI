@@ -87,12 +87,66 @@ class TestVersionAgreement:
 
 
 class TestMain:
+    @staticmethod
+    def _changelog(tmp_path: Path, version: str, *, unreleased: str) -> Path:
+        """A CHANGELOG in release shape for `version`, with `unreleased` under [Unreleased]."""
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text(
+            f"# Changelog\n\n## [Unreleased]\n{unreleased}\n"
+            f"## [{version}] - 2026-01-01\n\n### Added\n\n- The thing this version ships.\n",
+            encoding="utf-8",
+        )
+        return path
+
     def test_passes_against_the_current_tree(
-        self, check_release: ModuleType, capsys: pytest.CaptureFixture[str]
+        self,
+        check_release: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
+        """The release path itself: versions agree and the CHANGELOG is in release shape."""
         version = check_release.pyproject_version()
+        monkeypatch.setattr(
+            check_release, "CHANGELOG", self._changelog(tmp_path, version, unreleased="\n")
+        )
         assert check_release.main(["--tag", f"v{version}"]) == 0
         assert "ready to publish" in capsys.readouterr().out
+
+    def test_a_populated_unreleased_blocks_a_tagged_release(
+        self,
+        check_release: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Entries left in [Unreleased] would ship inside the tag, unattributed."""
+        version = check_release.pyproject_version()
+        unreleased = "\n### Changed\n\n- Work that belongs to this release.\n"
+        monkeypatch.setattr(
+            check_release, "CHANGELOG", self._changelog(tmp_path, version, unreleased=unreleased)
+        )
+        assert check_release.main(["--tag", f"v{version}"]) == 1
+        assert "still unreleased" in capsys.readouterr().out
+
+    def test_a_populated_unreleased_is_fine_between_releases(
+        self,
+        check_release: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """CI runs the pre-flight on every push, and accumulating entries is the
+        whole point of the section."""
+        version = check_release.pyproject_version()
+        unreleased = "\n### Changed\n\n- Work for whatever ships next.\n"
+        monkeypatch.setattr(
+            check_release, "CHANGELOG", self._changelog(tmp_path, version, unreleased=unreleased)
+        )
+        monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+        monkeypatch.delenv("GITHUB_REF_TYPE", raising=False)
+        assert check_release.main([]) == 0
+        assert "skip  [Unreleased] emptiness" in capsys.readouterr().out
 
     def test_rejects_a_tag_that_does_not_match_pyproject(
         self, check_release: ModuleType, capsys: pytest.CaptureFixture[str]

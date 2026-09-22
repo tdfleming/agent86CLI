@@ -10,7 +10,10 @@ It verifies, in order:
 1. the git tag, ``project.version`` in ``pyproject.toml``, and ``agent86.__version__`` all
    name the same version;
 2. ``CHANGELOG.md`` has a ``## [<version>]`` section with a real body;
-3. ``## [Unreleased]`` is empty — anything still sitting there was meant for this release.
+3. ``## [Unreleased]`` is empty **when a release is being cut** — anything still sitting there
+   describes committed work that the release would ship unattributed. Between releases that
+   section is exactly where new work belongs, and CI runs this script on every push, so the
+   rule is skipped unless a tag is given (``--tag``) or this is a tag build.
 
 Why the version is a literal
 ----------------------------
@@ -176,6 +179,10 @@ def run_checks(tag: str | None) -> Report:
     unreleased = sections.get("Unreleased")
     if unreleased is None:
         print("  skip  [Unreleased] section is absent")
+    elif tag is None:
+        # Only a release can strand entries. On an ordinary push there is nothing to strand
+        # them from, and CI runs this script on every commit — see the module docstring.
+        print("  skip  [Unreleased] emptiness (not cutting a release)")
     else:
         report.check(
             unreleased == "",
