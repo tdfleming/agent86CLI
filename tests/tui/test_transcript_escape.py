@@ -233,6 +233,8 @@ async def test_response_is_labelled_once_per_turn(tmp_path):
         await pilot.pause()
 
         lines = _transcript(app)
-        assert lines.count("agent86") == 1
+        # The second "agent86" is the startup banner (entry 0, quick task 260922-bnr); the
+        # reply itself is still labelled exactly once regardless of how many paragraphs.
+        assert lines.count("agent86") == 2
         for word in ("one", "two", "three"):
             assert word in lines

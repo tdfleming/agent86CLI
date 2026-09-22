@@ -81,6 +81,7 @@ from agent86.tui.widgets.transcript import (
     compact_json,
     looks_like_markdown,
 )
+from agent86.ui.repl import banner
 
 if TYPE_CHECKING:  # `ui.repl` must stay importable without textual — type-only.
     from agent86.ui.repl import _Repl
@@ -232,6 +233,9 @@ class Agent86App(App):
 
     def on_mount(self) -> None:
         self.query_one("#status", StatusFooter).status = self.repl.status
+        # The identity panel is entry 0 — a transcript ENTRY (not a bare `log.write()`), so it
+        # survives `_rerender()` (a theme change, a tool-block expand/collapse) by construction.
+        self._write(banner(self.repl.cfg))
         for note in startup_notes(self.repl):
             # Through `_write`, not `log.write`: a note has to be an ENTRY, or the first
             # re-render (a Markdown reply, an expanded tool block) would drop it.
@@ -454,7 +458,9 @@ class Agent86App(App):
         every tool call becomes a collapsed block with its arguments and result attached.
         """
         self.repl.state = state
-        self._entries = []
+        # entry 0 stays the identity panel — a resume rebuilds the scrollback from scratch, and
+        # without re-prepending it here the banner would be lost on every resume.
+        self._entries = [RawEntry(banner(self.repl.cfg))]
         self._reply = None
         self._pending_tools = []
         self._stream_buf = ""

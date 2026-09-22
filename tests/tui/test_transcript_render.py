@@ -188,8 +188,9 @@ async def test_markdown_reply_renders_without_exceptions(tmp_path):
         assert "def hello" in lines  # the fenced python block rendered
         assert "[/weird]" in lines  # a closing-tag lookalike survived verbatim
         assert "[/x]" in lines  # …including inside a table cell
-        # the reply was rendered as ONE Markdown document, labelled once
-        assert lines.count("agent86") == 1
+        # the reply was rendered as ONE Markdown document, labelled once — the second
+        # "agent86" is the startup banner (entry 0, quick task 260922-bnr).
+        assert lines.count("agent86") == 2
 
 
 async def test_markdown_reply_has_headings_and_bullets_as_structure(tmp_path):
