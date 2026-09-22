@@ -26,7 +26,10 @@ entirely from the terminal app".
 complete against `docs/ARCHITECTURE.md`.
 **Next:** no milestone scoped — a **post-1.0 backlog**, in `docs/BACKLOG.md`. Nearest item is the
 `Development Status` classifier flip to `5 - Production/Stable`, due in the first release after
-1.0 is live on PyPI.
+1.0 is live on PyPI. Added 2026-09-22: seven **competitive gaps** (phases 999.1–999.7 in
+`ROADMAP.md` § Backlog), ordered `grep`/`glob` → tool hooks → declarative sub-agents → plan-mode
+gate, then git awareness / shell network control / injection classifier unordered. None outranks
+MCP integration work.
 
 ## Milestone
 

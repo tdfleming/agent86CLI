@@ -41,5 +41,92 @@ No milestone is planned. Post-1.0 candidates are recorded in
 navigation, a read/write split in the workspace jail, a compaction-quality eval, Ollama
 `num_ctx` auto-sizing, and a per-turn `/cost` breakdown.
 
+Added 2026-09-22, and the strongest candidates for the next milestone: the seven **competitive
+gaps** in § Backlog below (phases 999.1–999.7) — `grep`/`glob` built-ins, tool hooks, declarative
+sub-agents, a plan-mode gate, git awareness, shell network control, and an injection classifier.
+Analysis for each: [../docs/BACKLOG.md](../docs/BACKLOG.md) § "Competitive gaps 2026-09-22".
+**None of them outranks MCP integration work.**
+
 Start the next one with `/gsd:new-milestone`, which gathers fresh requirements — this
 milestone's `REQUIREMENTS.md` is archived and removed, by design.
+
+## Backlog
+
+Unsequenced parking lot (999.x). Added 2026-09-22 from a competitive read of Claude Code and
+Antigravity. Full analysis for every item: [../docs/BACKLOG.md](../docs/BACKLOG.md) §
+"Competitive gaps 2026-09-22".
+
+**Standing constraint:** none of these outranks MCP integration work. They are ordered *among
+themselves*; MCP sits above the whole block.
+
+Prioritised order — 999.1 → 999.2 → 999.3 → 999.4, then the rest unordered.
+
+### Phase 999.1: Codebase intelligence — `grep` / `glob` built-in tools (BACKLOG)
+
+**Goal:** Give the agent first-class search so "where is this defined?" stops routing through
+approval-gated, platform-variable `run_command`.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+### Phase 999.2: PreToolUse / PostToolUse hook events (BACKLOG)
+
+**Goal:** An extension point between the loop and the outside world — and the deterministic
+policy gate Tier 5 wants, instead of regex scanners carrying the whole story.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+### Phase 999.3: Declarative sub-agents — `.agent86/agents/*.md` (BACKLOG)
+
+**Goal:** Check-in-able agent definitions (Markdown + YAML front matter: model, tool allowlist,
+permission mode, isolation) so `delegate` stops being dynamic-only and unreproducible.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+### Phase 999.4: Plan-mode gate — approve one plan, not forty diffs (BACKLOG)
+
+**Goal:** A read-only planning phase whose output is reviewed and approved once, before any
+file changes — a strategic gate above the existing per-call tactical one.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+### Phase 999.5: Git awareness — checkpoint/rewind, worktree isolation, diff surface (BACKLOG)
+
+**Goal:** Treat the worktree as the unit of agent isolation: checkpoints, rewind, per-sub-agent
+worktrees, and a diff/stage/commit surface.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+### Phase 999.6: Network control around `run_command` (BACKLOG)
+
+**Goal:** Close the gap where the SSRF guard protects `web_fetch` only and the shell has
+unrestricted network. OS-native primitives; gVisor/WASM stay non-goals.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+### Phase 999.7: Model-based prompt-injection classifier (BACKLOG)
+
+**Goal:** A second model over proposed actions in auto mode, above the regex ingress/egress
+scanners — with the ceiling stated honestly.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)

@@ -3,6 +3,10 @@
 Shelved ideas and design notes that aren't scheduled yet. Each entry is self-contained enough
 to pick up later without re-deriving the analysis.
 
+**Newest, and the highest-priority block:** § "Competitive gaps 2026-09-22" at the end — seven
+items from a competitive read of Claude Code and Antigravity, parked as phases 999.1–999.7 in
+`.planning/ROADMAP.md` § Backlog. **None of them outranks MCP integration work.**
+
 ---
 
 ## Auto-size the Ollama context window (`num_ctx`) to the hardware
@@ -336,3 +340,256 @@ to start under the scrubbed environment (on POSIX it should not: `PATH`, `HOME`,
 locale family are all in the allowlist), and whether the test should assert the scrubbing
 directly — a server that echoes its own environment back would pin SEC-04 end-to-end rather than
 by unit test alone.
+
+---
+
+## Competitive gaps 2026-09-22
+
+Raised after v1.0 shipped, from a read of Claude Code and Antigravity. These are not defects
+against `docs/ARCHITECTURE.md` — the harness is complete against that contract — they are
+**table stakes both competitors ship that the contract never asked for**. None of them requires
+abandoning the five-tier model; each lands inside an existing tier.
+
+**Standing constraint: none of this outranks MCP integration work.** MCP sits above the whole
+block. Within the block:
+
+| # | Phase | Item | Tier | Why this order |
+|---|---|---|---|---|
+| 1 | 999.1 | `grep` / `glob` built-ins | 4 (Tools) | Highest value per line of code in the whole list; ~200 lines; unblocks every "where is X" question |
+| 2 | 999.2 | `PreToolUse` / `PostToolUse` hooks | 5 (Guardrails) | The missing extension point; also the deterministic policy gate Tier 5 wants |
+| 3 | 999.3 | Declarative sub-agents (`.agent86/agents/*.md`) | 2 (Orchestration) | Makes `delegate` reproducible and check-in-able |
+| 4 | 999.4 | Plan-mode gate | 1/2 (Gateway/Orchestration) | A strategic approval above the tactical per-call one |
+| — | 999.5 | Git awareness | 4 | Unordered; partly a prerequisite for isolated sub-agents (999.3) |
+| — | 999.6 | Network control around `run_command` | 4/5 | Unordered; a verified hole, see below |
+| — | 999.7 | Model-based injection classifier | 5 | Unordered; lowest confidence of payoff, see the ceiling note |
+
+---
+
+### 999.1 — Codebase intelligence: `grep` and `glob` built-ins
+
+**Status:** Shelved (2026-09-22). Not built. **Highest-value item in this section.**
+
+The built-in tool set is exactly seven (`tools/registry.py` `_BUILTINS`): `read_file`,
+`write_file`, `edit_file`, `list_dir`, `run_command`, `python_exec`, `web_fetch`. There is no
+search primitive. Every "where is this defined?" therefore routes through `run_command`, which is:
+
+- **approval-gated** — a side-effecting tool, so it prompts, for what is a pure read;
+- **platform-variable** — the primary dev platform is Windows 11, so `grep`/`rg`/`find` may not
+  exist, and the invocation differs between PowerShell and POSIX;
+- **quoting-expensive** — a whole step burned on shell escaping, then another on the retry.
+
+Claude Code ships `Glob`, `Grep` and an LSP tool as **no-permission** tools precisely because
+search is how an agent orients in a repo. The read-only classification matters as much as the
+tool: it makes search free of the approval loop *and* eligible for the parallel read-only batch
+built in v0.8 (CTX-04).
+
+**Shape of the work.** Two `Tool[TArgs]` subclasses in `tools/builtin/`, both
+`side_effecting = False`, both parallel-safe:
+
+- `glob` — a pattern and an optional root; resolve through `SandboxPolicy` so matches cannot
+  escape the jail; return paths sorted by mtime (the ordering that makes "what changed" cheap).
+- `grep` — a regex, an optional path/glob filter, and an output mode (files-with-matches /
+  content / count) with a head limit. Pure Python (`re` + `os.scandir`) keeps it dependency-free
+  and identical on Windows and POSIX; shelling out to `rg` when present is an optimisation, not
+  the contract, and must not become one.
+
+Both must honour the jail (`policy.resolve_path`) and skip binaries and `.git`. Estimated ~200
+lines plus tests. Worth pairing with `docs/ARCHITECTURE.md` §15, which currently has no row for
+search.
+
+**Open question:** whether a read/write split in `allow_paths` (already in this backlog, §
+"Skills & tools") should land first, so a search root can be granted read-only.
+
+---
+
+### 999.2 — A `PreToolUse` / `PostToolUse` hook event
+
+**Status:** Shelved (2026-09-22). Not built. There is **no extension point between the loop and
+the outside world at all** — `grep -rln hook src/agent86` matches one file, and that is
+`cognitive/pricing.py` talking about something else.
+
+Claude Code has 33 hook events across five handler types. Antigravity has five — `PreToolUse`,
+`PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop` — and routes *all* custom observability
+and audit logging through them. agent86 has the flight recorder, which is excellent and
+in-process, but nothing a user can wire their own behaviour into without editing the package.
+
+**Why this is a Tier 5 story and not just a convenience.** The guardrails today are
+`guardrails/scanners.py` — regex. A `PreToolUse` hook that can return *deny with a reason*,
+*allow*, or *allow with modified args* is the deterministic policy hook the Tier 5 narrative
+already implies: a user can block `run_command` matching a pattern, force a tool's args through
+a linter, or require a second signal before a write, without the harness having to guess at a
+regex for it.
+
+**Shape of the work.** Start with the two tool-boundary events only; `PreInvocation`,
+`PostInvocation` and `Stop` can follow.
+
+- Config: `[[hooks]]` entries naming an event, an optional tool-name matcher, and a command.
+- Contract: the hook receives a JSON document on stdin (event, tool name, validated args, the
+  workspace root) and answers with an exit code plus optional JSON on stdout — exit 0 allow,
+  non-zero deny, with the reason fed back to the model as a `ToolResult` error it can
+  self-correct from. **This must never raise into the loop** (the standing rule for tool
+  execution applies to hooks verbatim).
+- Execution: through the existing `SandboxPolicy` — a hook is user-authored code, but it runs
+  with the harness's trust, so its env must still be scrubbed. Timeout mandatory.
+- The hook's decision belongs in the flight recorder as its own event, so an audit shows *why*
+  a call was denied.
+
+**Ordering note:** doing this before 999.6 is deliberate — a `PreToolUse` deny is a cheap
+partial mitigation for the unguarded shell while a real network control is designed.
+
+---
+
+### 999.3 — Declarative sub-agents: `.agent86/agents/*.md`
+
+**Status:** Shelved (2026-09-22). Not built. `delegate` is **dynamic-only**.
+
+`tools/builtin/delegate.py` takes two free-text strings — `role` (default `"assistant"`) and
+`task` — and spawns a sub-agent through `ctx.spawn`. That is powerful and it works, but it is
+**unreproducible**: the role is invented per call by the model, so a colleague cannot check in
+"the researcher agent", cannot review what tools it may use, and cannot pin it to a cheaper
+model. Two runs of the same prompt need not produce the same sub-agent.
+
+Both competitors define sub-agents as **Markdown + YAML front matter on disk** —
+`.claude/agents/` and `.agents/agents/` — carrying per-agent model, tool allowlist, permission
+mode and workspace isolation. Both then bundle skills + agents + rules + MCP + hooks into
+installable plugins with marketplaces.
+
+**Shape of the work.** The skill loader (`skills/`) already does progressive discovery of
+Markdown-with-front-matter from disk, and v0.9 already enforces `allowed-tools` as a gate — so
+this is substantially a second consumer of machinery that exists.
+
+- `.agent86/agents/<name>.md`: front matter for `description`, `model` (a `ModelRef`),
+  `tools` (an allowlist, enforced by the same gate as a skill's `allowed-tools`),
+  `approval` (an `ApprovalMode`), and later `isolation` (see 999.5); body is the system prompt.
+- `delegate` gains an optional `agent` argument naming a discovered definition; the free-text
+  `role` path stays, so nothing regresses.
+- A per-agent `model` means a definition can pin the cheap model for a bounded subtask, which
+  interacts directly with the v0.8 cost work and the router.
+- Discovery must be lazy and must not cost the one-shot `run` path anything when the directory
+  is absent.
+
+**Deliberately out of scope for a first pass:** a plugin/marketplace format. Get the on-disk
+definition right first; bundling is a distribution problem, not a harness one.
+
+---
+
+### 999.4 — A plan-then-execute gate
+
+**Status:** Shelved (2026-09-22). Not built.
+
+v0.9 made approval *good*: per-call, showing the actual change as a diff, better presented than
+most. But it is a **tactical** gate. Approving forty diffs one at a time is a different product
+from approving one plan.
+
+Antigravity's whole UX bet is that plans, task lists and walkthroughs are "easier for users to
+validate than raw tool calls", reviewed with inline comments before any file changes. Claude Code
+has plan mode plus a read-only Plan sub-agent.
+
+**Shape of the work.**
+
+- A new `AgentPhase` (or an `ApprovalMode` sibling — `types.py` owns both) in which the loop
+  admits only non-`side_effecting` tools. Once 999.1 lands, that mode is genuinely useful, because
+  the agent can search, read and reason without being able to write.
+- The phase ends with a structured plan the model emits; the harness renders it and asks once.
+  Approve → the loop leaves plan mode with the plan in context. Reject → the rejection text is
+  fed back and planning continues.
+- Surfaces: a `/plan` command and a palette entry in the TUI, a `--plan` flag on `run`. **The
+  plain loop and `run --json` must keep working unchanged** — this is additive to the scripting
+  contract, never a change in its default behaviour.
+- Inline comments on a rendered plan are the Antigravity-grade version and are a TUI project of
+  their own; a whole-plan accept/reject is the honest first step.
+
+**Interaction with 999.3:** a read-only Plan agent is the obvious first entry in
+`.agent86/agents/`, which is an argument for doing 999.3 first — as ordered.
+
+---
+
+### 999.5 — Git awareness: checkpoint/rewind, worktree isolation, a diff surface
+
+**Status:** Shelved (2026-09-22). Not built. Unordered within this section.
+
+There is no checkpoint/rewind, no worktree isolation for sub-agents, and no diff/stage/commit
+surface. Both competitors treat **the worktree as the unit of agent isolation**: Antigravity
+branches sub-agents into isolated worktrees; Claude Code has `isolation: worktree` in sub-agent
+front matter.
+
+Today agent86's `delegate` sub-agents **share the workspace jail** (`SandboxPolicy` is built per
+workspace, and `spawn` does not vary it). That is the cap on how parallel delegation can safely
+get: two sub-agents editing the same tree race, and nothing in the harness notices.
+
+Three separable pieces, in rising order of cost:
+
+1. **A diff surface** — a read-only `git_status` / `git_diff` capability so the agent can see its
+   own changes without `run_command`. Cheapest, and it composes with 999.1's read-only class.
+2. **Checkpoint/rewind** — a marker before a turn's first write and a way back. Needs a real
+   answer for a dirty tree and for untracked files; a stash-based implementation is tempting and
+   is how this usually goes wrong.
+3. **Worktree isolation for sub-agents** — `git worktree add` per delegated agent, the jail
+   rebased onto it, and a merge-back story. This is the piece that raises the parallelism
+   ceiling, and it is the one with a real design cost: what happens when a sub-agent's worktree
+   conflicts on merge is a product decision, not an implementation detail.
+
+Piece 3 is what `isolation:` in 999.3's front matter would select.
+
+---
+
+### 999.6 — Network control around `run_command`
+
+**Status:** Shelved (2026-09-22). Not built. **Verified hole**, not a theoretical one.
+
+`SandboxPolicy` carries a `network: bool` (default `True`) and a `require_network()` guard — and
+`require_network()` has **exactly one call site in the codebase**: `tools/builtin/web.py:172`.
+So the SSRF guard protects `web_fetch` only, and `curl 169.254.169.254` from `run_command` is
+unguarded. `python_exec` likewise. The Docker executor is the exception and does the right thing
+(`--network none` unless `docker_network` is set, `docker_exec.py:62`), but Docker is opt-in and
+the default is subprocess.
+
+The env allowlist and the process-tree kill (v0.7) are real controls; this is the gap beside
+them. Both competitors put a network deny/allowlist around **the shell itself** — Antigravity via
+nsjail/AppContainer, Claude Code via a filtering proxy with per-command domain approval.
+
+**Shape of the work.** `docs/ARCHITECTURE.md` lists gVisor and WASM as non-goals, and that stays
+true — but OS-native primitives are not the same tier of effort:
+
+- **Windows** (the primary platform, and the one where Claude Code has *no* sandbox at all — so
+  this is a differentiator, not catch-up): AppContainer, or a WFP/firewall rule scoped to the
+  child process.
+- **Linux**: a user namespace plus an empty network namespace for the child.
+- **macOS**: `sandbox-exec` is deprecated but present; otherwise a proxy.
+- **Portable fallback**: route the child through a loopback filtering proxy with an allowlist and
+  scrub the proxy-bypass env vars. Weaker — it is defeated by anything that ignores
+  `HTTP(S)_PROXY` — but it is the same mechanism on every platform and it composes with the
+  existing env scrubbing.
+
+**Minimum honest first step, if the full thing is too big:** make `require_network()` actually
+mean something for the shell — refuse to launch `run_command` at all when `network = false`, and
+document that `network = true` grants the child unrestricted egress. Today the flag reads as a
+control it is not.
+
+---
+
+### 999.7 — A model-based prompt-injection classifier
+
+**Status:** Shelved (2026-09-22). Not built. Unordered, and the **lowest-confidence** item here.
+
+`guardrails/ingress.py` and `egress.py` run `scanners.py`, which is regex. Claude Code runs a
+second model over proposed actions in auto mode. The shape for agent86 is available cheaply: the
+router already picks between a cheap and a frontier model, sub-agent accounting already exists
+(v0.7), and 999.2's `PreToolUse` is the natural mount point — so a classifier is a hook handler
+rather than a new tier.
+
+**State the ceiling honestly, in the entry and in any docs that come out of it.** Nobody has
+solved this:
+
+- Antigravity shipped a prompt-injection → RCE that bypassed its **most restrictive** mode
+  (patched Feb 2026, disclosed April).
+- Claude Code carries CVE-2026-39861, a symlink sandbox escape.
+
+So agent86 is not *behind* on this problem so much as **un-defended on a problem the others are
+also losing**. That is an argument for doing it — regex is a weaker floor than a model — and
+equally an argument against selling it as a solution. A classifier that adds latency and cost to
+every auto-mode action while advertising safety it cannot deliver is worse than an honest regex
+plus a good `PreToolUse` deny rule, which is why this sits below 999.2 and 999.6.
+
+**Prerequisite:** 999.2. Build the mount point first; do not special-case a classifier into the
+loop.
