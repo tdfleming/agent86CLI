@@ -46,7 +46,7 @@ def _emit(text: str) -> None:
 def banner(cfg: Config, *, compact: bool = True) -> Panel:
     """The startup identity panel — one definition, rendered by both surfaces.
 
-    ``compact=True`` (the TUI's default) is the identity core only: ``agent86 v<version>`` and
+    ``compact=True`` (the TUI's default) is the identity core only: the ``version`` label and
     the active model. The TUI's ``StatusFooter`` already reports sandbox and approval live, so
     trimming them from its splash costs nothing.
 
@@ -56,7 +56,7 @@ def banner(cfg: Config, *, compact: bool = True) -> Panel:
     ``--plain`` user ever sees ``sandbox subprocess`` / ``approval ask``.
     """
     body = (
-        f"[bold]agent86[/bold] [dim]v{__version__}[/dim]\n"
+        f"version  [cyan]{__version__}[/cyan]\n"
         f"model    [cyan]{cfg.model.default}[/cyan]"
     )
     if not compact:
@@ -66,7 +66,7 @@ def banner(cfg: Config, *, compact: bool = True) -> Panel:
             f"   approval [cyan]{cfg.guardrails.approval.value}[/cyan]\n"
             f"[dim]Type /help for commands, /exit to quit.[/dim]"
         )
-    return Panel(body, title="agentic harness", border_style="cyan", expand=False)
+    return Panel(body, title="agent86", border_style="cyan", expand=False)
 
 
 #: Prefixes of the harness's own mid-turn notices. The loop yields these as ordinary text
