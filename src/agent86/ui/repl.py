@@ -43,15 +43,29 @@ def _emit(text: str) -> None:
     sys.stdout.flush()
 
 
-def _banner(cfg: Config) -> Panel:
+def banner(cfg: Config, *, compact: bool = True) -> Panel:
+    """The startup identity panel — one definition, rendered by both surfaces.
+
+    ``compact=True`` (the TUI's default) is the identity core only: ``agent86 v<version>`` and
+    the active model. The TUI's ``StatusFooter`` already reports sandbox and approval live, so
+    trimming them from its splash costs nothing.
+
+    ``compact=False`` (the plain loop) appends router, sandbox, approval and the ``/help``
+    hint — the plain loop has no live status surface at all (see
+    ``tui/widgets/status_footer.py``'s module docstring), so this banner is the only place a
+    ``--plain`` user ever sees ``sandbox subprocess`` / ``approval ask``.
+    """
     body = (
         f"[bold]agent86[/bold] [dim]v{__version__}[/dim]\n"
         f"model    [cyan]{cfg.model.default}[/cyan]"
-        f"   router [cyan]{cfg.model.router}[/cyan]\n"
-        f"sandbox  [cyan]{cfg.sandbox.mode}[/cyan]"
-        f"   approval [cyan]{cfg.guardrails.approval.value}[/cyan]\n"
-        f"[dim]Type /help for commands, /exit to quit.[/dim]"
     )
+    if not compact:
+        body += (
+            f"   router [cyan]{cfg.model.router}[/cyan]\n"
+            f"sandbox  [cyan]{cfg.sandbox.mode}[/cyan]"
+            f"   approval [cyan]{cfg.guardrails.approval.value}[/cyan]\n"
+            f"[dim]Type /help for commands, /exit to quit.[/dim]"
+        )
     return Panel(body, title="agentic harness", border_style="cyan", expand=False)
 
 
@@ -456,9 +470,9 @@ def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> Non
     # Plain path only. Printed before the TUI launches, the banner and notes would be
     # painted onto the terminal's normal screen and then hidden by the alternate screen,
     # only flashing past on quit — so the TUI renders `repl.startup_notes` itself instead.
-    console.print(_banner(cfg))
+    console.print(banner(cfg, compact=False))
     repl.print_notes()
     repl.plain_loop()
 
 
-__all__ = ["approval_prompt", "install_approval_prompt", "run_repl"]
+__all__ = ["approval_prompt", "banner", "install_approval_prompt", "run_repl"]
