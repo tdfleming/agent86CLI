@@ -172,6 +172,19 @@ def test_run_json_writes_nothing_but_json_to_stdout(fresh_home, monkeypatch):
     json.loads(result.stdout)  # the WHOLE of stdout is the object, not a prefix of it
 
 
+def test_run_never_emits_the_startup_banner(fresh_home, monkeypatch):
+    """Quick task 260922-bnr: the banner is interactive-only (TUI/plain). `run` — json or
+    not — is not `run_repl` and must never print the identity panel, on stdout or stderr."""
+    _install(monkeypatch, _Fake("hello"))
+
+    plain = runner.invoke(cli_mod.app, ["run", "hi"])
+    as_json = runner.invoke(cli_mod.app, ["run", "hi", "--json"])
+
+    for result in (plain, as_json):
+        assert "agentic harness" not in result.stdout
+        assert "agentic harness" not in result.stderr
+
+
 def test_run_json_output_honours_the_egress_guardrail(fresh_home, monkeypatch):
     _project_config(fresh_home, """
         [guardrails]
