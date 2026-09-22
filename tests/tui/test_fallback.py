@@ -102,6 +102,9 @@ def test_tui_path_prints_no_banner_or_notes(monkeypatch, cfg, capsys):
 
 def test_plain_path_prints_banner_and_notes(monkeypatch, cfg, capsys):
     holder = _patch_repl(monkeypatch)
+    # capsys's captured stdout is never a real terminal (isatty() is False); force it so this
+    # test exercises the normal interactive case, distinct from the non-TTY suppression below.
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
 
     repl_mod.run_repl(cfg, plain=True)
 
@@ -111,6 +114,7 @@ def test_plain_path_prints_banner_and_notes(monkeypatch, cfg, capsys):
 
 def test_tui_failure_fallback_still_prints_banner_and_notes(monkeypatch, cfg, capsys):
     holder = _patch_repl(monkeypatch)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
 
     def _raising_run_tui(repl):  # noqa: ANN001
         raise RuntimeError("no tty")
@@ -121,6 +125,18 @@ def test_tui_failure_fallback_still_prints_banner_and_notes(monkeypatch, cfg, ca
     repl_mod.run_repl(cfg)
 
     assert "agent86" in capsys.readouterr().out
+    assert holder["spy"].printed_notes is True
+
+
+def test_plain_path_suppresses_the_banner_when_stdout_is_not_a_tty(monkeypatch, cfg, capsys):
+    """`echo hi | agent86` — a non-TTY stdout must not get the decorative panel ahead of the
+    answer, even though the notes (memory/mcp/sandbox/session) still print."""
+    holder = _patch_repl(monkeypatch)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+
+    repl_mod.run_repl(cfg, plain=True)
+
+    assert "agentic harness" not in capsys.readouterr().out
     assert holder["spy"].printed_notes is True
 
 

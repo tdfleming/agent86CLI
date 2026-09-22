@@ -470,7 +470,12 @@ def run_repl(cfg: Config, resume: str | None = None, plain: bool = False) -> Non
     # Plain path only. Printed before the TUI launches, the banner and notes would be
     # painted onto the terminal's normal screen and then hidden by the alternate screen,
     # only flashing past on quit — so the TUI renders `repl.startup_notes` itself instead.
-    console.print(banner(cfg, compact=False))
+    # A non-TTY stdout means input is piped (`echo hi | agent86`) or output is redirected —
+    # neither is the pinned `run` / `run --json` contract (tested separately), but printing a
+    # decorative panel ahead of the answer is the same class of mistake there too. Unlike
+    # `run`, this path has no "quiet" flag of its own, so the terminal itself is the signal.
+    if sys.stdout.isatty():
+        console.print(banner(cfg, compact=False))
     repl.print_notes()
     repl.plain_loop()
 
