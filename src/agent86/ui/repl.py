@@ -55,10 +55,7 @@ def banner(cfg: Config, *, compact: bool = True) -> Panel:
     ``tui/widgets/status_footer.py``'s module docstring), so this banner is the only place a
     ``--plain`` user ever sees ``sandbox subprocess`` / ``approval ask``.
     """
-    body = (
-        f"version  [cyan]{__version__}[/cyan]\n"
-        f"model    [cyan]{cfg.model.default}[/cyan]"
-    )
+    body = f"version  [cyan]{__version__}[/cyan]\nmodel    [cyan]{cfg.model.default}[/cyan]"
     if not compact:
         body += (
             f"   router [cyan]{cfg.model.router}[/cyan]\n"
