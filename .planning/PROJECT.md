@@ -1,5 +1,27 @@
 # agent86 — Release Milestone (v1.0)
 
+## Current State
+
+**Shipped: v1.0.0** (2026-09-21) — published on PyPI as `agent86`, GitHub Release `v1.0.0`.
+
+agent86 is a complete five-tier agentic harness on the command line. It runs against Anthropic,
+OpenAI-compatible endpoints (OpenRouter, Groq, Azure, vLLM), Ollama and llama.cpp; it uses
+built-in tools, MCP servers, skills and sub-agents; and it is driven either from a full-screen
+Textual TUI or from the plain loop and `agent86 run --json`, which remain the scripting contract.
+
+- **Codebase:** 17,055 lines `src/`, 21,085 lines `tests/`; 1,231 tests plus 14 packaging tests.
+- **Quality gates:** ruff, mypy and the full suite green on every CI job (Linux 3.11/3.12/3.13,
+  Windows 3.12), plus wheel-level packaging tests on Linux and Windows.
+- **Release:** tag-driven via trusted publishing; `scripts/check_release.py` gates every release.
+- **Known debt:** the published 1.0.0 artifact still carries the `4 - Beta` classifier; it flips
+  with the next release. Post-1.0 candidates live in `docs/BACKLOG.md`.
+
+## Next Milestone Goals
+
+None scoped — the harness is complete against `docs/ARCHITECTURE.md`. What follows is a backlog,
+not a programme; the candidates and their reasoning are in **Next milestone candidates** below and
+in `docs/BACKLOG.md`. Start one with `/gsd:new-milestone`, which gathers fresh requirements.
+
 ## What This Is
 
 agent86 is a Python agentic harness on the command line: it connects to remote or local
@@ -403,8 +425,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-21 after Phase 9 (Release) — OBS-01…OBS-04, PKG-01, PKG-02 and
-HARD-01…HARD-03 validated; the v1.0 Release milestone is complete (1/1 phase, 9/9 requirements)
-and released as v1.0.0. The v0.9 Coding-Agent UX milestone closed at 1/1 phase and 8/8
-requirements; the v0.8 Context & Cost milestone at 1/1 and 7/7; the v0.7 Trustworthy milestone at
-1/1 and 8/8; the v0.6 Interactive milestone at 5/5 phases and 10/10.*
+*Last updated: 2026-09-22 after the v1.0 milestone.*
