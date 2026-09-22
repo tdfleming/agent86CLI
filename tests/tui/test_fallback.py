@@ -136,7 +136,9 @@ def test_plain_path_suppresses_the_banner_when_stdout_is_not_a_tty(monkeypatch, 
 
     repl_mod.run_repl(cfg, plain=True)
 
-    assert "agentic harness" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Type /help for commands" not in out
+    assert "╭" not in out
     assert holder["spy"].printed_notes is True
 
 
