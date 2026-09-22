@@ -690,6 +690,7 @@ v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette
 | 260813-jfk | Configurable HTTP timeouts for streaming — bound the two unbounded httpx.stream reads | 2026-08-13 | c600987 | Verified | [260813-jfk-configurable-http-timeouts-for-streaming](./quick/260813-jfk-configurable-http-timeouts-for-streaming/) |
 | 260922-hwc | Correct the Ollama `num_ctx` hardware facts — reference box is a 24 GB RX 7900 XTX, not an iGPU | 2026-09-22 | 9069684 | Verified | [260922-hwc-correct-ollama-num-ctx-hardware-facts](./quick/260922-hwc-correct-ollama-num-ctx-hardware-facts/) |
 | 260922-bnr | Startup banner in the TUI, from one shared definition | 2026-09-22 | aa22c77 | | [260922-bnr-startup-banner-in-the-tui-shared-source](./quick/260922-bnr-startup-banner-in-the-tui-shared-source/) |
+| 260922-axx | Rebrand the startup banner — `agent86` as the panel title, `version` as a label row | 2026-09-22 | d19a9f5 | | [260922-axx-rebrand-the-startup-banner-agent86-as-th](./quick/260922-axx-rebrand-the-startup-banner-agent86-as-th/) |
 
 - 2026-08-13 — Quick task 260813-adr complete: fixed the TUI `/model` catalog picker dispatching a
   broken ref for every provider (reported via the Ollama entry `nemotron-3.5-lightning:latest`
@@ -788,6 +789,29 @@ v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette
   unchanged and still asserted; `ui/repl.py` stays Rich-only and textual-free. Full suite green:
   **1241 passed**, 14 deselected (packaging markers); `ruff check .` clean, `mypy src/agent86`
   clean across 93 source files.
+
+- 2026-09-22 — Quick task 260922-axx complete: cosmetic follow-up to 260922-bnr, putting the
+  brand where a splash's title belongs. `banner()`'s panel title `agentic harness` → **`agent86`**,
+  and the body's `agent86 v<version>` identity line became a **`version` label row** on the same
+  9-column gutter as `model` / `sandbox` — the redundant `v` prefix dropped (`version  1.0.0`, not
+  `version v1.0.0`) and the value in cyan like every other row. Compact render is now
+  `agent86` / `version  1.0.0` / `model  <ref>`.
+  **The non-cosmetic part:** `"agentic harness"` was the sentinel two *absence* tests used to pin
+  the no-banner contract — `run` / `run --json` staying JSON-pure
+  (`test_scripting_contract.py:184-185`) and the non-TTY stdout suppression
+  (`test_fallback.py:139`). It worked because it was distinctive; `agent86` is not, appearing in
+  module names and ordinary output, so reusing it would have left both tests vacuously weak —
+  passing while a banner printed. Both swapped to a brand-independent pair:
+  `Type /help for commands, /exit to quit.` (verified unique to `banner()` across `src/`) plus the
+  Rich panel's `╭` border character, which pins "no panel drawn at all" regardless of wording.
+  The contract now survives any future rebrand. `test_banner.py`'s presence assertions follow the
+  new strings, and the drift test keeps proving what it proved — both surfaces agreeing on
+  version and model from one call — against the new token. `count("agent86") == 2` in
+  `test_transcript_escape.py` / `test_transcript_render.py` verified still holding rather than
+  assumed: the banner still contributes exactly one, having moved it from body to title.
+  `cli.py`'s `--help` text, `__init__.py`'s docstring and `cognitive/prompt.py`'s system prompt
+  still say "agentic harness" — they describe the package and the prompt, not the splash, and
+  were deliberately left. Full suite green: **1241 passed**, 14 deselected; ruff and mypy clean.
 
 ## Next Step
 
