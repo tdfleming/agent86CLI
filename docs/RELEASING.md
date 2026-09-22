@@ -226,7 +226,11 @@ between platforms.
 
 ## After a successful first publish
 
-`pyproject.toml` still declares `Development Status :: 4 - Beta`. The classifier is a claim about
-a *published* artifact, and nothing is published at the moment a tag is cut — so it flips to
-`Development Status :: 5 - Production/Stable` in the first release **after** 1.0 is live on PyPI.
-The comment above the classifier says so, and the item is tracked in `docs/BACKLOG.md`.
+**Done for 1.0** (`06ca3a4`, 2026-09-21): `pyproject.toml` now declares
+`Development Status :: 5 - Production/Stable`, flipped from `4 - Beta` once 1.0.0 was live on
+PyPI. The published 1.0.0 artifact itself still carries `4 - Beta` — a published classifier
+cannot be changed retroactively — so the new one first reaches PyPI with the next release.
+
+The rule this followed, for the next major: the classifier is a claim about a *published*
+artifact, and nothing is published at the moment a tag is cut, so it flips in the first release
+**after** the version it describes is live — never in the same commit as the tag.

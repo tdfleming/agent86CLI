@@ -56,10 +56,22 @@ Unsequenced parking lot (999.x). Added 2026-09-22 from a competitive read of Cla
 Antigravity. Full analysis for every item: [../docs/BACKLOG.md](../docs/BACKLOG.md) §
 "Competitive gaps 2026-09-22".
 
-**Standing constraint:** none of these outranks MCP integration work. They are ordered *among
-themselves*; MCP sits above the whole block.
+**Standing constraint:** none of these outranks MCP integration work, which is now recorded as
+999.0 below. They are ordered *among themselves*; MCP sits above the whole block.
 
-Prioritised order — 999.1 → 999.2 → 999.3 → 999.4, then the rest unordered.
+Prioritised order — 999.0 → 999.1 → 999.2 → 999.3 → 999.4, then the rest unordered.
+
+### Phase 999.0: MCP integration work (BACKLOG — scope TBD)
+
+**Goal:** Unwritten. Ranked above every other backlog item by standing instruction (2026-09-22),
+but no scope was given with it, and MCP is already complete against `docs/ARCHITECTURE.md` — so
+the intent is not inferable from the code. **Do not promote this until the scope is written.**
+**Requirements:** TBD — see [../docs/BACKLOG.md](../docs/BACKLOG.md) § 999.0 for what already
+exists, so it is not rebuilt by accident.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (define the scope first, then promote with /gsd:review-backlog)
 
 ### Phase 999.1: Codebase intelligence — `grep` / `glob` built-in tools (BACKLOG)
 

@@ -3,9 +3,16 @@
 Shelved ideas and design notes that aren't scheduled yet. Each entry is self-contained enough
 to pick up later without re-deriving the analysis.
 
-**Newest, and the highest-priority block:** § "Competitive gaps 2026-09-22" at the end — seven
-items from a competitive read of Claude Code and Antigravity, parked as phases 999.1–999.7 in
-`.planning/ROADMAP.md` § Backlog. **None of them outranks MCP integration work.**
+**Priority order, as of 2026-09-22:** § "999.0 — MCP integration work" first (a placeholder with
+no scope yet — read it before planning it), then § "Competitive gaps 2026-09-22" — seven items
+from a competitive read of Claude Code and Antigravity, parked as phases 999.1–999.7 in
+`.planning/ROADMAP.md` § Backlog. Everything above those two sections is older and unranked.
+
+**A note on trusting this file:** on 2026-09-22 two entries were found still listed as open after
+the work had shipped (the `Development Status` classifier flip, `06ca3a4`; the `test_mcp_live`
+revival, `adae8df`) — one of them for a day, the other for three. Both are struck through below
+with the commit that closed them. When picking an item up, **check the code before believing the
+entry**; when closing one, close it here in the same commit.
 
 ---
 
@@ -115,7 +122,9 @@ work opened behind it:
 | Click-to-toggle tool-call blocks | TUI | Needs a widget-based transcript; a `RichLog` can't host interactive children |
 | History *navigation* in the plain loop | TUI | Needs `readline` on exactly the path kept dependency-free |
 | A read/write split in the sandbox jail | Skills & tools | `allow_paths` is one list, so a skill root granted for reading is writable |
-| The `Development Status` classifier flip | Release | The classifier is a claim about a *published* artifact |
+
+§ Release is now **closed too** — the `Development Status` classifier flip shipped in `06ca3a4`
+(2026-09-21) and was left listed as open here until 2026-09-22.
 
 Plus § "Auto-size the Ollama context window (`num_ctx`)" above, and the v0.7 leftovers below.
 
@@ -243,18 +252,18 @@ from the CLI does not. It is now the only observability row left in `docs/ARCHIT
   `tests/packaging/` asserting the built wheel came with it (PKG-01). The procedure is
   `docs/RELEASING.md`.
 
-What that work *opened*, still not built:
+What that work opened is **also shipped** — this section is closed:
 
-- **The `Development Status` classifier flip.** `pyproject.toml` declares
-  `Development Status :: 4 - Beta`, and 1.0 was tagged that way on purpose: the classifier is a
-  claim about a *published* artifact, and nothing is published at the moment a tag is cut, so
-  shipping `5 - Production/Stable` in the same commit would have been asserting something that
-  was not yet true. The change is one line, and the trigger is unambiguous — the **first release
-  after 1.0.0 is live on PyPI**. Worth doing at the next version bump rather than as its own
-  release: a version whose only content is a metadata classifier is a version number spent for
-  nothing. Noted in `docs/RELEASING.md` § "After a successful first publish" and in the comment
-  above the classifier itself, so neither the workflow nor a reader of `pyproject.toml` has to
-  remember it independently.
+- ~~**The `Development Status` classifier flip.**~~ **✅ Done in `06ca3a4` (2026-09-21).**
+  `pyproject.toml:11` now reads `Development Status :: 5 - Production/Stable`, with the reason
+  inline as a comment (`# 1.0.0 is live on PyPI (2026-09-21)`).
+
+  The v1.0 analysis, kept because the *reasoning* is reusable at the next 2.0: 1.0 was tagged
+  `4 - Beta` on purpose, because the classifier is a claim about a *published* artifact and
+  nothing is published at the moment a tag is cut. The trigger was the first release after
+  1.0.0 went live on PyPI, and it was taken at the next commit rather than spent as a release of
+  its own. **This entry stayed listed as open here for a day after it shipped** — closed
+  2026-09-22.
 
 ---
 
@@ -323,9 +332,22 @@ Still open: **a `/cost` breakdown *by turn*** — the original entry asked for o
 *last* turn is retained. A per-session list would need turn summaries kept in state (or read back
 from the flight recorder, which already has the data) rather than a single `last_turn` slot.
 
-### `test_mcp_live` status
+### ~~`test_mcp_live` status~~
 
-**Status:** In flight at the time of writing (2026-09-19).
+**Status: ✅ Closed 2026-09-22.** The revival this entry was waiting on landed in `adae8df`
+("test(mcp): revive the live transport test against the mcp 2.0 server API"). The test now probes
+`mcp.server.mcpserver` (not the removed `mcp.server.fastmcp`) plus `uvicorn` via
+`pytest.importorskip`, so it runs on a `.[dev]` install and skips cleanly where the extra is
+absent — which was the original point of moving `mcp` into the dev extra in v0.6.0. The entry's
+own closing condition ("if the concurrent revival of this test has landed, this entry can be
+closed") was met on 2026-09-19 and went unnoticed until 2026-09-22.
+
+Its one open sub-question is **not** closed and is worth keeping: the test does not assert
+`SandboxPolicy.scrubbed_env()` end-to-end. A live server that echoed its own environment back
+would pin SEC-04 in the real transport rather than by unit test alone. Small, and the fixture
+already exists.
+
+The v0.7 analysis, retained:
 
 `tests/integration/test_mcp_live.py` exercises the real stdio transport against
 `tests/integration/live_mcp_server.py`. v0.6.0 moved `mcp` into the dev extra specifically so
@@ -342,6 +364,60 @@ directly — a server that echoes its own environment back would pin SEC-04 end-
 by unit test alone.
 
 ---
+
+---
+
+## 999.0 — MCP integration work (scope not yet written down)
+
+**Status:** Placeholder, opened 2026-09-22. **Ranked above every other open item in this
+document**, including all seven competitive gaps below — that priority is a standing instruction,
+recorded here so it survives the conversation it was given in.
+
+**This entry has no scope yet, deliberately.** It is a slot, not a plan. Nobody should promote it
+with `/gsd:review-backlog` until the paragraph under "What this actually means" is written by
+someone who knows what was intended — inventing requirements for it would be worse than leaving
+it blank.
+
+### What already exists (so this is not rebuilt by accident)
+
+MCP is **built and complete against `docs/ARCHITECTURE.md`**, which is exactly why the intended
+scope is not inferable from the code:
+
+- `tools/mcp_client.py` (463 lines) — an `MCPManager` mounting external server tools into the
+  registry, over all three transports: **stdio** (default, via `command`), **SSE**, and
+  **streamable HTTP** (ARCHITECTURE §928).
+- `tui/screens/mcp_manager.py` (473 lines) + `tui/screens/mcp_test.py` — in-app add/remove/test
+  with tool enumeration, shipped as v0.6 Phase 4.
+- `agent86 mcp [list|add|remove]` on the CLI (§946).
+- Security: stdio servers get `SandboxPolicy.scrubbed_env()` rather than the host environment
+  (SEC-04, v0.7); `${VAR}` references in MCP config entries resolve at call time rather than
+  storing secrets (§816); `MCPManager.call_tool` marshals onto its own loop (§317).
+- Trust: a tool whose annotations carry `readOnlyHint` mounts `side_effecting = False` and is not
+  approval-gated (§584, §683).
+- Collisions: `ToolRegistry.try_register` records a duplicate name instead of raising, and the
+  collision list is logged at startup.
+
+### What this actually means
+
+> **TO BE FILLED IN.** The instruction was "do not prioritise [the competitive gaps] over MCP
+> integration" — given 2026-09-22 without a scope. Candidate readings, none of them confirmed:
+> deeper client coverage (resources, prompts, sampling, elicitation — the client mounts *tools*
+> today), an MCP **server** mode so agent86 is itself mountable, OAuth for remote servers,
+> or something outside the repo entirely. Ask before planning.
+
+### MCP-adjacent threads that *are* concrete
+
+These exist independently of whatever 999.0 turns out to mean, and should not be folded into it
+silently:
+
+- **SEC-04 is not asserted end-to-end.** `tests/integration/test_mcp_live.py` exercises the real
+  stdio transport but never checks that the scrubbed environment actually reached the server. A
+  live server that echoed its own environment back would pin it. Carried from § "v0.7 review
+  leftovers" below, where the rest of that entry is now closed.
+- **`web_search` is a non-goal *because* of MCP.** `docs/ARCHITECTURE.md` §15 answers the missing
+  `web_search` built-in with "use an MCP search server". That reasoning is sound, and it is worth
+  re-reading against **999.1** below: the same argument does *not* extend to `grep`/`glob`, since
+  orienting in the local repo is not something a user should have to mount a server to do.
 
 ## Competitive gaps 2026-09-22
 

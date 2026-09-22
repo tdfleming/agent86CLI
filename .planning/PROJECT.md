@@ -13,8 +13,9 @@ Textual TUI or from the plain loop and `agent86 run --json`, which remain the sc
 - **Quality gates:** ruff, mypy and the full suite green on every CI job (Linux 3.11/3.12/3.13,
   Windows 3.12), plus wheel-level packaging tests on Linux and Windows.
 - **Release:** tag-driven via trusted publishing; `scripts/check_release.py` gates every release.
-- **Known debt:** the published 1.0.0 artifact still carries the `4 - Beta` classifier; it flips
-  with the next release. Post-1.0 candidates live in `docs/BACKLOG.md`.
+- **Known debt:** the published 1.0.0 artifact still carries the `4 - Beta` classifier — the repo
+  flipped to `5 - Production/Stable` in `06ca3a4`, so the corrected classifier reaches PyPI with
+  the next release. Post-1.0 candidates live in `docs/BACKLOG.md`.
 
 ## Next Milestone Goals
 
@@ -392,8 +393,12 @@ programme.
 
 Post-1.0, in `docs/BACKLOG.md`:
 
-- **Development Status classifier flip** — `4 - Beta` → `5 - Production/Stable` in the first
-  release after 1.0 is live on PyPI (the classifier is a claim about a published artifact)
+- ~~**Development Status classifier flip**~~ — done in `06ca3a4` (2026-09-21)
+- **MCP integration work** — top priority above everything below, scope not yet written down
+  (`docs/BACKLOG.md` § 999.0)
+- **Seven competitive gaps** — `grep`/`glob`, tool hooks, declarative sub-agents, a plan-mode
+  gate, git awareness, shell network control, an injection classifier (`docs/BACKLOG.md`
+  § "Competitive gaps 2026-09-22"; phases 999.1–999.7)
 - **Click-to-toggle tool blocks** — needs a widget-based transcript; a `RichLog` can't host
   interactive children
 - **History *navigation* in the plain loop** — needs `readline`, a dependency on exactly the path

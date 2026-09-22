@@ -24,9 +24,9 @@ well", v0.7's "what the harness reports is true", and v0.6's "run, configure and
 entirely from the terminal app".
 **Current focus:** v1.0 milestone complete (1/1 phase) — released as v1.0.0. The harness is
 complete against `docs/ARCHITECTURE.md`.
-**Next:** no milestone scoped — a **post-1.0 backlog**, in `docs/BACKLOG.md`. Nearest item is the
-`Development Status` classifier flip to `5 - Production/Stable`, due in the first release after
-1.0 is live on PyPI. Added 2026-09-22: seven **competitive gaps** (phases 999.1–999.7 in
+**Next:** no milestone scoped — a **post-1.0 backlog**, in `docs/BACKLOG.md`. Top of it is
+**MCP integration work** (phase 999.0), which outranks everything else but has no scope written
+down yet. Added 2026-09-22: seven **competitive gaps** (phases 999.1–999.7 in
 `ROADMAP.md` § Backlog), ordered `grep`/`glob` → tool hooks → declarative sub-agents → plan-mode
 gate, then git awareness / shell network control / injection classifier unordered. None outranks
 MCP integration work.
@@ -773,9 +773,10 @@ trusted publishing → GitHub Release). Procedure and one-time trusted-publisher
 `docs/RELEASING.md`. Nothing in this repository is tagged or pushed by the docs pass.
 
 **No next milestone is scoped** — v1.0 closed the programme, and what follows is a backlog rather
-than a plan. Nearest item: flip `Development Status` from `4 - Beta` to `5 - Production/Stable` in
-the first release *after* 1.0 is live on PyPI, since the classifier is a claim about a published
-artifact.
+than a plan. Nearest item at the time of writing was the `Development Status` classifier flip,
+**done in `06ca3a4` (2026-09-21)**; the backlog was re-read on 2026-09-22 and its top is now
+**MCP integration work** (phase 999.0, scope TBD), ahead of the seven competitive gaps
+(999.1–999.7).
 
 Outstanding (non-blocking): what v0.9 opened, now in `docs/BACKLOG.md` § TUI / § "Skills & tools" —
 click-to-toggle tool blocks (needs a widget-based transcript, since a `RichLog` can't host
