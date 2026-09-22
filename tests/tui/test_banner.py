@@ -75,7 +75,7 @@ def test_compact_banner_is_the_identity_core_only():
     cfg = load_config()
     text = _render(banner(cfg, compact=True))
 
-    assert f"agent86 v{__version__}" in text
+    assert f"version  {__version__}" in text
     assert cfg.model.default in text
     for absent in ("router", "sandbox", "approval", "/help"):
         assert absent not in text
@@ -85,7 +85,7 @@ def test_full_banner_appends_router_sandbox_approval_and_hint():
     cfg = load_config()
     text = _render(banner(cfg, compact=False))
 
-    assert f"agent86 v{__version__}" in text
+    assert f"version  {__version__}" in text
     assert cfg.model.default in text
     assert cfg.model.router in text
     assert cfg.sandbox.mode in text
@@ -112,7 +112,7 @@ async def test_tui_entry_and_plain_banner_agree_on_name_version_and_model(tmp_pa
     plain_console.print(banner(repl.cfg, compact=False))
     plain_text = capsys.readouterr().out
 
-    for token in (f"agent86 v{__version__}", repl.cfg.model.default):
+    for token in (f"version  {__version__}", repl.cfg.model.default):
         assert token in tui_text
         assert token in plain_text
 
@@ -126,7 +126,7 @@ async def test_banner_is_entry_zero_on_mount(tmp_path):
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
         assert isinstance(app._entries[0], RawEntry)
-        assert "agentic harness" in _transcript(app)
+        assert "agent86" in _transcript(app)
 
 
 async def test_banner_survives_rerender_on_tool_block_expand(tmp_path):
@@ -142,7 +142,7 @@ async def test_banner_survives_rerender_on_tool_block_expand(tmp_path):
         await pilot.pause()
 
         assert isinstance(app._entries[0], RawEntry)
-        assert "agentic harness" in _transcript(app)
+        assert "agent86" in _transcript(app)
 
 
 async def test_clear_wipes_the_transcript_to_exactly_the_banner(tmp_path):
@@ -161,7 +161,7 @@ async def test_clear_wipes_the_transcript_to_exactly_the_banner(tmp_path):
         assert len(app._entries) == 1
         assert isinstance(app._entries[0], RawEntry)
         lines = _transcript(app)
-        assert "agentic harness" in lines
+        assert "agent86" in lines
         assert "hello world" not in lines
         assert "hi there" not in lines
 
@@ -182,5 +182,5 @@ async def test_resume_re_prepends_the_banner(tmp_path):
 
         assert isinstance(app._entries[0], RawEntry)
         lines = _transcript(app)
-        assert "agentic harness" in lines
+        assert "agent86" in lines
         assert "what happened earlier?" in lines
