@@ -181,8 +181,10 @@ def test_run_never_emits_the_startup_banner(fresh_home, monkeypatch):
     as_json = runner.invoke(cli_mod.app, ["run", "hi", "--json"])
 
     for result in (plain, as_json):
-        assert "agentic harness" not in result.stdout
-        assert "agentic harness" not in result.stderr
+        assert "Type /help for commands" not in result.stdout
+        assert "Type /help for commands" not in result.stderr
+        assert "╭" not in result.stdout
+        assert "╭" not in result.stderr
 
 
 def test_run_json_output_honours_the_egress_guardrail(fresh_home, monkeypatch):
