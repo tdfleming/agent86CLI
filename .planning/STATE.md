@@ -689,6 +689,7 @@ v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette
 | 260813-atc | Catalog-validated provider fallback for /model bare-ref typing | 2026-08-13 | 300c215 | Verified | [260813-atc-catalog-validated-provider-fallback-for-](./quick/260813-atc-catalog-validated-provider-fallback-for-/) |
 | 260813-jfk | Configurable HTTP timeouts for streaming — bound the two unbounded httpx.stream reads | 2026-08-13 | c600987 | Verified | [260813-jfk-configurable-http-timeouts-for-streaming](./quick/260813-jfk-configurable-http-timeouts-for-streaming/) |
 | 260922-hwc | Correct the Ollama `num_ctx` hardware facts — reference box is a 24 GB RX 7900 XTX, not an iGPU | 2026-09-22 | 9069684 | Verified | [260922-hwc-correct-ollama-num-ctx-hardware-facts](./quick/260922-hwc-correct-ollama-num-ctx-hardware-facts/) |
+| 260922-bnr | Startup banner in the TUI, from one shared definition | 2026-09-22 | aa22c77 | | [260922-bnr-startup-banner-in-the-tui-shared-source](./quick/260922-bnr-startup-banner-in-the-tui-shared-source/) |
 
 - 2026-08-13 — Quick task 260813-adr complete: fixed the TUI `/model` catalog picker dispatching a
   broken ref for every provider (reported via the Ollama entry `nemotron-3.5-lightning:latest`
@@ -760,6 +761,33 @@ v0.6 (closed): 1 — TUI Skeleton + Live Status ● 5/5 · 2 — Command Palette
   (up from 454), 6 skipped, 1 known pre-existing unrelated failure
   (`test_build_embedder_falls_back_without_torch`). Ruff introduces zero new errors (verified via
   a `git worktree` diff against the pre-task baseline).
+
+- 2026-09-22 — Quick task 260922-bnr complete: the startup splash existed but sat on the *wrong*
+  surface. `ui/repl.py`'s `_banner(cfg)` panel (`agent86 v<version>`, model, router, sandbox,
+  approval, `/help` hint) printed on the **plain path only** — it renders before Textual takes the
+  screen, so under the alternate screen it would paint to the normal screen and flash past on
+  quit — leaving the *default* interactive surface unbranded and the fallback surface carrying the
+  identity. Fixed with the same shape as the per-turn cost line and the approval diff: one
+  definition, both surfaces. `_banner` became public `banner(cfg, *, compact: bool = True)` — the
+  identity core (name, version, model) for both, with `compact=False` appending the
+  router/sandbox/approval/hint rows the plain loop must keep, since its `StatusFooter`-less path
+  is the only place a `--plain` user ever sees them (Fork 1). The TUI renders it as transcript
+  **entry 0**, not a `log.write()` — `_rerender()` clears and replays `_entries` on every theme
+  change and tool-block expand, so a written banner would have silently vanished on the first
+  `Ctrl+O`; re-prepended on the resume path too. `/clear` now wipes the TUI scrollback as well as
+  resetting the session (previously the transcript kept showing history the model no longer had),
+  signalled structurally via a new `CommandResult.clears_transcript` flag rather than the app
+  string-matching the command name. Also suppressed the plain banner when stdout is not a TTY, so
+  `echo "hi" | agent86` no longer paints the panel ahead of piped output, and corrected the stale
+  `status_footer.py` docstring claiming the plain loop renders `format_status_line` (it has no
+  call site there — giving plain a live status line stays out of scope, in `docs/BACKLOG.md`).
+  New `tests/tui/test_banner.py` carries the drift test that is the point of the task — both
+  surfaces agree on name, version and model from one call — plus rerender-survival, post-`/clear`
+  `_entries == [banner]`, resume re-prepend, and the explicit **no-banner** assertion for
+  `run` / `run --json` in `test_scripting_contract.py`. Cold-start and import-graph tests
+  unchanged and still asserted; `ui/repl.py` stays Rich-only and textual-free. Full suite green:
+  **1241 passed**, 14 deselected (packaging markers); `ruff check .` clean, `mypy src/agent86`
+  clean across 93 source files.
 
 ## Next Step
 
