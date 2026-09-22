@@ -15,8 +15,11 @@ So under width pressure the footer sheds, in order:
 The model name, the cost, the approval mode and the working/phase indicator are never shed:
 they say what is running, what it is costing, and whether it can act without asking.
 
-The plain loop keeps rendering the whole line (`format_status_line`) — it has no widget
-width to fit to, and its status line is a scriptable artifact, not a live gauge.
+`format_status_line`/`_Repl.status_line` have no call site in the plain path — the plain loop
+has no live status surface at all, only this widget consumes them. That gap is exactly why
+`ui/repl.py`'s `banner(cfg, compact=False)` appends sandbox and approval for the plain loop
+(quick task 260922-bnr): it is the only place a `--plain` user ever sees them. Giving the
+plain loop its own live status line is a separate, out-of-scope change.
 """
 
 from __future__ import annotations
